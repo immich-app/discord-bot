@@ -17,17 +17,17 @@ export const bot = new Client({
 });
 
 bot.once('ready', async () => {
-  const sha = process.env.COMMIT_SHA?.substring(0, 8)
-  const full_version = `${process.env.npm_package_version}@${sha}`
+  const sha = process.env.COMMIT_SHA
+  const fullVersion = `${process.env.npm_package_version}@[${sha?.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})`
   // Synchronize applications commands with Discord
   await bot.initApplicationCommands();
 
-  console.log(`Bot ${full_version} started`);
+  console.log(`Bot ${fullVersion} started`);
 
   const channel = await bot.channels.fetch('1159083520027787307') as TextChannel
   
   if (channel) {
-    channel.send(`I'm alive, running ${full_version}!`)
+    channel.send(`I'm alive, running ${fullVersion}!`)
   }
 });
 
