@@ -15,6 +15,7 @@ const linkCommands: Record<string, string> = {
   sidecar: `${docsDomain}/features/xmp-sidecars`,
   docker: `${docsDomain}/guides/docker-help`,
   backup: `${docsDomain}/administration/backup-and-restore`,
+  github: 'https://github.com/immich-app/immich'
 };
 const helpTexts: Record<string, string> = {
   'help ticket':
