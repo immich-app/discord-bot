@@ -1,9 +1,8 @@
 # files
 .vscode
 .env
-.env.local
-package-lock.json
-yarn.lock
+.env.*
+!.env.example
 
 # folders
 build
