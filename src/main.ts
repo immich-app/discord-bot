@@ -2,7 +2,6 @@ import { dirname, importx } from '@discordx/importer';
 import type { Interaction, Message, TextChannel } from 'discord.js';
 import { IntentsBitField } from 'discord.js';
 import { Client } from 'discordx';
-import { version } from '../package.json'
 
 export const bot = new Client({
   // Discord intents
@@ -18,8 +17,8 @@ export const bot = new Client({
 });
 
 bot.once('ready', async () => {
-  const sha = process.env.COMMIT_SHA.substring(0, 8)
-  const full_version = `${version}@${sha}`
+  const sha = process.env.COMMIT_SHA?.substring(0, 8)
+  const full_version = `${process.env.npm_package_version}@${sha}`
   // Synchronize applications commands with Discord
   await bot.initApplicationCommands();
 
