@@ -24,7 +24,7 @@ bot.once('ready', async () => {
 
   console.log(`Bot ${full_version} started`);
 
-  const channel = bot.channels.cache.get('1159083520027787307') as TextChannel
+  const channel = await bot.channels.fetch('1159083520027787307') as TextChannel
   
   if (channel) {
     channel.send(`I'm alive, running ${full_version}!`)
