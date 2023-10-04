@@ -9,7 +9,7 @@ const docsDomain = 'https://docs.immich.app/docs';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': `${docsDomain}/administration/reverse-proxy`,
-  database: `${docsDomain}/guides/database`,
+  database: `${docsDomain}/guides/database-queries`,
   upgrade: `${docsDomain}/install/docker-compose#step-4---upgrading`,
   libraries: `${docsDomain}/features/libraries`,
   sidecar: `${docsDomain}/features/xmp-sidecars`,
@@ -18,7 +18,7 @@ const linkCommands: Record<string, string> = {
 };
 const helpTexts: Record<string, string> = {
   'help ticket':
-    'Please open a #help-desk-support ticket with more information and we can help you troubleshoot the issue.',
+    'Please open a <#1049703391762321418> ticket with more information and we can help you troubleshoot the issue.',
   'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${docsDomain}/administration/reverse-proxy.`,
 };
 
@@ -27,7 +27,7 @@ export class Commands {
   @Slash({ description: 'Links to Immich pages' })
   link(
     @SlashChoice(
-      ...Object.keys(linkCommands).map((value) => ({ name: value, value })),
+      ...Object.keys(linkCommands),
     )
     @SlashOption({
       description: 'Which docs do you need?',

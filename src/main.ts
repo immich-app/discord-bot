@@ -1,5 +1,5 @@
 import { dirname, importx } from '@discordx/importer';
-import type { Interaction, Message } from 'discord.js';
+import type { Interaction, Message, TextChannel } from 'discord.js';
 import { IntentsBitField } from 'discord.js';
 import { Client } from 'discordx';
 
@@ -21,6 +21,12 @@ bot.once('ready', async () => {
   await bot.initApplicationCommands();
 
   console.log('Bot started');
+
+  const channel = bot.channels.cache.get('1159083520027787307') as TextChannel
+  
+  if (channel) {
+    channel.send("I'm alive!")
+  }
 });
 
 bot.on('interactionCreate', (interaction: Interaction) => {
