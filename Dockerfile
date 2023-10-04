@@ -1,3 +1,5 @@
+ARG COMMIT=""
+
 ## build runner
 FROM node:lts-alpine as build-runner
 
@@ -31,6 +33,8 @@ RUN npm install --omit=dev
 
 # Move build files
 COPY --from=build-runner /tmp/app/build /app/build
+
+ENV COMMIT_SHA=${COMMIT}
 
 # Start bot
 CMD [ "npm", "run", "start" ]

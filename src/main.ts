@@ -2,6 +2,7 @@ import { dirname, importx } from '@discordx/importer';
 import type { Interaction, Message, TextChannel } from 'discord.js';
 import { IntentsBitField } from 'discord.js';
 import { Client } from 'discordx';
+import { version } from '../package.json'
 
 export const bot = new Client({
   // Discord intents
@@ -17,15 +18,17 @@ export const bot = new Client({
 });
 
 bot.once('ready', async () => {
+  const sha = process.env.COMMIT_SHA.substring(0, 8)
+  const full_version = `${version}@${sha}`
   // Synchronize applications commands with Discord
   await bot.initApplicationCommands();
 
-  console.log('Bot started');
+  console.log(`Bot ${full_version} started`);
 
   const channel = bot.channels.cache.get('1159083520027787307') as TextChannel
   
   if (channel) {
-    channel.send("I'm alive!")
+    channel.send(`I'm alive, running ${full_version}!`)
   }
 });
 
