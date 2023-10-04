@@ -22,10 +22,10 @@ bot.once('ready', async () => {
 
   console.log('Bot started');
 
-  const channel = bot.channels.cache.get('1159083520027787307') as TextChannel
+  const channel = await bot.channels.fetch('1159083520027787307') as TextChannel
   
   if (channel) {
-    channel.send("I'm alive!")
+    channel.send("I'm alive!").then(message => setTimeout(() => message.delete(), 3 * 60 * 1000))
   }
 });
 
