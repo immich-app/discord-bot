@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    name: Run cli test suites
+    name: Run test suites
     runs-on: ubuntu-latest
 
     steps:
