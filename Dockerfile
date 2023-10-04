@@ -1,5 +1,3 @@
-ARG COMMIT=""
-
 ## build runner
 FROM node:lts-alpine as build-runner
 
@@ -21,6 +19,8 @@ RUN npm run build
 
 ## production runner
 FROM node:lts-alpine as prod-runner
+
+ARG COMMIT
 
 # Set work directory
 WORKDIR /app
