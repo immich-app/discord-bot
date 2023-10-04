@@ -17,15 +17,17 @@ export const bot = new Client({
 });
 
 bot.once('ready', async () => {
+  const sha = process.env.COMMIT_SHA?.substring(0, 8)
+  const full_version = `${process.env.npm_package_version}@${sha}`
   // Synchronize applications commands with Discord
   await bot.initApplicationCommands();
 
-  console.log('Bot started');
+  console.log(`Bot ${full_version} started`);
 
   const channel = await bot.channels.fetch('1159083520027787307') as TextChannel
   
   if (channel) {
-    channel.send("I'm alive!").then(message => setTimeout(() => message.delete(), 3 * 60 * 1000))
+    channel.send(`I'm alive, running ${full_version}!`)
   }
 });
 
