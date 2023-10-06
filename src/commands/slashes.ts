@@ -12,11 +12,14 @@ const linkCommands: Record<string, string> = {
   docker: `${docsDomain}/guides/docker-help`,
   backup: `${docsDomain}/administration/backup-and-restore`,
   github: 'https://github.com/immich-app/immich',
+  cli: `${docsDomain}/features/bulk-upload`,
 };
 const helpTexts: Record<string, string> = {
   'help ticket':
     'Please open a <#1049703391762321418> ticket with more information and we can help you troubleshoot the issue.',
   'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${docsDomain}/administration/reverse-proxy.`,
+  'feature request':
+    "For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](https://github.com/immich-app/immich/discussions/new?category=feature-request). However, please make sure to search for similar requests first to avoid duplicates. ",
 };
 
 @Discord()
@@ -41,7 +44,7 @@ export class Commands {
 
   @Slash({ description: 'Text blocks for reoccurring questions' })
   messages(
-    @SlashChoice('help ticket', 'reverse proxy')
+    @SlashChoice(...Object.keys(helpTexts))
     @SlashOption({
       description: 'Which message do you need',
       name: 'type',
