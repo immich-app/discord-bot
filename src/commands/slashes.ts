@@ -26,6 +26,7 @@ const helpTexts: Record<string, string> = {
 export class Commands {
   @Slash({ description: 'Links to Immich pages' })
   link(
+    interaction: CommandInteraction,
     @SlashChoice(...Object.keys(linkCommands))
     @SlashOption({
       description: 'Which docs do you need?',
@@ -34,10 +35,16 @@ export class Commands {
       type: ApplicationCommandOptionType.String,
     })
     name: string,
-    interaction: CommandInteraction,
+    @SlashOption({
+      description: 'Text that will be prepended before the link',
+      name: 'text',
+      required: false,
+      type: ApplicationCommandOptionType.String,
+    })
+    message?: string,
   ): void {
     interaction.reply({
-      content: linkCommands[name],
+      content: message ? `${message}: ${linkCommands[name]}` : linkCommands[name],
       flags: [MessageFlags.SuppressEmbeds],
     });
   }
