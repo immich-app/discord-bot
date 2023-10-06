@@ -26,7 +26,6 @@ const helpTexts: Record<string, string> = {
 export class Commands {
   @Slash({ description: 'Links to Immich pages' })
   link(
-    interaction: CommandInteraction,
     @SlashChoice(...Object.keys(linkCommands))
     @SlashOption({
       description: 'Which docs do you need?',
@@ -41,7 +40,8 @@ export class Commands {
       required: false,
       type: ApplicationCommandOptionType.String,
     })
-    message?: string,
+    message: string | null,
+    interaction: CommandInteraction,
   ): void {
     interaction.reply({
       content: message ? `${message}: ${linkCommands[name]}` : linkCommands[name],
