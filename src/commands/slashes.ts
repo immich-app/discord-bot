@@ -22,6 +22,9 @@ const helpTexts: Record<string, string> = {
     "For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](https://github.com/immich-app/immich/discussions/new?category=feature-request). However, please make sure to search for similar requests first to avoid duplicates. ",
 };
 
+const _star_history: Record<string, number | undefined> = {};
+const _fork_history: Record<string, number | undefined> = {};
+
 @Discord()
 export class Commands {
   @Slash({ description: 'Links to Immich pages' })
@@ -69,9 +72,21 @@ export class Commands {
 
   @Slash({ description: 'Immich stars' })
   async stars(interaction: CommandInteraction) {
+    const lastStarsCount = _star_history[interaction.channelId];
+
     try {
       const response = await (await fetch('https://api.github.com/repos/immich-app/immich')).json();
-      interaction.reply(`Stars ⭐: ${response['stargazers_count']}`);
+      const starsCount = response['stargazers_count'] as number;
+      const delta = lastStarsCount && starsCount - lastStarsCount;
+      const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
+
+      interaction.reply(
+        `Stars ⭐: ${response['stargazers_count']}${
+          formattedDelta ? ` (${formattedDelta} stars since the last call in this channel)` : ''
+        }`,
+      );
+
+      _star_history[interaction.channelId] = starsCount;
     } catch (error) {
       interaction.reply("Couldn't fetch stars count from github api");
     }
@@ -79,9 +94,21 @@ export class Commands {
 
   @Slash({ description: 'Immich forks' })
   async forks(interaction: CommandInteraction) {
+    const lastForksCount = _fork_history[interaction.channelId];
+
     try {
       const response = await (await fetch('https://api.github.com/repos/immich-app/immich')).json();
-      interaction.reply(`Forks: ${response['forks_count']}`);
+      const forksCount = response['forks_count'] as number;
+      const delta = lastForksCount && forksCount - lastForksCount;
+      const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
+
+      interaction.reply(
+        `Forks: ${response['forks_count']}${
+          formattedDelta ? ` (${formattedDelta} forks since the last call in this channel)` : ''
+        }`,
+      );
+
+      _fork_history[interaction.channelId] = forksCount;
     } catch (error) {
       interaction.reply("Couldn't fetch forks count from github api");
     }
