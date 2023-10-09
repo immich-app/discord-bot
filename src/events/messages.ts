@@ -6,7 +6,7 @@ import { GITHUB_API_DOMAIN, GITHUB_DOMAIN } from '../constants.js';
 export class Messages {
   @On({ event: 'messageCreate' })
   async newMessage([message]: ArgsOf<'messageCreate'>) {
-    if (message.author.id === '1158729698872930445') {
+    if (message.author.bot) {
       return;
     }
 
@@ -27,13 +27,13 @@ export class Messages {
         if (response.status === 200) {
           const json = await response.json();
           const type = json.pull_request ? 'PR' : 'ISSUE';
-          links.push(`[[${type}] ${json.title} (#${id})](${json.html_url})`);
+          links.push(`[${type}] ${json.title} ([#${id}](${json.html_url}))`);
           continue;
         }
 
         const { status: discussionStatus } = await fetch(`${GITHUB_DOMAIN}/discussions/${id}}`);
         if (discussionStatus === 200) {
-          links.push(`[[Discussion] (#${id})](${GITHUB_DOMAIN}/discussions/${id})`);
+          links.push(`[Discussion] ([#${id}](${GITHUB_DOMAIN}/discussions/${id}))`);
         }
       }
     }
@@ -42,6 +42,10 @@ export class Messages {
 
   @On({ event: 'messageCreate' })
   preventGithubEmbeddings([message]: ArgsOf<'messageCreate'>) {
+    if (message.author.bot) {
+      return;
+    }
+
     if (message.embeds.find((embed) => embed.url?.startsWith(GITHUB_DOMAIN))) {
       message.suppressEmbeds(true);
     }
