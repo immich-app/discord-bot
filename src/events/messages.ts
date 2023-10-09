@@ -1,6 +1,6 @@
 import { MessageFlags } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
-import { GITHUB_API_DOMAIN, GITHUB_DOMAIN } from '../constants.js';
+import { GITHUB_API_DOMAIN, GITHUB_DOMAIN, IMMICH_REPOSITORY } from '../constants.js';
 
 @Discord()
 export class Messages {
@@ -31,9 +31,9 @@ export class Messages {
           continue;
         }
 
-        const { status: discussionStatus } = await fetch(`${GITHUB_DOMAIN}/discussions/${id}}`);
+        const { status: discussionStatus } = await fetch(`${IMMICH_REPOSITORY}/discussions/${id}}`);
         if (discussionStatus === 200) {
-          links.push(`[Discussion] ([#${id}](${GITHUB_DOMAIN}/discussions/${id}))`);
+          links.push(`[Discussion] ([#${id}](${IMMICH_REPOSITORY}/discussions/${id}))`);
         }
       }
     }

@@ -1,6 +1,6 @@
 import { ApplicationCommandOptionType, MessageFlags, type CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
-import { DOCS_DOMAIN, GITHUB_DOMAIN, GITHUB_API_DOMAIN } from '../constants.js';
+import { DOCS_DOMAIN, IMMICH_REPOSITORY, GITHUB_API_DOMAIN } from '../constants.js';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': `${DOCS_DOMAIN}/administration/reverse-proxy`,
@@ -10,7 +10,7 @@ const linkCommands: Record<string, string> = {
   sidecar: `${DOCS_DOMAIN}/features/xmp-sidecars`,
   docker: `${DOCS_DOMAIN}/guides/docker-help`,
   backup: `${DOCS_DOMAIN}/administration/backup-and-restore`,
-  github: GITHUB_DOMAIN,
+  github: IMMICH_REPOSITORY,
   cli: `${DOCS_DOMAIN}/features/bulk-upload`,
 };
 const helpTexts: Record<string, string> = {
