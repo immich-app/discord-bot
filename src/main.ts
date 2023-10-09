@@ -6,7 +6,12 @@ import { Client } from 'discordx';
 
 export const bot = new Client({
   // Discord intents
-  intents: [IntentsBitField.Flags.GuildMessages],
+  intents: [
+    IntentsBitField.Flags.Guilds,
+    IntentsBitField.Flags.GuildMessages,
+    IntentsBitField.Flags.GuildMembers,
+    IntentsBitField.Flags.MessageContent,
+  ],
 
   // Debug logs are disabled in silent mode
   silent: false,
@@ -47,7 +52,8 @@ bot.on('interactionCreate', (interaction: Interaction) => {
   bot.executeInteraction(interaction);
 });
 
-bot.on('messageCreate', (message: Message) => {
+bot.on('messageCreate', async (message: Message) => {
+  // execute simple commands
   bot.executeCommand(message);
 });
 
