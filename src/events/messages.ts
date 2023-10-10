@@ -41,13 +41,13 @@ export class Messages {
   }
 
   @On({ event: 'messageCreate' })
-  preventGithubEmbeddings([message]: ArgsOf<'messageCreate'>) {
+  async preventGithubEmbeddings([message]: ArgsOf<'messageCreate'>) {
     if (message.author.bot) {
       return;
     }
 
     if (message.embeds.find((embed) => embed.url?.startsWith(GITHUB_DOMAIN))) {
-      message.suppressEmbeds(true);
+      await message.suppressEmbeds(true);
     }
   }
 }
