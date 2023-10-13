@@ -17,8 +17,9 @@ export class Messages {
   }
 
   private async getGithubLinks(content: string): Promise<string[]> {
+    content = content.replaceAll(/```.*```/gs, '');
     const matches = content.matchAll(/#(?<id>[0-9]+)/g);
-    const links = [];
+    const links = new Set<string>();
     for (const match of matches) {
       if (match?.groups) {
         const id = match.groups.id;
@@ -27,17 +28,17 @@ export class Messages {
         if (response.status === 200) {
           const json = await response.json();
           const type = json.pull_request ? 'PR' : 'ISSUE';
-          links.push(`[${type}] ${json.title} ([#${id}](${json.html_url}))`);
+          links.add(`[${type}] ${json.title} ([#${id}](${json.html_url}))`);
           continue;
         }
 
         const { status: discussionStatus } = await fetch(`${IMMICH_REPOSITORY}/discussions/${id}}`);
         if (discussionStatus === 200) {
-          links.push(`[Discussion] ([#${id}](${IMMICH_REPOSITORY}/discussions/${id}))`);
+          links.add(`[Discussion] ([#${id}](${IMMICH_REPOSITORY}/discussions/${id}))`);
         }
       }
     }
-    return links;
+    return [...links];
   }
 
   @On({ event: 'messageCreate' })
