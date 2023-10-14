@@ -1,18 +1,28 @@
-import { MessageFlags } from 'discord.js';
+import { Message, MessageFlags } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import { GITHUB_API_DOMAIN, GITHUB_DOMAIN, IMMICH_REPOSITORY } from '../constants.js';
 
 @Discord()
-export class Messages {
+export class MessageEvents {
   @On({ event: 'messageCreate' })
-  async newMessage([message]: ArgsOf<'messageCreate'>) {
+  async messageCreate([message]: ArgsOf<'messageCreate'>) {
     if (message.author.bot) {
       return;
     }
 
+    await Promise.all([this.handleGithubShortLinks(message), this.handlePreventGithubEmbeddings(message)]);
+  }
+
+  private async handleGithubShortLinks(message: Message<boolean>) {
     const links = await this.getGithubLinks(message.content);
     if (links.length !== 0) {
       message.reply({ content: links.join('\n'), flags: [MessageFlags.SuppressEmbeds] });
+    }
+  }
+
+  private async handlePreventGithubEmbeddings(message: Message<boolean>) {
+    if (message.embeds.find((embed) => embed.url?.startsWith(GITHUB_DOMAIN))) {
+      await message.suppressEmbeds(true);
     }
   }
 
@@ -39,16 +49,5 @@ export class Messages {
       }
     }
     return [...links];
-  }
-
-  @On({ event: 'messageCreate' })
-  async preventGithubEmbeddings([message]: ArgsOf<'messageCreate'>) {
-    if (message.author.bot) {
-      return;
-    }
-
-    if (message.embeds.find((embed) => embed.url?.startsWith(GITHUB_DOMAIN))) {
-      await message.suppressEmbeds(true);
-    }
   }
 }
