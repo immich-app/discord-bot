@@ -12,7 +12,7 @@ const linkCommands: Record<string, string> = {
   backup: `${DOCS_DOMAIN}/administration/backup-and-restore`,
   github: IMMICH_REPOSITORY,
   cli: `${DOCS_DOMAIN}/features/bulk-upload`,
-  'google-takeout': 'https://github.com/immich-app/immich/discussions/1340',
+  'google-takeout': `${IMMICH_REPOSITORY}/discussions/1340`,
 };
 const helpTexts: Record<string, string> = {
   'help ticket':

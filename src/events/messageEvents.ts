@@ -1,6 +1,7 @@
-import { Message, MessageFlags } from 'discord.js';
+import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import { GITHUB_API_DOMAIN, GITHUB_DOMAIN, IMMICH_REPOSITORY } from '../constants.js';
+import _ from 'lodash';
 
 @Discord()
 export class MessageEvents {
@@ -10,7 +11,18 @@ export class MessageEvents {
       return;
     }
 
-    await Promise.all([this.handleGithubShortLinks(message), this.handlePreventGithubEmbeddings(message)]);
+    await Promise.all([this.handleGithubShortLinks(message)]);
+  }
+
+  @On({ event: 'messageUpdate' })
+  async messageUpdate([oldMessage, newMessage]: ArgsOf<'messageUpdate'>) {
+    if (oldMessage.author?.bot) {
+      return;
+    }
+
+    if (!_.isEqual(oldMessage.embeds, newMessage.embeds)) {
+      await this.handlePreventGithubEmbeddings(newMessage);
+    }
   }
 
   private async handleGithubShortLinks(message: Message<boolean>) {
@@ -20,7 +32,7 @@ export class MessageEvents {
     }
   }
 
-  private async handlePreventGithubEmbeddings(message: Message<boolean>) {
+  private async handlePreventGithubEmbeddings(message: Message<boolean> | PartialMessage) {
     if (message.embeds.find((embed) => embed.url?.startsWith(GITHUB_DOMAIN))) {
       await message.suppressEmbeds(true);
     }
