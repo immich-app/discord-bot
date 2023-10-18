@@ -40,7 +40,7 @@ export class MessageEvents {
 
   private async getGithubLinks(content: string): Promise<string[]> {
     content = content.replaceAll(/```.*```/gs, '');
-    const matches = content.matchAll(/#(?<id>[0-9]+)/g);
+    const matches = content.matchAll(/(^|\W)#(?<id>[0-9]+)/g);
     const links = new Set<string>();
     for (const match of matches) {
       if (match?.groups) {
