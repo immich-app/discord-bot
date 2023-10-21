@@ -7,7 +7,7 @@ const linkCommands: Record<string, string> = {
   database: `${DOCS_DOMAIN}/guides/database-queries`,
   upgrade: `${DOCS_DOMAIN}/install/docker-compose#step-4---upgrading`,
   libraries: `${DOCS_DOMAIN}/features/libraries`,
-  sidecar: `${DOCS_DOMAIN}/features/xmp-sidecars`,
+  'xmp sidecar': `${DOCS_DOMAIN}/features/xmp-sidecars`,
   docker: `${DOCS_DOMAIN}/guides/docker-help`,
   backup: `${DOCS_DOMAIN}/administration/backup-and-restore`,
   github: IMMICH_REPOSITORY,
