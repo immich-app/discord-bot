@@ -1,7 +1,9 @@
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
-import { GITHUB_API_DOMAIN, GITHUB_DOMAIN, IMMICH_REPOSITORY } from '../constants.js';
+import { GITHUB_API_DOMAIN, GITHUB_DOMAIN, IMMICH_DOMAIN, IMMICH_REPOSITORY } from '../constants.js';
 import _ from 'lodash';
+
+const PREVIEW_BLACKLIST = [GITHUB_DOMAIN, IMMICH_DOMAIN];
 
 @Discord()
 export class MessageEvents {
@@ -21,7 +23,7 @@ export class MessageEvents {
     }
 
     if (!_.isEqual(oldMessage.embeds, newMessage.embeds)) {
-      await this.handlePreventGithubEmbeddings(newMessage);
+      await this.handlePreventEmbeddings(newMessage);
     }
   }
 
@@ -32,8 +34,8 @@ export class MessageEvents {
     }
   }
 
-  private async handlePreventGithubEmbeddings(message: Message<boolean> | PartialMessage) {
-    if (message.embeds.find((embed) => embed.url?.startsWith(GITHUB_DOMAIN))) {
+  private async handlePreventEmbeddings(message: Message<boolean> | PartialMessage) {
+    if (message.embeds.find((embed) => embed.url && PREVIEW_BLACKLIST.includes(embed.url))) {
       await message.suppressEmbeds(true);
     }
   }
