@@ -1,8 +1,45 @@
-import { Message, MessageFlags, PartialMessage } from 'discord.js';
-import { ArgsOf, Discord, On } from 'discordx';
 import { GITHUB_DOMAIN, IMMICH_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS } from '../constants.js';
-import _ from 'lodash';
 import { Octokit } from '@octokit/rest';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
+  Message,
+  MessageActionRowComponentBuilder,
+  MessageFlags,
+  PartialMessage,
+  ThreadChannel,
+} from 'discord.js';
+import { ArgsOf, ButtonComponent, Discord, On } from 'discordx';
+import _ from 'lodash';
+import { HelpTexts } from '../commands/slashes.js';
+
+const hammerButton = new ButtonBuilder({
+  url: 'https://www.amazon.com/s?k=hammer',
+  emoji: '🔨',
+  label: 'Get A Hammer',
+  style: ButtonStyle.Link,
+});
+
+const reverseProxyButton = new ButtonBuilder({
+  customId: 'reverseProxy',
+  label: 'Reverse Proxy',
+  style: ButtonStyle.Primary,
+});
+
+const submitButton = new ButtonBuilder({
+  customId: 'submit',
+  label: 'Submit',
+  style: ButtonStyle.Success,
+  disabled: true,
+});
+
+const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+  hammerButton,
+  reverseProxyButton,
+  submitButton,
+);
 
 const PREVIEW_BLACKLIST = [GITHUB_DOMAIN, IMMICH_DOMAIN];
 const octokit = new Octokit();
@@ -26,6 +63,83 @@ export class MessageEvents {
 
     if (!_.isEqual(oldMessage.embeds, newMessage.embeds)) {
       await this.handlePreventEmbeddings(newMessage);
+    }
+  }
+
+  @On({ event: 'threadCreate' })
+  async threadCreated([thread]: ArgsOf<'threadCreate'>) {
+    if (thread.parentId !== '1049703391762321418') {
+      return;
+    }
+
+    const content = `:wave: Hey
+
+Thanks for reaching out to us.
+To make it easier for us to help you, please follow the troubleshooting steps below and then provide us with as much information as possible about your issue.
+This will save us time we can instead invest in making Immich even better <:immich:991481316950425643>
+
+1. :blue_square: turn it off and on again
+2. :blue_square: pray to the Immich-gods
+3. :blue_square: try it without a reverse proxy
+4. :blue_square: did you apply a :hammer:?
+
+For further information on how to do this, check out the buttons below.`;
+
+    const message = await thread.send({ content, components: [buttonRow] });
+
+    await message.react('1️⃣');
+    await message.react('2️⃣');
+    await message.react('3️⃣');
+    await message.react('4️⃣');
+  }
+
+  @ButtonComponent({ id: 'reverseProxy' })
+  reverseProxyHandler(interaction: ButtonInteraction): void {
+    interaction.reply({ content: HelpTexts['reverse proxy'] });
+  }
+
+  @ButtonComponent({ id: 'submit' })
+  async submitHandler(interaction: ButtonInteraction): Promise<void> {
+    const thread = interaction.message.channel as ThreadChannel;
+    if (thread.appliedTags.find((tag) => tag === '1166852154292699207')) {
+      return;
+    }
+
+    await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
+    await thread.setAppliedTags([...thread.appliedTags, '1166852154292699207']);
+  }
+
+  @On({ event: 'messageReactionRemove' })
+  @On({ event: 'messageReactionAdd' })
+  async reactListener([reaction]: ArgsOf<'messageReactionAdd'>) {
+    if (reaction.partial) {
+      await reaction.fetch();
+    }
+
+    if (!reaction.message.author?.bot) {
+      return;
+    }
+
+    // if (reaction.message.channelId !== '1049703391762321418') {
+    //   return;
+    // }
+
+    const number = reaction.emoji.name!.substring(0, 1);
+    const newIcon = reaction.count! > 1 ? ':ballot_box_with_check:' : ':blue_square:';
+
+    let message = reaction.message.content!.replace(`${number}. :blue_square:`, `${number}. ${newIcon}`);
+    message = message.replace(`${number}. :ballot_box_with_check:`, `${number}. ${newIcon}`);
+
+    if (!message.includes(':blue_square')) {
+      buttonRow.components[2].setDisabled(false);
+
+      await reaction.message.edit({ content: message, components: [buttonRow] });
+    } else {
+      buttonRow.components[2].setDisabled(true);
+      const thread = reaction.message.channel as ThreadChannel;
+      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== '1166852154292699207'));
+
+      await reaction.message.edit({ content: message, components: [buttonRow] });
     }
   }
 
