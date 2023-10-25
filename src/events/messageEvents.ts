@@ -13,7 +13,7 @@ import {
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On } from 'discordx';
 import _ from 'lodash';
-import { HelpTexts } from '../commands/slashes.js';
+import { HELP_TEXTS } from '../commands/slashes.js';
 
 const hammerButton = new ButtonBuilder({
   url: 'https://www.amazon.com/s?k=hammer',
@@ -43,6 +43,22 @@ const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addCo
 
 const PREVIEW_BLACKLIST = [GITHUB_DOMAIN, IMMICH_DOMAIN];
 const octokit = new Octokit();
+const helpDeskWelcomeMessage = `:wave: Hey
+
+Thanks for reaching out to us.
+To make it easier for us to help you, please follow the troubleshooting steps below and then provide us with as much information as possible about your issue.
+This will save us time we can instead invest in making Immich even better <:immich:991481316950425643>
+
+1. :blue_square: turn it off and on again
+2. :blue_square: pray to the Immich-gods
+3. :blue_square: try it without a reverse proxy
+4. :blue_square: did you apply a :hammer:?
+
+For further information on how to do this, check out the buttons below.`;
+
+const helpDeskChannelId = '1049703391762321418';
+
+const readyTagId = '1166852154292699207';
 
 @Discord()
 export class MessageEvents {
@@ -68,24 +84,11 @@ export class MessageEvents {
 
   @On({ event: 'threadCreate' })
   async threadCreated([thread]: ArgsOf<'threadCreate'>) {
-    if (thread.parentId !== '1049703391762321418') {
+    if (thread.parentId !== helpDeskChannelId) {
       return;
     }
 
-    const content = `:wave: Hey
-
-Thanks for reaching out to us.
-To make it easier for us to help you, please follow the troubleshooting steps below and then provide us with as much information as possible about your issue.
-This will save us time we can instead invest in making Immich even better <:immich:991481316950425643>
-
-1. :blue_square: turn it off and on again
-2. :blue_square: pray to the Immich-gods
-3. :blue_square: try it without a reverse proxy
-4. :blue_square: did you apply a :hammer:?
-
-For further information on how to do this, check out the buttons below.`;
-
-    const message = await thread.send({ content, components: [buttonRow] });
+    const message = await thread.send({ content: helpDeskWelcomeMessage, components: [buttonRow] });
 
     await message.react('1️⃣');
     await message.react('2️⃣');
@@ -95,18 +98,18 @@ For further information on how to do this, check out the buttons below.`;
 
   @ButtonComponent({ id: 'reverseProxy' })
   reverseProxyHandler(interaction: ButtonInteraction): void {
-    interaction.reply({ content: HelpTexts['reverse proxy'] });
+    interaction.reply({ content: HELP_TEXTS['reverse proxy'] });
   }
 
   @ButtonComponent({ id: 'submit' })
   async submitHandler(interaction: ButtonInteraction): Promise<void> {
     const thread = interaction.message.channel as ThreadChannel;
-    if (thread.appliedTags.find((tag) => tag === '1166852154292699207')) {
+    if (thread.appliedTags.find((tag) => tag === readyTagId)) {
       return;
     }
 
     await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
-    await thread.setAppliedTags([...thread.appliedTags, '1166852154292699207']);
+    await thread.setAppliedTags([...thread.appliedTags, readyTagId]);
   }
 
   @On({ event: 'messageReactionRemove' })
@@ -120,7 +123,7 @@ For further information on how to do this, check out the buttons below.`;
       return;
     }
 
-    // if (reaction.message.channelId !== '1049703391762321418') {
+    // if (reaction.message.channelId !== helpDeskChannelId) {
     //   return;
     // }
 
@@ -137,7 +140,7 @@ For further information on how to do this, check out the buttons below.`;
     } else {
       buttonRow.components[2].setDisabled(true);
       const thread = reaction.message.channel as ThreadChannel;
-      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== '1166852154292699207'));
+      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== readyTagId));
 
       await reaction.message.edit({ content: message, components: [buttonRow] });
     }

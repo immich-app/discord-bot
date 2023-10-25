@@ -21,7 +21,7 @@ const linkCommands: Record<string, string> = {
   cli: `${DOCS_DOMAIN}/features/bulk-upload`,
   'google-takeout': `${IMMICH_REPOSITORY}/discussions/1340`,
 };
-export const HelpTexts: Record<string, string> = {
+export const HELP_TEXTS: Record<string, string> = {
   'help ticket':
     'Please open a <#1049703391762321418> ticket with more information and we can help you troubleshoot the issue.',
   'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${DOCS_DOMAIN}/administration/reverse-proxy.`,
@@ -63,7 +63,7 @@ export class Commands {
 
   @Slash({ description: 'Text blocks for reoccurring questions' })
   messages(
-    @SlashChoice(...Object.keys(HelpTexts))
+    @SlashChoice(...Object.keys(HELP_TEXTS))
     @SlashOption({
       description: 'Which message do you need',
       name: 'type',
@@ -74,7 +74,7 @@ export class Commands {
     interaction: CommandInteraction,
   ) {
     interaction.reply({
-      content: HelpTexts[name],
+      content: HELP_TEXTS[name],
       flags: [MessageFlags.SuppressEmbeds],
     });
   }
