@@ -35,7 +35,7 @@ export class MessageEvents {
   }
 
   private async handlePreventEmbeddings(message: Message<boolean> | PartialMessage) {
-    if (message.embeds.find((embed) => embed.url && PREVIEW_BLACKLIST.includes(embed.url))) {
+    if (message.embeds.find((embed) => PREVIEW_BLACKLIST.find((domain) => embed.url?.startsWith(domain)))) {
       await message.suppressEmbeds(true);
     }
   }
