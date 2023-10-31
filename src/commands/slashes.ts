@@ -3,6 +3,11 @@ import {
   MessageFlags,
   type CommandInteraction,
   AutocompleteInteraction,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  MessageActionRowComponentBuilder,
+  ThreadChannel,
 } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { DOCS_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS } from '../constants.js';
@@ -176,5 +181,51 @@ export class Commands {
     interaction: CommandInteraction,
   ) {
     return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
+  }
+
+  @Slash({ description: "Get help with an issue or bug you've encountered" })
+  async help(interaction: CommandInteraction) {
+    const installIssueButton = new ButtonBuilder({
+      customId: 'installIssue',
+      label: 'Issue with installing Immich',
+      style: ButtonStyle.Secondary,
+    });
+
+    const setupIssueButton = new ButtonBuilder({
+      customId: 'setupIssue',
+      label: 'Issue with my setup',
+      style: ButtonStyle.Secondary,
+    });
+
+    const bugButton = new ButtonBuilder({
+      customId: 'bug',
+      label: 'Bug',
+      style: ButtonStyle.Secondary,
+    });
+
+    const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+      installIssueButton,
+      setupIssueButton,
+      bugButton,
+    );
+
+    interaction.reply({
+      content: 'Hey, thanks for reaching out! Please chose a topic from the buttons below that suits the best.',
+      components: [buttonRow],
+      ephemeral: true,
+    });
+  }
+
+  @Slash({ name: 'tags', description: 'Returns the currently set tags' })
+  async getTagIds(interaction: CommandInteraction) {
+    const members = interaction.guild?.members.cache;
+    if (!members?.get(interaction.user.id)?.roles.cache.has('980972470964215870')) {
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (channel instanceof ThreadChannel) {
+      await interaction.reply(channel.appliedTags.join(', '));
+    }
   }
 }

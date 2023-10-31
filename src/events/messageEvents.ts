@@ -3,7 +3,6 @@ import { Octokit } from '@octokit/rest';
 import {
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonInteraction,
   ButtonStyle,
   Message,
   MessageActionRowComponentBuilder,
@@ -82,74 +81,10 @@ export class MessageEvents {
     }
   }
 
-  @On({ event: 'threadCreate' })
-  async threadCreated([thread]: ArgsOf<'threadCreate'>) {
-    if (thread.parentId !== helpDeskChannelId) {
-      return;
-    }
-
-    const message = await thread.send({ content: helpDeskWelcomeMessage, components: [buttonRow] });
-
-    await message.react('1️⃣');
-    await message.react('2️⃣');
-    await message.react('3️⃣');
-    await message.react('4️⃣');
-  }
-
-  @ButtonComponent({ id: 'reverseProxy' })
-  reverseProxyHandler(interaction: ButtonInteraction): void {
-    interaction.reply({ content: HELP_TEXTS['reverse proxy'] });
-  }
-
-  @ButtonComponent({ id: 'submit' })
-  async submitHandler(interaction: ButtonInteraction): Promise<void> {
-    const thread = interaction.message.channel as ThreadChannel;
-    if (thread.appliedTags.find((tag) => tag === readyTagId)) {
-      return;
-    }
-
-    await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
-    await thread.setAppliedTags([...thread.appliedTags, readyTagId]);
-  }
-
-  @On({ event: 'messageReactionRemove' })
-  @On({ event: 'messageReactionAdd' })
-  async reactListener([reaction]: ArgsOf<'messageReactionAdd'>) {
-    if (reaction.partial) {
-      await reaction.fetch();
-    }
-
-    if (!reaction.message.author?.bot) {
-      return;
-    }
-
-    // if (reaction.message.channelId !== helpDeskChannelId) {
-    //   return;
-    // }
-
-    const number = reaction.emoji.name!.substring(0, 1);
-    const newIcon = reaction.count! > 1 ? ':ballot_box_with_check:' : ':blue_square:';
-
-    let message = reaction.message.content!.replace(`${number}. :blue_square:`, `${number}. ${newIcon}`);
-    message = message.replace(`${number}. :ballot_box_with_check:`, `${number}. ${newIcon}`);
-
-    if (!message.includes(':blue_square')) {
-      buttonRow.components[2].setDisabled(false);
-
-      await reaction.message.edit({ content: message, components: [buttonRow] });
-    } else {
-      buttonRow.components[2].setDisabled(true);
-      const thread = reaction.message.channel as ThreadChannel;
-      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== readyTagId));
-
-      await reaction.message.edit({ content: message, components: [buttonRow] });
-    }
-  }
-
   private async handleGithubShortLinks(message: Message<boolean>) {
     const links = await this.getGithubLinks(message.content);
     if (links.length !== 0) {
-      message.reply({ content: links.join('\n'), flags: [MessageFlags.SuppressEmbeds] });
+      await message.reply({ content: links.join('\n'), flags: [MessageFlags.SuppressEmbeds] });
     }
   }
 
