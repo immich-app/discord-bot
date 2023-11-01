@@ -1,6 +1,7 @@
 import { ApplicationCommandOptionType, MessageFlags, type CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { DOCS_DOMAIN, IMMICH_REPOSITORY, GITHUB_API_DOMAIN } from '../constants.js';
+import { DateTime } from 'luxon';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': `${DOCS_DOMAIN}/administration/reverse-proxy`,
@@ -111,6 +112,26 @@ export class Commands {
       _fork_history[interaction.channelId] = forksCount;
     } catch (error) {
       interaction.reply("Couldn't fetch forks count from github api");
+    }
+  }
+
+  @Slash({ description: 'Immich age' })
+  async age(interaction: CommandInteraction) {
+    const birthday = DateTime.fromObject({ year: 2022, month: 2, day: 3 });
+    const age = DateTime.now().diff(birthday, ['years', 'months']);
+
+    if (age.months === 0) {
+      await interaction.reply(
+        `Immich is ${age.years} ${age.years > 1 ? 'years' : 'year'} old. <:immich:991481316950425643>`,
+      );
+    } else if (age.months === 6) {
+      await interaction.reply(`Immich is ${age.years}.5 years old. <:immich:991481316950425643>`);
+    } else {
+      await interaction.reply(
+        `Immich is ${age.years} ${age.years > 1 ? 'years' : 'year'} and ${Math.floor(age.months)} ${
+          age.months > 1 ? 'months' : 'month'
+        } old. <:immich:991481316950425643>`,
+      );
     }
   }
 }
