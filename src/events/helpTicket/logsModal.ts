@@ -5,7 +5,6 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   ModalSubmitInteraction,
-  codeBlock,
   ThreadChannel,
 } from 'discord.js';
 import { ButtonComponent, Discord, ModalComponent } from 'discordx';
@@ -42,7 +41,7 @@ export class LogsModal {
     const helpDeskThread = (await interaction.client.channels.fetch(channelId)) as ThreadChannel;
     const [logsSource, logs] = ['logsSource', 'logs'].map((id) => interaction.fields.getTextInputValue(id));
 
-    await helpDeskThread.send(`${logsSource}: ${codeBlock(logs)}`);
+    await helpDeskThread.send({ files: [{ attachment: Buffer.from(logs), name: logsSource }] });
     await interaction.reply({ ephemeral: true, content: 'Successfully submitted logs' });
   }
 }

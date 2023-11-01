@@ -8,7 +8,7 @@ import {
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On } from 'discordx';
 import { HELP_TEXTS } from '../../commands/slashes.js';
-import { READY_TAG_ID } from './util.js';
+import { CHECKED_ICON, Ids, UNCHECKED_ICON } from '../../constants.js';
 
 const hammerButton = new ButtonBuilder({
   url: 'https://www.amazon.com/s?k=hammer',
@@ -46,12 +46,12 @@ export class HelpTicket {
   @ButtonComponent({ id: 'submit' })
   async submitHandler(interaction: ButtonInteraction): Promise<void> {
     const thread = interaction.message.channel as ThreadChannel;
-    if (thread.appliedTags.find((tag) => tag === READY_TAG_ID)) {
+    if (thread.appliedTags.find((tag) => tag === Ids.Tags.Ready)) {
       return;
     }
 
     await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
-    await thread.setAppliedTags([...thread.appliedTags, READY_TAG_ID]);
+    await thread.setAppliedTags([...thread.appliedTags, Ids.Tags.Ready]);
   }
 
   @On({ event: 'messageReactionRemove' })
@@ -65,24 +65,24 @@ export class HelpTicket {
       return;
     }
 
-    // if (reaction.message.channelId !== helpDeskChannelId) {
-    //   return;
-    // }
+    if (reaction.message.channelId !== Ids.Channels.HelpDesk) {
+      return;
+    }
 
     const number = reaction.emoji.name!.substring(0, 1);
-    const newIcon = reaction.count! > 1 ? ':ballot_box_with_check:' : ':blue_square:';
+    const newIcon = reaction.count! > 1 ? CHECKED_ICON : UNCHECKED_ICON;
 
-    let message = reaction.message.content!.replace(`${number}. :blue_square:`, `${number}. ${newIcon}`);
-    message = message.replace(`${number}. :ballot_box_with_check:`, `${number}. ${newIcon}`);
+    let message = reaction.message.content!.replace(`${number}. ${UNCHECKED_ICON}`, `${number}. ${newIcon}`);
+    message = message.replace(`${number}. ${CHECKED_ICON}`, `${number}. ${newIcon}`);
 
-    if (!message.includes(':blue_square')) {
+    if (!message.includes(UNCHECKED_ICON)) {
       mainButtonRow.components[2].setDisabled(false);
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     } else {
       mainButtonRow.components[2].setDisabled(true);
       const thread = reaction.message.channel as ThreadChannel;
-      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== READY_TAG_ID));
+      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== Ids.Tags.Ready));
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }

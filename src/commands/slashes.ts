@@ -10,9 +10,10 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
-import { DOCS_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS } from '../constants.js';
+import { DOCS_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS, Ids } from '../constants.js';
 import { DateTime } from 'luxon';
 import { Octokit } from '@octokit/rest';
+import { BUG_BUTTON_ID, INSTALL_ISSUE_BUTTON_ID, SETUP_ISSUE_BUTTON_ID } from '../events/helpTicket/util.js';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': `${DOCS_DOMAIN}/administration/reverse-proxy`,
@@ -27,8 +28,7 @@ const linkCommands: Record<string, string> = {
   'google-takeout': `${IMMICH_REPOSITORY}/discussions/1340`,
 };
 export const HELP_TEXTS: Record<string, string> = {
-  'help ticket':
-    'Please open a <#1049703391762321418> ticket with more information and we can help you troubleshoot the issue.',
+  'help ticket': `Please open a <#${Ids.Channels.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
   'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${DOCS_DOMAIN}/administration/reverse-proxy.`,
   'feature request':
     "For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](https://github.com/immich-app/immich/discussions/new?category=feature-request). However, please make sure to search for similar requests first to avoid duplicates. ",
@@ -186,19 +186,19 @@ export class Commands {
   @Slash({ description: "Get help with an issue or bug you've encountered" })
   async help(interaction: CommandInteraction) {
     const installIssueButton = new ButtonBuilder({
-      customId: 'installIssue',
+      customId: INSTALL_ISSUE_BUTTON_ID,
       label: 'Issue with installing Immich',
       style: ButtonStyle.Secondary,
     });
 
     const setupIssueButton = new ButtonBuilder({
-      customId: 'setupIssue',
+      customId: SETUP_ISSUE_BUTTON_ID,
       label: 'Issue with my setup',
       style: ButtonStyle.Secondary,
     });
 
     const bugButton = new ButtonBuilder({
-      customId: 'bug',
+      customId: BUG_BUTTON_ID,
       label: 'Bug',
       style: ButtonStyle.Secondary,
     });
@@ -219,7 +219,7 @@ export class Commands {
   @Slash({ name: 'tags', description: 'Returns the currently set tags' })
   async getTagIds(interaction: CommandInteraction) {
     const members = interaction.guild?.members.cache;
-    if (!members?.get(interaction.user.id)?.roles.cache.has('980972470964215870')) {
+    if (!members?.get(interaction.user.id)?.roles.cache.has(Ids.Roles.Contributor)) {
       return;
     }
 

@@ -33,7 +33,7 @@ export class EnvModal {
     const helpDeskThread = (await interaction.client.channels.fetch(channelId)) as ThreadChannel;
     const env = interaction.fields.getTextInputValue('env');
 
-    await helpDeskThread.send(`\`\`\`\n${env}\n\`\`\``);
+    await helpDeskThread.send({ files: [{ attachment: Buffer.from(env), name: '.env' }] });
     await interaction.reply({ ephemeral: true, content: 'Successfully submitted your env file' });
   }
 }

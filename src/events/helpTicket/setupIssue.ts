@@ -9,19 +9,19 @@ import {
 } from 'discord.js';
 import { ButtonComponent, Discord, ModalComponent } from 'discordx';
 import {
-  HELP_DESK_CHANNEL_ID,
-  USAGE_TAG_ID,
+  SETUP_ISSUE_BUTTON_ID,
   getComposeButton,
   getDescriptionInput,
   getEnvButton,
   getTitleInput,
   helpDeskWelcomeMessage,
 } from './util.js';
+import { Ids } from '../../constants.js';
 
 @Discord()
 export class SetupIssue {
-  @ButtonComponent({ id: 'setupIssue' })
-  async setupIssueHandler(interaction: ButtonInteraction): Promise<void> {
+  @ButtonComponent({ id: SETUP_ISSUE_BUTTON_ID })
+  async handleSetupIssueClick(interaction: ButtonInteraction): Promise<void> {
     const modal = new ModalBuilder({ customId: 'setupIssueModal', title: 'Basic information about your issue' });
 
     const rowOne = new ActionRowBuilder<TextInputBuilder>({ components: [getTitleInput()] });
@@ -33,12 +33,12 @@ export class SetupIssue {
   }
 
   @ModalComponent()
-  async setupIssueModal(interaction: ModalSubmitInteraction): Promise<void> {
-    const helpDeskChannel = (await interaction.client.channels.fetch(HELP_DESK_CHANNEL_ID)) as ForumChannel;
+  async handleSetupIssueModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    const helpDeskChannel = (await interaction.client.channels.fetch(Ids.Channels.HelpDesk)) as ForumChannel;
     const channel = await helpDeskChannel.threads.create({
       name: `[Setup] ${interaction.fields.getTextInputValue('titleInput')}`,
       message: { content: interaction.fields.getTextInputValue('descriptionInput') },
-      appliedTags: [USAGE_TAG_ID],
+      appliedTags: [Ids.Tags.Usage],
     });
     const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
       getComposeButton(channel.id),

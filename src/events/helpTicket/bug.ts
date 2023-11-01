@@ -9,8 +9,7 @@ import {
 } from 'discord.js';
 import { ButtonComponent, Discord, ModalComponent } from 'discordx';
 import {
-  HELP_DESK_CHANNEL_ID,
-  QUESTION_TAG_ID,
+  BUG_BUTTON_ID,
   getComposeButton,
   getDescriptionInput,
   getEnvButton,
@@ -18,11 +17,12 @@ import {
   getTitleInput,
   helpDeskWelcomeMessage,
 } from './util.js';
+import { Ids } from '../../constants.js';
 
 @Discord()
 export class Bug {
-  @ButtonComponent({ id: 'bug' })
-  async bugHandler(interaction: ButtonInteraction): Promise<void> {
+  @ButtonComponent({ id: BUG_BUTTON_ID })
+  async handleBugClick(interaction: ButtonInteraction): Promise<void> {
     const modal = new ModalBuilder({
       customId: 'bugModal',
       title: "Basic information about the bug you've found",
@@ -37,12 +37,12 @@ export class Bug {
   }
 
   @ModalComponent()
-  async bugModal(interaction: ModalSubmitInteraction): Promise<void> {
-    const helpDeskChannel = (await interaction.client.channels.fetch(HELP_DESK_CHANNEL_ID)) as ForumChannel;
+  async handleBugModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    const helpDeskChannel = (await interaction.client.channels.fetch(Ids.Channels.HelpDesk)) as ForumChannel;
     const channel = await helpDeskChannel.threads.create({
       name: `[Bug] ${interaction.fields.getTextInputValue('titleInput')}`,
       message: { content: interaction.fields.getTextInputValue('descriptionInput') },
-      appliedTags: [QUESTION_TAG_ID],
+      appliedTags: [Ids.Tags.Question],
     });
     const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
       getComposeButton(channel.id),

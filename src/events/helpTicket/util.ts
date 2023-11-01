@@ -1,8 +1,13 @@
 import { ButtonBuilder, ButtonStyle, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { UNCHECKED_ICON } from '../../constants';
 
 export const LOGS_BUTTON_BASE_ID = 'logs';
 export const COMPOSE_BUTTON_BASE_ID = 'compose';
 export const ENV_BUTTON_BASE_ID = 'env';
+
+export const INSTALL_ISSUE_BUTTON_ID = 'installIssue';
+export const SETUP_ISSUE_BUTTON_ID = 'setupIssue';
+export const BUG_BUTTON_ID = 'bug';
 
 export const getTitleInput = () =>
   new TextInputBuilder({ customId: 'titleInput', label: 'Title of the ticket', style: TextInputStyle.Short });
@@ -19,19 +24,12 @@ Thanks for reaching out to us.
 To make it easier for us to help you, please follow the troubleshooting steps below and then provide us with as much information as possible about your issue.
 This will save us time we can instead invest in making Immich even better <:immich:991481316950425643>
 
-1. :blue_square: turn it off and on again
-2. :blue_square: pray to the Immich-gods
-3. :blue_square: try it without a reverse proxy
-4. :blue_square: did you apply a :hammer:?
+1. ${UNCHECKED_ICON} turn it off and on again
+2. ${UNCHECKED_ICON} pray to the Immich-gods
+3. ${UNCHECKED_ICON} try it without a reverse proxy
+4. ${UNCHECKED_ICON} did you apply a :hammer:?
 
 For further information on how to do this, check out the buttons below.`;
-
-export const HELP_DESK_CHANNEL_ID = '1049703391762321418';
-
-export const QUESTION_TAG_ID = '1049704189686730823';
-export const SETUP_TAG_ID = '1049704231692677120';
-export const USAGE_TAG_ID = '1049704247517794315';
-export const READY_TAG_ID = '1166852154292699207';
 
 export function getLogsButton(id: string) {
   return new ButtonBuilder({
