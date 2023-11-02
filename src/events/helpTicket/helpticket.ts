@@ -72,8 +72,9 @@ export class HelpTicket {
     const number = reaction.emoji.name!.substring(0, 1);
     const newIcon = reaction.count! > 1 ? CHECKED_ICON : UNCHECKED_ICON;
 
-    let message = reaction.message.content!.replace(`${number}. ${UNCHECKED_ICON}`, `${number}. ${newIcon}`);
-    message = message.replace(`${number}. ${CHECKED_ICON}`, `${number}. ${newIcon}`);
+    const message = reaction.message
+      .content!.replace(`${number}. ${UNCHECKED_ICON}`, `${number}. ${newIcon}`)
+      .replace(`${number}. ${CHECKED_ICON}`, `${number}. ${newIcon}`);
 
     if (!message.includes(UNCHECKED_ICON)) {
       mainButtonRow.components[2].setDisabled(false);
