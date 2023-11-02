@@ -124,23 +124,19 @@ export class Commands {
   }
 
   @Slash({ description: 'Immich age' })
-  async age(interaction: CommandInteraction) {
-    const birthday = DateTime.fromObject({ year: 2022, month: 2, day: 3 });
-    const age = DateTime.now().diff(birthday, ['years', 'months']);
+  age(interaction: CommandInteraction) {
+    const age = DateTime.now()
+      .diff(DateTime.fromObject({ year: 2022, month: 2, day: 3, hour: 15, minute: 56 }, { zone: 'UTC' }), [
+        'years',
+        'months',
+        'days',
+        'hours',
+        'minutes',
+        'seconds',
+      ])
+      .toHuman({ listStyle: 'long', maximumFractionDigits: 0 });
 
-    if (age.months === 0) {
-      await interaction.reply(
-        `Immich is ${age.years} ${age.years > 1 ? 'years' : 'year'} old. <:immich:991481316950425643>`,
-      );
-    } else if (age.months === 6) {
-      await interaction.reply(`Immich is ${age.years}.5 years old. <:immich:991481316950425643>`);
-    } else {
-      await interaction.reply(
-        `Immich is ${age.years} ${age.years > 1 ? 'years' : 'year'} and ${Math.floor(age.months)} ${
-          age.months > 1 ? 'months' : 'month'
-        } old. <:immich:991481316950425643>`,
-      );
-    }
+    return interaction.reply(`Immich is ${age} old. <:immich:991481316950425643>`);
   }
 
   @Slash({ description: 'Search for PRs and Issues by title' })
