@@ -1,9 +1,11 @@
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
-import { GITHUB_API_DOMAIN, GITHUB_DOMAIN, IMMICH_DOMAIN, IMMICH_REPOSITORY } from '../constants.js';
+import { GITHUB_DOMAIN, IMMICH_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS } from '../constants.js';
 import _ from 'lodash';
+import { Octokit } from '@octokit/rest';
 
 const PREVIEW_BLACKLIST = [GITHUB_DOMAIN, IMMICH_DOMAIN];
+const octokit = new Octokit();
 
 @Discord()
 export class MessageEvents {
@@ -47,12 +49,11 @@ export class MessageEvents {
     for (const match of matches) {
       if (match?.groups) {
         const id = match.groups.id;
-        const response = await fetch(`${GITHUB_API_DOMAIN}/issues/${id}`);
+        const response = await octokit.rest.issues.get({ ...IMMICH_REPOSITORY_BASE_OPTIONS, issue_number: Number(id) });
 
         if (response.status === 200) {
-          const json = await response.json();
-          const type = json.pull_request ? 'PR' : 'ISSUE';
-          links.add(`[${type}] ${json.title} ([#${id}](${json.html_url}))`);
+          const type = response.data.pull_request ? 'PR' : 'ISSUE';
+          links.add(`[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`);
           continue;
         }
 

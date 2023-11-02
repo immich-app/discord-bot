@@ -1,7 +1,13 @@
-import { ApplicationCommandOptionType, MessageFlags, type CommandInteraction } from 'discord.js';
+import {
+  ApplicationCommandOptionType,
+  MessageFlags,
+  type CommandInteraction,
+  AutocompleteInteraction,
+} from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
-import { DOCS_DOMAIN, IMMICH_REPOSITORY, GITHUB_API_DOMAIN } from '../constants.js';
+import { DOCS_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS } from '../constants.js';
 import { DateTime } from 'luxon';
+import { Octokit } from '@octokit/rest';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': `${DOCS_DOMAIN}/administration/reverse-proxy`,
@@ -25,6 +31,8 @@ const helpTexts: Record<string, string> = {
 
 const _star_history: Record<string, number | undefined> = {};
 const _fork_history: Record<string, number | undefined> = {};
+
+const octokit = new Octokit();
 
 @Discord()
 export class Commands {
@@ -76,13 +84,14 @@ export class Commands {
     const lastStarsCount = _star_history[interaction.channelId];
 
     try {
-      const response = await (await fetch(GITHUB_API_DOMAIN)).json();
-      const starsCount = response['stargazers_count'] as number;
+      const starsCount = await octokit.rest.repos
+        .get(IMMICH_REPOSITORY_BASE_OPTIONS)
+        .then((repo) => repo.data.stargazers_count);
       const delta = lastStarsCount && starsCount - lastStarsCount;
       const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
 
       interaction.reply(
-        `Stars ⭐: ${response['stargazers_count']}${
+        `Stars ⭐: ${starsCount}${
           formattedDelta ? ` (${formattedDelta} stars since the last call in this channel)` : ''
         }`,
       );
@@ -98,15 +107,14 @@ export class Commands {
     const lastForksCount = _fork_history[interaction.channelId];
 
     try {
-      const response = await (await fetch(GITHUB_API_DOMAIN)).json();
-      const forksCount = response['forks_count'] as number;
+      const forksCount = await octokit.rest.repos
+        .get(IMMICH_REPOSITORY_BASE_OPTIONS)
+        .then((repo) => repo.data.forks_count);
       const delta = lastForksCount && forksCount - lastForksCount;
       const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
 
       interaction.reply(
-        `Forks: ${response['forks_count']}${
-          formattedDelta ? ` (${formattedDelta} forks since the last call in this channel)` : ''
-        }`,
+        `Forks: ${forksCount}${formattedDelta ? ` (${formattedDelta} forks since the last call in this channel)` : ''}`,
       );
 
       _fork_history[interaction.channelId] = forksCount;
@@ -133,5 +141,44 @@ export class Commands {
         } old. <:immich:991481316950425643>`,
       );
     }
+  }
+
+  @Slash({ description: 'Search for PRs and Issues by title' })
+  search(
+    @SlashOption({
+      description: 'Query that applies to title',
+      name: 'query',
+      required: true,
+      type: ApplicationCommandOptionType.String,
+      autocomplete: async (interaction: AutocompleteInteraction) => {
+        const value = interaction.options.getFocused(true).value;
+        if (!value) {
+          return interaction.respond([]);
+        }
+
+        const result = await octokit.rest.search
+          .issuesAndPullRequests({
+            q: `repo:immich-app/immich in:title ${value}`,
+            per_page: 5,
+            page: 1,
+            sort: 'updated',
+            order: 'desc',
+          })
+          .then((response) => response.data);
+        return interaction.respond(
+          result.items.map((item) => {
+            const name = `${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`;
+            return {
+              name: name.length > 100 ? name.substring(0, 97) + '...' : name,
+              value: `${item.pull_request ? '[PR]' : '[Issue]'} ([#${item.number}](${item.url}))`,
+            };
+          }),
+        );
+      },
+    })
+    content: string,
+    interaction: CommandInteraction,
+  ) {
+    return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
   }
 }

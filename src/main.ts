@@ -32,8 +32,8 @@ const birthdayJob = new CronJob('36 4 3 2 *', async () => {
 
 bot.once('ready', async () => {
   const sha = process.env.COMMIT_SHA;
-  const commit = sha ? `[${sha.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})` : 'dev';
-  const fullVersion = `${process.env.npm_package_version}@${commit}`;
+  const commit = sha && `[${sha.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})`;
+  const fullVersion = commit && `${process.env.npm_package_version}@${commit}`;
   // Synchronize applications commands with Discord
   await bot.initApplicationCommands();
 
@@ -41,7 +41,7 @@ bot.once('ready', async () => {
 
   const channel = (await bot.channels.fetch('1159083520027787307')) as TextChannel;
 
-  if (channel) {
+  if (channel && fullVersion) {
     channel.send(`I'm alive, running ${fullVersion}!`);
   }
 
