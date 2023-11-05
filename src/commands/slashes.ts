@@ -166,7 +166,7 @@ export class Commands {
             const name = `${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`;
             return {
               name: name.length > 100 ? name.substring(0, 97) + '...' : name,
-              value: `${item.pull_request ? '[PR]' : '[Issue]'} ${item.title} ([#${item.number}](${item.html_url}))`,
+              value: `${item.pull_request ? '[PR]' : '[Issue]'} ([#${item.number}](${item.html_url}))`,
             };
           }),
         );
