@@ -19,12 +19,14 @@ import {
 } from './util.js';
 import { Ids } from '../../constants.js';
 
+const MODAL_ID = 'bugModal';
+
 @Discord()
 export class Bug {
   @ButtonComponent({ id: BUG_BUTTON_ID })
   async handleBugClick(interaction: ButtonInteraction): Promise<void> {
     const modal = new ModalBuilder({
-      customId: 'bugModal',
+      customId: MODAL_ID,
       title: "Basic information about the bug you've found",
     });
 
@@ -36,7 +38,7 @@ export class Bug {
     await interaction.showModal(modal);
   }
 
-  @ModalComponent()
+  @ModalComponent({ id: MODAL_ID })
   async handleBugModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const helpDeskChannel = (await interaction.client.channels.fetch(Ids.Channels.HelpDesk)) as ForumChannel;
     const channel = await helpDeskChannel.threads.create({
@@ -45,9 +47,9 @@ export class Bug {
       appliedTags: [Ids.Tags.Question],
     });
     const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-      getComposeButton(channel.id),
-      getEnvButton(channel.id),
-      getLogsButton(channel.id),
+      getComposeButton(),
+      getEnvButton(),
+      getLogsButton(),
     );
 
     const message = await channel.send(helpDeskWelcomeMessage(interaction.user.id));

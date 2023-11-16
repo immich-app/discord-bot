@@ -18,11 +18,13 @@ import {
 } from './util.js';
 import { Ids } from '../../constants.js';
 
+const MODAL_ID = 'setupIssueModal';
+
 @Discord()
 export class SetupIssue {
   @ButtonComponent({ id: SETUP_ISSUE_BUTTON_ID })
   async handleSetupIssueClick(interaction: ButtonInteraction): Promise<void> {
-    const modal = new ModalBuilder({ customId: 'setupIssueModal', title: 'Basic information about your issue' });
+    const modal = new ModalBuilder({ customId: MODAL_ID, title: 'Basic information about your issue' });
 
     const rowOne = new ActionRowBuilder<TextInputBuilder>({ components: [getTitleInput()] });
     const rowTwo = new ActionRowBuilder<TextInputBuilder>({ components: [getDescriptionInput()] });
@@ -32,7 +34,7 @@ export class SetupIssue {
     await interaction.showModal(modal);
   }
 
-  @ModalComponent()
+  @ModalComponent({ id: MODAL_ID })
   async handleSetupIssueModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const helpDeskChannel = (await interaction.client.channels.fetch(Ids.Channels.HelpDesk)) as ForumChannel;
     const channel = await helpDeskChannel.threads.create({
@@ -41,8 +43,8 @@ export class SetupIssue {
       appliedTags: [Ids.Tags.Usage],
     });
     const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-      getComposeButton(channel.id),
-      getEnvButton(channel.id),
+      getComposeButton(),
+      getEnvButton(),
     );
 
     const message = await channel.send(helpDeskWelcomeMessage(interaction.user.id));

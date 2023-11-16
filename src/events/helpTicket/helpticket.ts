@@ -1,14 +1,18 @@
 import {
   ActionRowBuilder,
+  BaseInteraction,
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  CommandInteraction,
   MessageActionRowComponentBuilder,
+  MessageFlags,
   ThreadChannel,
 } from 'discord.js';
-import { ArgsOf, ButtonComponent, Discord, On } from 'discordx';
+import { ArgsOf, ButtonComponent, Discord, On, Slash } from 'discordx';
 import { HELP_TEXTS } from '../../commands/slashes.js';
 import { CHECKED_ICON, Ids, UNCHECKED_ICON } from '../../constants.js';
+import { getComposeButton, getEnvButton, getLogsButton, helpDeskWelcomeMessage } from './util.js';
 
 const hammerButton = new ButtonBuilder({
   url: 'https://www.amazon.com/s?k=hammer',
@@ -39,12 +43,12 @@ const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().a
 @Discord()
 export class HelpTicket {
   @ButtonComponent({ id: 'reverseProxy' })
-  reverseProxyHandler(interaction: ButtonInteraction): void {
+  handleReverseProxy(interaction: ButtonInteraction): void {
     interaction.reply({ content: HELP_TEXTS['reverse proxy'] });
   }
 
   @ButtonComponent({ id: 'submit' })
-  async submitHandler(interaction: ButtonInteraction): Promise<void> {
+  async handleSubmit(interaction: ButtonInteraction): Promise<void> {
     const thread = interaction.message.channel as ThreadChannel;
     if (thread.appliedTags.find((tag) => tag === Ids.Tags.Ready)) {
       return;
@@ -56,7 +60,7 @@ export class HelpTicket {
 
   @On({ event: 'messageReactionRemove' })
   @On({ event: 'messageReactionAdd' })
-  async reactListener([reaction]: ArgsOf<'messageReactionAdd'>) {
+  async handleReaction([reaction]: ArgsOf<'messageReactionAdd'>) {
     if (reaction.partial) {
       await reaction.fetch();
     }
@@ -65,8 +69,12 @@ export class HelpTicket {
       return;
     }
 
-    if (reaction.message.channelId !== Ids.Channels.HelpDesk) {
-      return;
+    const channel = reaction.message.channel;
+
+    if (channel instanceof ThreadChannel) {
+      if (channel.parentId !== Ids.Channels.HelpDesk) {
+        return;
+      }
     }
 
     const number = reaction.emoji.name!.substring(0, 1);
@@ -87,5 +95,80 @@ export class HelpTicket {
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
+  }
+
+  @On({ event: 'threadCreate' })
+  async handleThreadCreate([thread]: ArgsOf<'threadCreate'>) {
+    const welcomeMessage = helpDeskWelcomeMessage(thread.ownerId ?? '');
+    const message = await thread.send({
+      content: welcomeMessage,
+      components: [mainButtonRow],
+      flags: [MessageFlags.SuppressEmbeds],
+    });
+    const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+      getComposeButton(),
+      getLogsButton(),
+      getEnvButton(),
+    );
+
+    await Promise.all([
+      (async () => {
+        const itemCount = welcomeMessage.match(new RegExp(UNCHECKED_ICON, 'g'))?.length ?? 0;
+        for (let i = 1; i < itemCount; i++) {
+          await message.react(`${i}️⃣`);
+        }
+      })(),
+      thread.send({
+        content: 'Please provide files using the buttons below',
+        components: [buttonRow],
+      }),
+    ]);
+  }
+
+  @ButtonComponent({ id: 'openTicket' })
+  @Slash({ name: 'open', description: 'Opens the ticket' })
+  async handleTicketOpen(interaction: BaseInteraction) {
+    const channel = interaction.channel;
+
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== Ids.Channels.HelpDesk) {
+      if (interaction instanceof CommandInteraction) {
+        return interaction?.reply({
+          ephemeral: true,
+          content: `This command can only be invoked in <#${Ids.Channels.HelpDesk}> tickets.`,
+        });
+      }
+      return;
+    }
+
+    await channel.setArchived(false);
+    await channel.lastMessage?.delete();
+  }
+
+  @Slash({ name: 'close', description: 'Closes the ticket. Can be re-opened if need be' })
+  async handleTicketClose(interaction: CommandInteraction) {
+    const channel = interaction.channel;
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== Ids.Channels.HelpDesk) {
+      return interaction.reply({
+        ephemeral: true,
+        content: `This command can only be invoked in <#${Ids.Channels.HelpDesk}> tickets.`,
+      });
+    }
+
+    const members = interaction.guild?.members.cache;
+    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Ids.Roles.Contributor);
+
+    if (!(isContributor || channel.ownerId === interaction.user.id)) {
+      return interaction.reply({ ephemeral: true, content: 'Only the OP and contributors can close a thread.' });
+    }
+
+    const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+      new ButtonBuilder({ customId: 'openTicket', label: 'Re-Open', style: ButtonStyle.Success }),
+    );
+
+    await interaction.reply({
+      content: 'This thread has been closed. To re-open, use the button below.',
+      components: [buttonRow],
+    });
+    await channel.setArchived(true);
   }
 }

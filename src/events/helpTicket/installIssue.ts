@@ -18,11 +18,13 @@ import {
 } from './util.js';
 import { Ids } from '../../constants.js';
 
+const MODAL_ID = 'installIssueModal';
+
 @Discord()
 export class InstallIssue {
   @ButtonComponent({ id: INSTALL_ISSUE_BUTTON_ID })
   async handleInstallIssueClick(interaction: ButtonInteraction): Promise<void> {
-    const modal = new ModalBuilder({ customId: 'installIssueModal', title: 'Basic information about your issue' });
+    const modal = new ModalBuilder({ customId: MODAL_ID, title: 'Basic information about your issue' });
 
     const rowOne = new ActionRowBuilder<TextInputBuilder>({ components: [getTitleInput()] });
     const rowTwo = new ActionRowBuilder<TextInputBuilder>({ components: [getDescriptionInput()] });
@@ -32,7 +34,7 @@ export class InstallIssue {
     await interaction.showModal(modal);
   }
 
-  @ModalComponent()
+  @ModalComponent({ id: MODAL_ID })
   async handleInstallIssueModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const helpDeskChannel = (await interaction.client.channels.fetch(Ids.Channels.HelpDesk)) as ForumChannel;
     const channel = await helpDeskChannel.threads.create({
@@ -40,9 +42,10 @@ export class InstallIssue {
       message: { content: interaction.fields.getTextInputValue('descriptionInput') },
       appliedTags: [Ids.Tags.Setup],
     });
+
     const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-      getComposeButton(channel.id),
-      getEnvButton(channel.id),
+      getComposeButton(),
+      getEnvButton(),
     );
 
     const message = await channel.send(helpDeskWelcomeMessage(interaction.user.id));
@@ -56,7 +59,7 @@ export class InstallIssue {
       },
       await interaction.reply({
         ephemeral: true,
-        content: `A ticket has been opened for you: <#${channel.id}>. Please provide more information by clicking the buttons below and submitting required files.`,
+        content: `A ticket has been opened for you: <#${channel.id}>. Please provide more information there.`,
         components: [buttonRow],
       }),
     ]);

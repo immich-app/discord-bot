@@ -5,7 +5,6 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   ModalSubmitInteraction,
-  ThreadChannel,
 } from 'discord.js';
 import { ButtonComponent, Discord, ModalComponent } from 'discordx';
 
@@ -33,11 +32,9 @@ export class ComposeModal {
 
   @ModalComponent({ id: /^composeModal.*$/ })
   async composeModal(interaction: ModalSubmitInteraction): Promise<void> {
-    const channelId = interaction.customId.split('_')[1];
-    const helpDeskThread = (await interaction.client.channels.fetch(channelId)) as ThreadChannel;
     const compose = interaction.fields.getTextInputValue('compose');
 
-    await helpDeskThread.send({ files: [{ attachment: Buffer.from(compose), name: 'docker-compose.yml' }] });
-    await interaction.reply({ ephemeral: true, content: 'Successfully submitted your docker compose file' });
+    await interaction.channel?.send({ files: [{ attachment: Buffer.from(compose), name: 'docker-compose.yml' }] });
+    // await interaction.reply({ ephemeral: true, content: 'Successfully submitted your docker compose file' });
   }
 }

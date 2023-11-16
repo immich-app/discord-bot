@@ -3,17 +3,12 @@ import {
   MessageFlags,
   type CommandInteraction,
   AutocompleteInteraction,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  MessageActionRowComponentBuilder,
   ThreadChannel,
 } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { DOCS_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS, Ids } from '../constants.js';
 import { DateTime } from 'luxon';
 import { Octokit } from '@octokit/rest';
-import { BUG_BUTTON_ID, INSTALL_ISSUE_BUTTON_ID, SETUP_ISSUE_BUTTON_ID } from '../events/helpTicket/util.js';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': `${DOCS_DOMAIN}/administration/reverse-proxy`,
@@ -181,39 +176,6 @@ export class Commands {
     interaction: CommandInteraction,
   ) {
     return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
-  }
-
-  @Slash({ description: "Get help with an issue or bug you've encountered" })
-  async help(interaction: CommandInteraction) {
-    const installIssueButton = new ButtonBuilder({
-      customId: INSTALL_ISSUE_BUTTON_ID,
-      label: 'Issue with installing Immich',
-      style: ButtonStyle.Secondary,
-    });
-
-    const setupIssueButton = new ButtonBuilder({
-      customId: SETUP_ISSUE_BUTTON_ID,
-      label: 'Issue with my setup',
-      style: ButtonStyle.Secondary,
-    });
-
-    const bugButton = new ButtonBuilder({
-      customId: BUG_BUTTON_ID,
-      label: 'Bug',
-      style: ButtonStyle.Secondary,
-    });
-
-    const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-      installIssueButton,
-      setupIssueButton,
-      bugButton,
-    );
-
-    interaction.reply({
-      content: 'Hey, thanks for reaching out! Please chose a topic from the buttons below that suits the best.',
-      components: [buttonRow],
-      ephemeral: true,
-    });
   }
 
   @Slash({ name: 'tags', description: 'Returns the currently set tags' })

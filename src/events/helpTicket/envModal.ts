@@ -5,7 +5,6 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   ModalSubmitInteraction,
-  ThreadChannel,
 } from 'discord.js';
 import { ButtonComponent, Discord, ModalComponent } from 'discordx';
 
@@ -29,11 +28,9 @@ export class EnvModal {
 
   @ModalComponent({ id: /^envModal.*$/ })
   async envModal(interaction: ModalSubmitInteraction): Promise<void> {
-    const channelId = interaction.customId.split('_')[1];
-    const helpDeskThread = (await interaction.client.channels.fetch(channelId)) as ThreadChannel;
     const env = interaction.fields.getTextInputValue('env');
 
-    await helpDeskThread.send({ files: [{ attachment: Buffer.from(env), name: '.env' }] });
-    await interaction.reply({ ephemeral: true, content: 'Successfully submitted your env file' });
+    await interaction.channel?.send({ files: [{ attachment: Buffer.from(env), name: '.env' }] });
+    // await interaction.reply({ ephemeral: true, content: 'Successfully submitted your env file' });
   }
 }
