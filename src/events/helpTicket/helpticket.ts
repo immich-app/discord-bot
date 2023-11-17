@@ -1,25 +1,28 @@
 import {
   ActionRowBuilder,
+  ApplicationCommandOptionType,
   BaseInteraction,
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
   CommandInteraction,
+  InteractionResponse,
   MessageActionRowComponentBuilder,
   MessageFlags,
   ThreadChannel,
 } from 'discord.js';
-import { ArgsOf, ButtonComponent, Discord, On, Slash } from 'discordx';
+import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
 import { HELP_TEXTS } from '../../commands/slashes.js';
 import { CHECKED_ICON, Ids, UNCHECKED_ICON } from '../../constants.js';
-import { getComposeButton, getEnvButton, getLogsButton, helpDeskWelcomeMessage } from './util.js';
-
-const hammerButton = new ButtonBuilder({
-  url: 'https://www.amazon.com/s?k=hammer',
-  emoji: '🔨',
-  label: 'Get A Hammer',
-  style: ButtonStyle.Link,
-});
+import {
+  getLogsUploadModel,
+  getComposeButton,
+  getEnvButton,
+  getLogsButton,
+  helpDeskWelcomeMessage,
+  getComposeUploadModal,
+  getEnvUploadModal,
+} from './util.js';
 
 const reverseProxyButton = new ButtonBuilder({
   customId: 'reverseProxy',
@@ -35,7 +38,6 @@ const submitButton = new ButtonBuilder({
 });
 
 const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-  hammerButton,
   reverseProxyButton,
   submitButton,
 );
@@ -43,8 +45,8 @@ const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().a
 @Discord()
 export class HelpTicket {
   @ButtonComponent({ id: 'reverseProxy' })
-  handleReverseProxy(interaction: ButtonInteraction): void {
-    interaction.reply({ content: HELP_TEXTS['reverse proxy'] });
+  handleReverseProxy(interaction: ButtonInteraction): Promise<InteractionResponse<boolean>> {
+    return interaction.reply({ content: HELP_TEXTS['reverse proxy'] });
   }
 
   @ButtonComponent({ id: 'submit' })
@@ -114,7 +116,7 @@ export class HelpTicket {
     await Promise.all([
       (async () => {
         const itemCount = welcomeMessage.match(new RegExp(UNCHECKED_ICON, 'g'))?.length ?? 0;
-        for (let i = 1; i < itemCount; i++) {
+        for (let i = 1; i <= itemCount; i++) {
           await message.react(`${i}️⃣`);
         }
       })(),
@@ -170,5 +172,34 @@ export class HelpTicket {
       components: [buttonRow],
     });
     await channel.setArchived(true);
+  }
+
+  @Slash({ name: 'upload', description: 'Upload files (env, logs, docker compose)' })
+  handleFileUpload(
+    @SlashChoice('logs', 'compose', 'env')
+    @SlashOption({ name: 'type', description: 'type', type: ApplicationCommandOptionType.String, required: true })
+    type: 'logs' | 'compose' | 'env',
+    interaction: CommandInteraction,
+  ) {
+    const channel = interaction.channel;
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== Ids.Channels.HelpDesk) {
+      return interaction.reply({
+        ephemeral: true,
+        content: `This command can only be invoked in <#${Ids.Channels.HelpDesk}> tickets.`,
+      });
+    }
+
+    if (channel.ownerId !== interaction.user.id) {
+      return interaction.reply({ ephemeral: true, content: 'Only the OP can add files to this thread.' });
+    }
+
+    switch (type) {
+      case 'logs':
+        return interaction.showModal(getLogsUploadModel());
+      case 'compose':
+        return interaction.showModal(getComposeUploadModal());
+      case 'env':
+        return interaction.showModal(getEnvUploadModal());
+    }
   }
 }
