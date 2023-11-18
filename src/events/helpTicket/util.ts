@@ -6,7 +6,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
-import { DOCS_DOMAIN, UNCHECKED_ICON } from '../../constants.js';
+import { DOCS_DOMAIN, IMMICH_REPOSITORY, UNCHECKED_ICON } from '../../constants.js';
 
 export const LOGS_BUTTON_ID = 'logs';
 export const COMPOSE_BUTTON_ID = 'compose';
@@ -39,7 +39,7 @@ This will help us be more effective in our support effort, leaving more time for
 
 1. ${UNCHECKED_ICON} Upload relevant logs, docker compose, and .env files
 2. ${UNCHECKED_ICON} Review the [FAQs](${DOCS_DOMAIN}/FAQ) for known issues
-3. ${UNCHECKED_ICON} Review Github for known issues (link to github)
+3. ${UNCHECKED_ICON} Review [Github](${IMMICH_REPOSITORY}/issues) for known issues
 4. ${UNCHECKED_ICON} Test directly over ip (without a custom reverse proxy)
 
 For further information on how to do this, check out the buttons below.
