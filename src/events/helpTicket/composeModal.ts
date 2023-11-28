@@ -1,4 +1,4 @@
-import { ButtonInteraction, ModalSubmitInteraction } from 'discord.js';
+import { ButtonInteraction, MessageFlags, ModalSubmitInteraction } from 'discord.js';
 import { ButtonComponent, Discord, ModalComponent } from 'discordx';
 import { COMPOSE_BUTTON_ID, COMPOSE_MODAL_ID, getComposeUploadModal } from './util.js';
 
@@ -13,6 +13,11 @@ export class ComposeModal {
   async handleComposeModal(interaction: ModalSubmitInteraction): Promise<void> {
     const compose = interaction.fields.getTextInputValue('compose');
 
-    await interaction.channel?.send({ files: [{ attachment: Buffer.from(compose), name: 'docker-compose.yml' }] });
+    await interaction.channel?.send({
+      content: `${interaction.user} uploaded`,
+      files: [{ attachment: Buffer.from(compose), name: 'docker-compose.yml' }],
+      flags: [MessageFlags.SuppressNotifications],
+    });
+    await interaction.deferUpdate();
   }
 }

@@ -22,7 +22,8 @@ const linkCommands: Record<string, string> = {
   cli: `${DOCS_DOMAIN}/features/bulk-upload`,
   'google-takeout': `${IMMICH_REPOSITORY}/discussions/1340`,
 };
-export const HELP_TEXTS: Record<string, string> = {
+export const HELP_TEXTS = {
+  'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${DOCS_DOMAIN}/guides/docker-help#logs`,
   'help ticket': `Please open a <#${Ids.Channels.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
   'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${DOCS_DOMAIN}/administration/reverse-proxy.`,
   'feature request':
@@ -70,7 +71,7 @@ export class Commands {
       required: true,
       type: ApplicationCommandOptionType.String,
     })
-    name: string,
+    name: keyof typeof HELP_TEXTS,
     interaction: CommandInteraction,
   ) {
     interaction.reply({

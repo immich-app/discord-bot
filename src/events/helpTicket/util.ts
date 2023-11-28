@@ -16,36 +16,28 @@ export const LOGS_MODAL_ID = 'logsModal';
 export const COMPOSE_MODAL_ID = 'composeModal';
 export const ENV_MODAL_ID = 'envModal';
 
-export const INSTALL_ISSUE_BUTTON_ID = 'installIssue';
-export const SETUP_ISSUE_BUTTON_ID = 'setupIssue';
-export const BUG_BUTTON_ID = 'bug';
+export const helpDeskWelcomeMessage = (user: string) => `:wave: Hey <@${user}>,
 
-export const getTitleInput = () =>
-  new TextInputBuilder({ customId: 'titleInput', label: 'Title of the ticket', style: TextInputStyle.Short });
-export const getDescriptionInput = () =>
-  new TextInputBuilder({
-    customId: 'descriptionInput',
-    label: 'Please provide a short description',
-    style: TextInputStyle.Paragraph,
-  });
+Thanks for reaching out to us. Please follow the recommended actions below; this will help us be more effective in our support effort and leave more time for building Immich <:immich:991481316950425643>.
 
-export const helpDeskWelcomeMessage = (user: string) => `:wave: Hey <@${user}>
+## References
+- __Container Logs:__ \`docker compose logs\` [docs](${DOCS_DOMAIN}/guides/docker-help#logs)
+- __Container Status__:  \`docker compose ps\` [docs](https://immich.app/docs/guides/docker-help#containers)
+- __Reverse Proxy:__ ${DOCS_DOMAIN}/administration/reverse-proxy
+- __Typesense:__ You can't fix this. Just wait until we get rid of it. Sorry.
 
-Thanks for reaching out to us.
-To help us better assist you, please follow the recommended actions below.  
-This will help us be more effective in our support effort, leaving more time for building Immich <:immich:991481316950425643>.
+## Checklist
+1. ${UNCHECKED_ICON} I have verified I'm on the latest release (note that mobile app releases may take some time).
+2. ${UNCHECKED_ICON} I have read applicable [release notes](${IMMICH_REPOSITORY}/releases/latest).
+3. ${UNCHECKED_ICON} I have reviewed the [FAQs](${DOCS_DOMAIN}/FAQ) for known issues.
+4. ${UNCHECKED_ICON} I have reviewed [Github](${IMMICH_REPOSITORY}/issues) for known issues.
+5. ${UNCHECKED_ICON} I have tried accessing Immich via local ip (without a custom reverse proxy).
+6. ${UNCHECKED_ICON} I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the \`/upload\` command.
+7. ${UNCHECKED_ICON} I have tried an incognito window, cleared mobile app cache, logged out and back in, different browsers, etc., as applicable.
 
 (an item can be marked as "complete" by reacting with the appropriate number)
 
-1. ${UNCHECKED_ICON} Upload relevant logs, docker compose, and .env files
-2. ${UNCHECKED_ICON} Review the [FAQs](${DOCS_DOMAIN}/FAQ) for known issues
-3. ${UNCHECKED_ICON} Review [Github](${IMMICH_REPOSITORY}/issues) for known issues
-4. ${UNCHECKED_ICON} Test directly over ip (without a custom reverse proxy)
-
-For further information on how to do this, check out the buttons below.
-
-If this ticket can be closed you can use the \`/close\` command. 
-Note that the ticket can be re-opened later by clicking the respective buttons in the closed message.`;
+If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`;
 
 export function getLogsButton() {
   return new ButtonBuilder({

@@ -6,29 +6,21 @@ import {
   ButtonInteraction,
   ButtonStyle,
   CommandInteraction,
-  InteractionResponse,
   MessageActionRowComponentBuilder,
   MessageFlags,
   ThreadChannel,
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
-import { HELP_TEXTS } from '../../commands/slashes.js';
 import { CHECKED_ICON, Ids, UNCHECKED_ICON } from '../../constants.js';
 import {
   getLogsUploadModel,
-  getComposeButton,
-  getEnvButton,
-  getLogsButton,
   helpDeskWelcomeMessage,
   getComposeUploadModal,
   getEnvUploadModal,
+  getComposeButton,
+  getEnvButton,
+  getLogsButton,
 } from './util.js';
-
-const reverseProxyButton = new ButtonBuilder({
-  customId: 'reverseProxy',
-  label: 'Reverse Proxy',
-  style: ButtonStyle.Primary,
-});
 
 const submitButton = new ButtonBuilder({
   customId: 'submit',
@@ -38,17 +30,14 @@ const submitButton = new ButtonBuilder({
 });
 
 const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-  reverseProxyButton,
+  getComposeButton(),
+  getEnvButton(),
+  getLogsButton(),
   submitButton,
 );
 
 @Discord()
 export class HelpTicket {
-  @ButtonComponent({ id: 'reverseProxy' })
-  handleReverseProxy(interaction: ButtonInteraction): Promise<InteractionResponse<boolean>> {
-    return interaction.reply({ content: HELP_TEXTS['reverse proxy'] });
-  }
-
   @ButtonComponent({ id: 'submit' })
   async handleSubmit(interaction: ButtonInteraction): Promise<void> {
     const thread = interaction.message.channel as ThreadChannel;
@@ -87,11 +76,11 @@ export class HelpTicket {
       .replace(`${number}. ${CHECKED_ICON}`, `${number}. ${newIcon}`);
 
     if (!message.includes(UNCHECKED_ICON)) {
-      mainButtonRow.components[2].setDisabled(false);
+      mainButtonRow.components.at(-1)?.setDisabled(false);
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     } else {
-      mainButtonRow.components[2].setDisabled(true);
+      mainButtonRow.components.at(-1)?.setDisabled(true);
       const thread = reaction.message.channel as ThreadChannel;
       await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== Ids.Tags.Ready));
 
@@ -107,24 +96,11 @@ export class HelpTicket {
       components: [mainButtonRow],
       flags: [MessageFlags.SuppressEmbeds],
     });
-    const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-      getComposeButton(),
-      getLogsButton(),
-      getEnvButton(),
-    );
 
-    await Promise.all([
-      (async () => {
-        const itemCount = welcomeMessage.match(new RegExp(UNCHECKED_ICON, 'g'))?.length ?? 0;
-        for (let i = 1; i <= itemCount; i++) {
-          await message.react(`${i}️⃣`);
-        }
-      })(),
-      thread.send({
-        content: 'Please provide files using the buttons below',
-        components: [buttonRow],
-      }),
-    ]);
+    const itemCount = welcomeMessage.match(new RegExp(UNCHECKED_ICON, 'g'))?.length ?? 0;
+    for (let i = 1; i <= itemCount; i++) {
+      await message.react(`${i}️⃣`);
+    }
   }
 
   @ButtonComponent({ id: 'openTicket' })
