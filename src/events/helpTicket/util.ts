@@ -6,7 +6,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
-import { CHECKED_ICON, DOCS_DOMAIN, IMMICH_REPOSITORY, UNCHECKED_ICON } from '../../constants.js';
+import { Constants } from '../../constants.js';
 
 export const LOGS_BUTTON_ID = 'logs';
 export const COMPOSE_BUTTON_ID = 'compose';
@@ -17,25 +17,30 @@ export const COMPOSE_MODAL_ID = 'composeModal';
 export const ENV_MODAL_ID = 'envModal';
 
 export const getHelpDeskWelcomeMessage = (user: string, isChecked: boolean[] = []) => {
-  const icons = isChecked.map((checked) => (checked ? CHECKED_ICON : UNCHECKED_ICON));
+  const icon = (index: number) => (isChecked[index] ? Constants.Icons.Checked : Constants.Icons.Unchecked);
+
+  const tasks = [
+    `I have verified I'm on the latest release(note that mobile app releases may take some time).`,
+    `I have read applicable [release notes](${Constants.Urls.Release}).`,
+    `I have reviewed the [FAQs](${Constants.Urls.Docs.FAQ}) for known issues.`,
+    `I have reviewed [Github](${Constants.Urls.Issues}) for known issues.`,
+    'I have tried accessing Immich via local ip (without a custom reverse proxy).',
+    'I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the `/upload` command.',
+    'I have tried an incognito window, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
+  ];
+
   return `:wave: Hey <@${user}>,
 
 Thanks for reaching out to us. Please follow the recommended actions below; this will help us be more effective in our support effort and leave more time for building Immich <:immich:991481316950425643>.
 
 ## References
-- __Container Logs:__ \`docker compose logs\` [docs](${DOCS_DOMAIN}/guides/docker-help#logs)
-- __Container Status__:  \`docker compose ps\` [docs](https://immich.app/docs/guides/docker-help#containers)
-- __Reverse Proxy:__ ${DOCS_DOMAIN}/administration/reverse-proxy
+- __Container Logs:__ \`docker compose logs\` [docs](${Constants.Urls.Docs.Logs})
+- __Container Status__:  \`docker compose ps\` [docs](${Constants.Urls.Docs.Containers})
+- __Reverse Proxy:__ ${Constants.Urls.Docs.ReverseProxy}
 - __Typesense:__ You can't fix this. Just wait until we get rid of it. Sorry.
 
 ## Checklist
-1. ${icons[0]} I have verified I'm on the latest release (note that mobile app releases may take some time).
-2. ${icons[1]} I have read applicable [release notes](${IMMICH_REPOSITORY}/releases/latest).
-3. ${icons[2]} I have reviewed the [FAQs](${DOCS_DOMAIN}/FAQ) for known issues.
-4. ${icons[3]} I have reviewed [Github](${IMMICH_REPOSITORY}/issues) for known issues.
-5. ${icons[4]} I have tried accessing Immich via local ip (without a custom reverse proxy).
-6. ${icons[5]} I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the \`/upload\` command.
-7. ${icons[6]} I have tried an incognito window, cleared mobile app cache, logged out and back in, different browsers, etc., as applicable.
+${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
 
 (an item can be marked as "complete" by reacting with the appropriate number)
 

@@ -1,10 +1,10 @@
 import { Octokit } from '@octokit/rest';
-import { GITHUB_DOMAIN, IMMICH_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS } from '../constants.js';
+import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import _ from 'lodash';
 
-const PREVIEW_BLACKLIST = [GITHUB_DOMAIN, IMMICH_DOMAIN];
+const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
 const octokit = new Octokit();
 
 @Discord()
@@ -57,9 +57,9 @@ export class MessageEvents {
           continue;
         }
 
-        const { status: discussionStatus } = await fetch(`${IMMICH_REPOSITORY}/discussions/${id}}`);
+        const { status: discussionStatus } = await fetch(`${Constants.Urls.Discussions}/${id}}`);
         if (discussionStatus === 200) {
-          links.add(`[Discussion] ([#${id}](${IMMICH_REPOSITORY}/discussions/${id}))`);
+          links.add(`[Discussion] ([#${id}](${Constants.Urls.Discussions}/${id}))`);
         }
       }
     }

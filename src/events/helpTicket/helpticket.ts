@@ -11,7 +11,7 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
-import { Ids, UNCHECKED_ICON } from '../../constants.js';
+import { Constants } from '../../constants.js';
 import {
   getLogsUploadModel,
   getHelpDeskWelcomeMessage,
@@ -41,12 +41,12 @@ export class HelpTicket {
   @ButtonComponent({ id: 'submit' })
   async handleSubmit(interaction: ButtonInteraction): Promise<void> {
     const thread = interaction.message.channel as ThreadChannel;
-    if (thread.appliedTags.find((tag) => tag === Ids.Tags.Ready)) {
+    if (thread.appliedTags.find((tag) => tag === Constants.Tags.Ready)) {
       return;
     }
 
     await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
-    await thread.setAppliedTags([...thread.appliedTags, Ids.Tags.Ready]);
+    await thread.setAppliedTags([...thread.appliedTags, Constants.Tags.Ready]);
   }
 
   @On({ event: 'messageReactionRemove' })
@@ -65,7 +65,7 @@ export class HelpTicket {
     const channel = reaction.message.channel;
 
     if (channel instanceof ThreadChannel) {
-      if (channel.parentId !== Ids.Channels.HelpDesk) {
+      if (channel.parentId !== Constants.Channels.HelpDesk) {
         return;
       }
     }
@@ -76,14 +76,14 @@ export class HelpTicket {
     );
     console.timeLog();
 
-    if (!message.includes(UNCHECKED_ICON)) {
+    if (!message.includes(Constants.Icons.Unchecked)) {
       mainButtonRow.components.at(-1)?.setDisabled(false);
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     } else {
       mainButtonRow.components.at(-1)?.setDisabled(true);
       const thread = reaction.message.channel as ThreadChannel;
-      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== Ids.Tags.Ready));
+      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== Constants.Tags.Ready));
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
@@ -99,7 +99,7 @@ export class HelpTicket {
       flags: [MessageFlags.SuppressEmbeds],
     });
 
-    const itemCount = welcomeMessage.match(new RegExp(UNCHECKED_ICON, 'g'))?.length ?? 0;
+    const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
     for (let i = 1; i <= itemCount; i++) {
       await message.react(`${i}️⃣`);
     }
@@ -110,11 +110,11 @@ export class HelpTicket {
   async handleTicketOpen(interaction: BaseInteraction) {
     const channel = interaction.channel;
 
-    if (!(channel instanceof ThreadChannel) || channel.parentId !== Ids.Channels.HelpDesk) {
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== Constants.Channels.HelpDesk) {
       if (interaction instanceof CommandInteraction) {
         return interaction?.reply({
           ephemeral: true,
-          content: `This command can only be invoked in <#${Ids.Channels.HelpDesk}> tickets.`,
+          content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
         });
       }
       return;
@@ -127,15 +127,15 @@ export class HelpTicket {
   @Slash({ name: 'close', description: 'Closes the ticket. Can be re-opened if need be' })
   async handleTicketClose(interaction: CommandInteraction) {
     const channel = interaction.channel;
-    if (!(channel instanceof ThreadChannel) || channel.parentId !== Ids.Channels.HelpDesk) {
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== Constants.Channels.HelpDesk) {
       return interaction.reply({
         ephemeral: true,
-        content: `This command can only be invoked in <#${Ids.Channels.HelpDesk}> tickets.`,
+        content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
       });
     }
 
     const members = interaction.guild?.members.cache;
-    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Ids.Roles.Contributor);
+    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor);
 
     if (!(isContributor || channel.ownerId === interaction.user.id)) {
       return interaction.reply({ ephemeral: true, content: 'Only the OP and contributors can close a thread.' });
@@ -160,10 +160,10 @@ export class HelpTicket {
     interaction: CommandInteraction,
   ) {
     const channel = interaction.channel;
-    if (!(channel instanceof ThreadChannel) || channel.parentId !== Ids.Channels.HelpDesk) {
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== Constants.Channels.HelpDesk) {
       return interaction.reply({
         ephemeral: true,
-        content: `This command can only be invoked in <#${Ids.Channels.HelpDesk}> tickets.`,
+        content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
       });
     }
 

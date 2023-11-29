@@ -6,28 +6,28 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
-import { DOCS_DOMAIN, IMMICH_REPOSITORY, IMMICH_REPOSITORY_BASE_OPTIONS, Ids } from '../constants.js';
+import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { DateTime } from 'luxon';
 import { Octokit } from '@octokit/rest';
 
 const linkCommands: Record<string, string> = {
-  'reverse proxy': `${DOCS_DOMAIN}/administration/reverse-proxy`,
-  database: `${DOCS_DOMAIN}/guides/database-queries`,
-  upgrade: `${DOCS_DOMAIN}/install/docker-compose#step-4---upgrading`,
-  libraries: `${DOCS_DOMAIN}/features/libraries`,
-  'xmp sidecar': `${DOCS_DOMAIN}/features/xmp-sidecars`,
-  docker: `${DOCS_DOMAIN}/guides/docker-help`,
-  backup: `${DOCS_DOMAIN}/administration/backup-and-restore`,
-  github: IMMICH_REPOSITORY,
-  cli: `${DOCS_DOMAIN}/features/bulk-upload`,
-  'google-takeout': `${IMMICH_REPOSITORY}/discussions/1340`,
+  'reverse proxy': Constants.Urls.Docs.ReverseProxy,
+  database: Constants.Urls.Docs.Queries,
+  upgrade: Constants.Urls.Docs.Upgrade,
+  libraries: Constants.Urls.Docs.Libraries,
+  'xmp sidecar': Constants.Urls.Docs.Sidecar,
+  docker: Constants.Urls.Docs.Docker,
+  backup: Constants.Urls.Docs.Backup,
+  github: Constants.Urls.ImmichRepo,
+  cli: Constants.Urls.Docs.CLI,
+  'google-takeout': Constants.Urls.GoogleTakeOut,
 };
+
 export const HELP_TEXTS = {
-  'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${DOCS_DOMAIN}/guides/docker-help#logs`,
-  'help ticket': `Please open a <#${Ids.Channels.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
-  'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${DOCS_DOMAIN}/administration/reverse-proxy.`,
-  'feature request':
-    "For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](https://github.com/immich-app/immich/discussions/new?category=feature-request). However, please make sure to search for similar requests first to avoid duplicates. ",
+  'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${Constants.Urls.Docs.Docker}`,
+  'help ticket': `Please open a <#${Constants.Channels.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
+  'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${Constants.Urls.Docs.ReverseProxy}.`,
+  'feature request': `For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](${Constants.Urls.FeatureRequest}). However, please make sure to search for similar requests first to avoid duplicates.`,
 };
 
 const _star_history: Record<string, number | undefined> = {};
@@ -182,7 +182,7 @@ export class Commands {
   @Slash({ name: 'tags', description: 'Returns the currently set tags' })
   async getTagIds(interaction: CommandInteraction) {
     const members = interaction.guild?.members.cache;
-    if (!members?.get(interaction.user.id)?.roles.cache.has(Ids.Roles.Contributor)) {
+    if (!members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor)) {
       return;
     }
 
