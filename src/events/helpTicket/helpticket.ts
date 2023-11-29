@@ -11,10 +11,10 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
-import { CHECKED_ICON, Ids, UNCHECKED_ICON } from '../../constants.js';
+import { Ids, UNCHECKED_ICON } from '../../constants.js';
 import {
   getLogsUploadModel,
-  helpDeskWelcomeMessage,
+  getHelpDeskWelcomeMessage,
   getComposeUploadModal,
   getEnvUploadModal,
   getComposeButton,
@@ -52,9 +52,11 @@ export class HelpTicket {
   @On({ event: 'messageReactionRemove' })
   @On({ event: 'messageReactionAdd' })
   async handleReaction([reaction]: ArgsOf<'messageReactionAdd'>) {
+    console.time();
     if (reaction.partial) {
       await reaction.fetch();
     }
+    console.timeLog();
 
     if (!reaction.message.author?.bot) {
       return;
@@ -68,12 +70,11 @@ export class HelpTicket {
       }
     }
 
-    const number = reaction.emoji.name!.substring(0, 1);
-    const newIcon = reaction.count! > 1 ? CHECKED_ICON : UNCHECKED_ICON;
-
-    const message = reaction.message
-      .content!.replace(`${number}. ${UNCHECKED_ICON}`, `${number}. ${newIcon}`)
-      .replace(`${number}. ${CHECKED_ICON}`, `${number}. ${newIcon}`);
+    const message = getHelpDeskWelcomeMessage(
+      reaction.message.author.id,
+      reaction.message.reactions.cache.map((reaction) => reaction.count > 1),
+    );
+    console.timeLog();
 
     if (!message.includes(UNCHECKED_ICON)) {
       mainButtonRow.components.at(-1)?.setDisabled(false);
@@ -86,11 +87,12 @@ export class HelpTicket {
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
+    console.timeEnd();
   }
 
   @On({ event: 'threadCreate' })
   async handleThreadCreate([thread]: ArgsOf<'threadCreate'>) {
-    const welcomeMessage = helpDeskWelcomeMessage(thread.ownerId ?? '');
+    const welcomeMessage = getHelpDeskWelcomeMessage(thread.ownerId ?? '');
     const message = await thread.send({
       content: welcomeMessage,
       components: [mainButtonRow],

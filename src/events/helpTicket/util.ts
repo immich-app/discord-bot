@@ -6,7 +6,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
-import { DOCS_DOMAIN, IMMICH_REPOSITORY, UNCHECKED_ICON } from '../../constants.js';
+import { CHECKED_ICON, DOCS_DOMAIN, IMMICH_REPOSITORY, UNCHECKED_ICON } from '../../constants.js';
 
 export const LOGS_BUTTON_ID = 'logs';
 export const COMPOSE_BUTTON_ID = 'compose';
@@ -16,7 +16,9 @@ export const LOGS_MODAL_ID = 'logsModal';
 export const COMPOSE_MODAL_ID = 'composeModal';
 export const ENV_MODAL_ID = 'envModal';
 
-export const helpDeskWelcomeMessage = (user: string) => `:wave: Hey <@${user}>,
+export const getHelpDeskWelcomeMessage = (user: string, isChecked: boolean[] = []) => {
+  const icons = isChecked.map((checked) => (checked ? CHECKED_ICON : UNCHECKED_ICON));
+  return `:wave: Hey <@${user}>,
 
 Thanks for reaching out to us. Please follow the recommended actions below; this will help us be more effective in our support effort and leave more time for building Immich <:immich:991481316950425643>.
 
@@ -27,17 +29,18 @@ Thanks for reaching out to us. Please follow the recommended actions below; this
 - __Typesense:__ You can't fix this. Just wait until we get rid of it. Sorry.
 
 ## Checklist
-1. ${UNCHECKED_ICON} I have verified I'm on the latest release (note that mobile app releases may take some time).
-2. ${UNCHECKED_ICON} I have read applicable [release notes](${IMMICH_REPOSITORY}/releases/latest).
-3. ${UNCHECKED_ICON} I have reviewed the [FAQs](${DOCS_DOMAIN}/FAQ) for known issues.
-4. ${UNCHECKED_ICON} I have reviewed [Github](${IMMICH_REPOSITORY}/issues) for known issues.
-5. ${UNCHECKED_ICON} I have tried accessing Immich via local ip (without a custom reverse proxy).
-6. ${UNCHECKED_ICON} I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the \`/upload\` command.
-7. ${UNCHECKED_ICON} I have tried an incognito window, cleared mobile app cache, logged out and back in, different browsers, etc., as applicable.
+1. ${icons[0]} I have verified I'm on the latest release (note that mobile app releases may take some time).
+2. ${icons[1]} I have read applicable [release notes](${IMMICH_REPOSITORY}/releases/latest).
+3. ${icons[2]} I have reviewed the [FAQs](${DOCS_DOMAIN}/FAQ) for known issues.
+4. ${icons[3]} I have reviewed [Github](${IMMICH_REPOSITORY}/issues) for known issues.
+5. ${icons[4]} I have tried accessing Immich via local ip (without a custom reverse proxy).
+6. ${icons[5]} I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the \`/upload\` command.
+7. ${icons[6]} I have tried an incognito window, cleared mobile app cache, logged out and back in, different browsers, etc., as applicable.
 
 (an item can be marked as "complete" by reacting with the appropriate number)
 
 If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`;
+};
 
 export function getLogsButton() {
   return new ButtonBuilder({
