@@ -1,8 +1,9 @@
 import { dirname, importx } from '@discordx/importer';
 import { CronJob } from 'cron';
 import type { Interaction, Message, TextChannel } from 'discord.js';
-import { IntentsBitField } from 'discord.js';
+import { IntentsBitField, Partials } from 'discord.js';
 import { Client } from 'discordx';
+import { Constants } from './constants.js';
 
 export const bot = new Client({
   // Discord intents
@@ -11,6 +12,7 @@ export const bot = new Client({
     IntentsBitField.Flags.GuildMessages,
     IntentsBitField.Flags.GuildMembers,
     IntentsBitField.Flags.MessageContent,
+    IntentsBitField.Flags.GuildMessageReactions,
   ],
 
   // Debug logs are disabled in silent mode
@@ -20,11 +22,12 @@ export const bot = new Client({
   simpleCommand: {
     prefix: '/',
   },
+
+  partials: [Partials.Message, Partials.Reaction],
 });
 
-const birthdayJob = new CronJob('36 4 3 2 *', async () => {
-  const channel = (await bot.channels.fetch('994044917355663450')) as TextChannel;
-
+const birthdayJob = new CronJob(Constants.Misc.ImmichBirthdayCron, async () => {
+  const channel = (await bot.channels.fetch(Constants.Channels.General)) as TextChannel;
   if (channel) {
     channel.send(`"Happy birthday my other child" - Alex`);
   }
@@ -39,7 +42,7 @@ bot.once('ready', async () => {
 
   console.log(`Bot ${fullVersion} started`);
 
-  const channel = (await bot.channels.fetch('1159083520027787307')) as TextChannel;
+  const channel = (await bot.channels.fetch(Constants.Channels.BotSpam)) as TextChannel;
 
   if (channel && fullVersion) {
     channel.send(`I'm alive, running ${fullVersion}!`);
@@ -48,13 +51,13 @@ bot.once('ready', async () => {
   birthdayJob.start();
 });
 
-bot.on('interactionCreate', (interaction: Interaction) => {
-  bot.executeInteraction(interaction);
+bot.on('interactionCreate', async (interaction: Interaction) => {
+  await bot.executeInteraction(interaction);
 });
 
 bot.on('messageCreate', async (message: Message) => {
   // execute simple commands
-  bot.executeCommand(message);
+  await bot.executeCommand(message);
 });
 
 async function run() {
