@@ -71,7 +71,7 @@ export class HelpTicket {
     }
 
     const message = getHelpDeskWelcomeMessage(
-      reaction.message.thread.ownerId,
+      reaction.message.thread?.ownerId ?? '',
       reaction.message.reactions.cache.map((reaction) => reaction.count > 1),
     );
     console.timeLog();
