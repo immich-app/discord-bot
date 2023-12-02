@@ -49,17 +49,29 @@ export class MessageEvents {
     for (const match of matches) {
       if (match?.groups) {
         const id = match.groups.id;
-        const response = await octokit.rest.issues.get({ ...IMMICH_REPOSITORY_BASE_OPTIONS, issue_number: Number(id) });
 
-        if (response.status === 200) {
-          const type = response.data.pull_request ? 'PR' : 'ISSUE';
-          links.add(`[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`);
-          continue;
+        try {
+          const response = await octokit.rest.issues.get({
+            ...IMMICH_REPOSITORY_BASE_OPTIONS,
+            issue_number: Number(id),
+          });
+
+          if (response.status === 200) {
+            const type = response.data.pull_request ? 'PR' : 'ISSUE';
+            links.add(`[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`);
+            continue;
+          }
+        } catch (error) {
+          console.log(`Could not fetch #${id}`);
         }
 
-        const { status: discussionStatus } = await fetch(`${Constants.Urls.Discussions}/${id}}`);
-        if (discussionStatus === 200) {
-          links.add(`[Discussion] ([#${id}](${Constants.Urls.Discussions}/${id}))`);
+        try {
+          const { status: discussionStatus } = await fetch(`${Constants.Urls.Discussions}/${id}}`);
+          if (discussionStatus === 200) {
+            links.add(`[Discussion] ([#${id}](${Constants.Urls.Discussions}/${id}))`);
+          }
+        } catch (error) {
+          console.log(`Could not fetch #${id}`);
         }
       }
     }

@@ -55,8 +55,8 @@ export class Commands {
     })
     message: string | null,
     interaction: CommandInteraction,
-  ): void {
-    interaction.reply({
+  ) {
+    return interaction.reply({
       content: message ? `${message}: ${linkCommands[name]}` : linkCommands[name],
       flags: [MessageFlags.SuppressEmbeds],
     });
@@ -74,7 +74,7 @@ export class Commands {
     name: keyof typeof HELP_TEXTS,
     interaction: CommandInteraction,
   ) {
-    interaction.reply({
+    return interaction.reply({
       content: HELP_TEXTS[name],
       flags: [MessageFlags.SuppressEmbeds],
     });
@@ -91,7 +91,7 @@ export class Commands {
       const delta = lastStarsCount && starsCount - lastStarsCount;
       const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
 
-      interaction.reply(
+      await interaction.reply(
         `Stars ⭐: ${starsCount}${
           formattedDelta ? ` (${formattedDelta} stars since the last call in this channel)` : ''
         }`,
@@ -99,7 +99,7 @@ export class Commands {
 
       _star_history[interaction.channelId] = starsCount;
     } catch (error) {
-      interaction.reply("Couldn't fetch stars count from github api");
+      await interaction.reply("Couldn't fetch stars count from github api");
     }
   }
 
@@ -114,13 +114,13 @@ export class Commands {
       const delta = lastForksCount && forksCount - lastForksCount;
       const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
 
-      interaction.reply(
+      await interaction.reply(
         `Forks: ${forksCount}${formattedDelta ? ` (${formattedDelta} forks since the last call in this channel)` : ''}`,
       );
 
       _fork_history[interaction.channelId] = forksCount;
     } catch (error) {
-      interaction.reply("Couldn't fetch forks count from github api");
+      await interaction.reply("Couldn't fetch forks count from github api");
     }
   }
 
@@ -153,24 +153,29 @@ export class Commands {
           return interaction.respond([]);
         }
 
-        const result = await octokit.rest.search
-          .issuesAndPullRequests({
-            q: `repo:immich-app/immich in:title ${value}`,
-            per_page: 5,
-            page: 1,
-            sort: 'updated',
-            order: 'desc',
-          })
-          .then((response) => response.data);
-        return interaction.respond(
-          result.items.map((item) => {
-            const name = `${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`;
-            return {
-              name: name.length > 100 ? name.substring(0, 97) + '...' : name,
-              value: `${item.pull_request ? '[PR]' : '[Issue]'} ([#${item.number}](${item.html_url}))`,
-            };
-          }),
-        );
+        try {
+          const result = await octokit.rest.search
+            .issuesAndPullRequests({
+              q: `repo:immich-app/immich in:title ${value}`,
+              per_page: 5,
+              page: 1,
+              sort: 'updated',
+              order: 'desc',
+            })
+            .then((response) => response.data);
+          return interaction.respond(
+            result.items.map((item) => {
+              const name = `${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`;
+              return {
+                name: name.length > 100 ? name.substring(0, 97) + '...' : name,
+                value: `${item.pull_request ? '[PR]' : '[Issue]'} ([#${item.number}](${item.html_url}))`,
+              };
+            }),
+          );
+        } catch (error) {
+          console.log('Could not fetch search results from GitHub');
+          return interaction.respond([]);
+        }
       },
     })
     content: string,

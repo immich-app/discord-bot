@@ -45,7 +45,7 @@ bot.once('ready', async () => {
   const channel = (await bot.channels.fetch(Constants.Channels.BotSpam)) as TextChannel;
 
   if (channel && fullVersion) {
-    channel.send(`I'm alive, running ${fullVersion}!`);
+    await channel.send(`I'm alive, running ${fullVersion}!`);
   }
 
   birthdayJob.start();
@@ -56,8 +56,13 @@ bot.on('interactionCreate', async (interaction: Interaction) => {
 });
 
 bot.on('messageCreate', async (message: Message) => {
-  // execute simple commands
   await bot.executeCommand(message);
+});
+
+bot.on('error', async (error) => {
+  console.log(`Error handling bot interaction: ${error}`);
+  const botSpamChannel = (await bot.channels.fetch(Constants.Channels.BotSpam)) as TextChannel;
+  await botSpamChannel.send(`Error handling bot interaction: ${error}`);
 });
 
 async function run() {
