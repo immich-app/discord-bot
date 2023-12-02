@@ -52,11 +52,9 @@ export class HelpTicket {
   @On({ event: 'messageReactionRemove' })
   @On({ event: 'messageReactionAdd' })
   async handleReaction([reaction]: ArgsOf<'messageReactionAdd'>) {
-    console.time();
     if (reaction.partial) {
       await reaction.fetch();
     }
-    console.timeLog();
 
     if (!reaction.message.author?.bot) {
       return;
@@ -74,7 +72,6 @@ export class HelpTicket {
       reaction.message.thread?.ownerId ?? '',
       reaction.message.reactions.cache.map((reaction) => reaction.count > 1),
     );
-    console.timeLog();
 
     if (!message.includes(Constants.Icons.Unchecked)) {
       mainButtonRow.components.at(-1)?.setDisabled(false);
@@ -87,7 +84,6 @@ export class HelpTicket {
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
-    console.timeEnd();
   }
 
   @On({ event: 'threadCreate' })
