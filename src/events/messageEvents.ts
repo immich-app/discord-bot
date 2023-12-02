@@ -63,6 +63,7 @@ export class MessageEvents {
           }
         } catch (error) {
           console.log(`Could not fetch #${id}`);
+          continue;
         }
 
         try {
@@ -72,6 +73,7 @@ export class MessageEvents {
           }
         } catch (error) {
           console.log(`Could not fetch #${id}`);
+          continue;
         }
       }
     }
