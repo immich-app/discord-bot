@@ -29,7 +29,7 @@ export const bot = new Client({
 const birthdayJob = new CronJob(Constants.Misc.ImmichBirthdayCron, async () => {
   const channel = (await bot.channels.fetch(Constants.Channels.General)) as TextChannel;
   if (channel) {
-    channel.send(`"Happy birthday my other child" - Alex`);
+    await channel.send(`"Happy birthday my other child" - Alex`);
   }
 });
 
@@ -82,4 +82,4 @@ async function run() {
   await bot.login(process.env.BOT_TOKEN);
 }
 
-run();
+await run();
