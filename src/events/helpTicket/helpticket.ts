@@ -62,14 +62,16 @@ export class HelpTicket {
 
     const channel = reaction.message.channel;
 
-    if (channel instanceof ThreadChannel) {
-      if (channel.parentId !== Constants.Channels.HelpDesk) {
-        return;
-      }
+    if (!(channel instanceof ThreadChannel)) {
+      return;
+    }
+
+    if (channel.parentId !== Constants.Channels.HelpDesk) {
+      return;
     }
 
     const message = getHelpDeskWelcomeMessage(
-      reaction.message.thread?.ownerId ?? '',
+      channel.ownerId ?? '',
       reaction.message.reactions.cache.map((reaction) => reaction.count > 1),
     );
 
