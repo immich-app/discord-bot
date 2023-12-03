@@ -37,8 +37,8 @@ const octokit = new Octokit();
 
 @Discord()
 export class Commands {
-  @Slash({ description: 'Links to Immich pages' })
-  link(
+  @Slash({ name: 'link', description: 'Links to Immich pages' })
+  handleLink(
     @SlashChoice(...Object.keys(linkCommands))
     @SlashOption({
       description: 'Which docs do you need?',
@@ -62,8 +62,8 @@ export class Commands {
     });
   }
 
-  @Slash({ description: 'Text blocks for reoccurring questions' })
-  messages(
+  @Slash({ name: 'messages', description: 'Text blocks for reoccurring questions' })
+  handleMessages(
     @SlashChoice(...Object.keys(HELP_TEXTS))
     @SlashOption({
       description: 'Which message do you need',
@@ -80,8 +80,8 @@ export class Commands {
     });
   }
 
-  @Slash({ description: 'Immich stars' })
-  async stars(interaction: CommandInteraction) {
+  @Slash({ name: 'stars', description: 'Immich stars' })
+  async handleStars(interaction: CommandInteraction) {
     const lastStarsCount = _star_history[interaction.channelId];
 
     try {
@@ -103,8 +103,8 @@ export class Commands {
     }
   }
 
-  @Slash({ description: 'Immich forks' })
-  async forks(interaction: CommandInteraction) {
+  @Slash({ name: 'forks', description: 'Immich forks' })
+  async handleForks(interaction: CommandInteraction) {
     const lastForksCount = _fork_history[interaction.channelId];
 
     try {
@@ -124,8 +124,8 @@ export class Commands {
     }
   }
 
-  @Slash({ description: 'Immich age' })
-  age(interaction: CommandInteraction) {
+  @Slash({ name: 'age', description: 'Immich age' })
+  handleAge(interaction: CommandInteraction) {
     const age = DateTime.now()
       .diff(DateTime.fromObject({ year: 2022, month: 2, day: 3, hour: 15, minute: 56 }, { zone: 'UTC' }), [
         'years',
@@ -140,8 +140,8 @@ export class Commands {
     return interaction.reply(`Immich is ${age} old. <:immich:991481316950425643>`);
   }
 
-  @Slash({ description: 'Search for PRs and Issues by title' })
-  search(
+  @Slash({ name: 'search', description: 'Search for PRs and Issues by title' })
+  handleSearch(
     @SlashOption({
       description: 'Query that applies to title',
       name: 'query',
@@ -185,7 +185,7 @@ export class Commands {
   }
 
   @Slash({ name: 'tags', description: 'Returns the currently set tags' })
-  async getTagIds(interaction: CommandInteraction) {
+  async handleGetTags(interaction: CommandInteraction) {
     const members = interaction.guild?.members.cache;
     if (!members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor)) {
       return;

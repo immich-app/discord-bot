@@ -21,12 +21,12 @@ const icons = {
 
 const urls = {
   Immich: 'https://immich.app',
-  ImmichRepo: `https://github.com/immich-app/immich`,
+  ImmichRepo: 'https://github.com/immich-app/immich',
   GitHub: 'https://github.com',
   FeatureRequest: 'https://github.com/immich-app/immich/discussions/new?category=feature-request',
   Issues: 'https://github.com/immich-app/immich/issues',
   GitHubRepoApi: 'https://api.github.com/repos/immich-app/immich',
-  GoogleTakeOut: `https://github.com/immich-app/immich/discussions/1340`,
+  GoogleTakeOut: 'https://github.com/immich-app/immich/discussions/1340',
   Release: 'https://github.com/immich-app/immich/releases/latest',
   Discussions: 'https://github.com/immich-app/immich/discussions',
 };

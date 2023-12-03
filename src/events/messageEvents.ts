@@ -10,7 +10,7 @@ const octokit = new Octokit();
 @Discord()
 export class MessageEvents {
   @On({ event: 'messageCreate' })
-  async messageCreate([message]: ArgsOf<'messageCreate'>) {
+  async handleMessageCreate([message]: ArgsOf<'messageCreate'>) {
     if (message.author.bot) {
       return;
     }
@@ -19,7 +19,7 @@ export class MessageEvents {
   }
 
   @On({ event: 'messageUpdate' })
-  async messageUpdate([oldMessage, newMessage]: ArgsOf<'messageUpdate'>) {
+  async handleMessageUpdate([oldMessage, newMessage]: ArgsOf<'messageUpdate'>) {
     if (oldMessage.author?.bot) {
       return;
     }
