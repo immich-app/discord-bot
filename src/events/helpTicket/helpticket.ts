@@ -60,7 +60,7 @@ export class HelpTicket {
       return;
     }
 
-    const channel = reaction.message.channel;
+    const channel = await reaction.message.channel.fetch();
 
     if (!(channel instanceof ThreadChannel)) {
       return;
@@ -91,11 +91,13 @@ export class HelpTicket {
   @On({ event: 'threadCreate' })
   async handleThreadCreate([thread]: ArgsOf<'threadCreate'>) {
     const welcomeMessage = getHelpDeskWelcomeMessage(thread.ownerId ?? '');
-    const message = await thread.send({
-      content: welcomeMessage,
-      components: [mainButtonRow],
-      flags: [MessageFlags.SuppressEmbeds],
-    });
+    const message = await thread.fetch().then((thread) =>
+      thread.send({
+        content: welcomeMessage,
+        components: [mainButtonRow],
+        flags: [MessageFlags.SuppressEmbeds],
+      }),
+    );
 
     const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
     for (let i = 1; i <= itemCount; i++) {
