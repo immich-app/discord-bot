@@ -81,8 +81,7 @@ export class HelpTicket {
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     } else {
       mainButtonRow.components.at(-1)?.setDisabled(true);
-      const thread = reaction.message.channel as ThreadChannel;
-      await thread.setAppliedTags(thread.appliedTags.filter((tag) => tag !== Constants.Tags.Ready));
+      await channel.setAppliedTags(channel.appliedTags.filter((tag) => tag !== Constants.Tags.Ready));
 
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
