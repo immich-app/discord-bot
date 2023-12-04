@@ -104,6 +104,31 @@ export class HelpTicket {
     }
   }
 
+  @Slash({ name: 'helpdesk', description: 'Trigger help desk message' })
+  async handleHelpDeskCommand(interaction: CommandInteraction) {
+    if (!interaction.channel?.isThread() || interaction.channel.parentId !== Constants.Channels.HelpDesk) {
+      await interaction.reply({
+        content: 'This command may only be executed in help desk threads',
+        flags: [MessageFlags.Ephemeral],
+      });
+      return;
+    }
+
+    const welcomeMessage = getHelpDeskWelcomeMessage(interaction.channel.ownerId ?? '');
+    const message = await interaction.channel.fetch().then((thread) =>
+      thread.send({
+        content: welcomeMessage,
+        components: [mainButtonRow],
+        flags: [MessageFlags.SuppressEmbeds],
+      }),
+    );
+
+    const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
+    for (let i = 1; i <= itemCount; i++) {
+      await message.react(`${i}️⃣`);
+    }
+  }
+
   @ButtonComponent({ id: 'openTicket' })
   @Slash({ name: 'open', description: 'Opens the ticket' })
   async handleTicketOpen(interaction: BaseInteraction) {
