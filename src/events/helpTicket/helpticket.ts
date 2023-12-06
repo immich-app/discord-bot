@@ -89,6 +89,10 @@ export class HelpTicket {
 
   @On({ event: 'threadCreate' })
   async handleThreadCreate([thread]: ArgsOf<'threadCreate'>) {
+    if (thread.parentId !== Constants.Channels.HelpDesk) {
+      return;
+    }
+
     const welcomeMessage = getHelpDeskWelcomeMessage(thread.ownerId ?? '');
     const message = await thread.fetch().then((thread) =>
       thread.send({
