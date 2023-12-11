@@ -50,6 +50,10 @@ export class MessageEvents {
       if (match?.groups) {
         const id = match.groups.id;
 
+        if (Number(id) < 500 || Number(id) > 15000) {
+          continue;
+        }
+
         try {
           const response = await octokit.rest.issues.get({
             ...IMMICH_REPOSITORY_BASE_OPTIONS,
