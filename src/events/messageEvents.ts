@@ -3,6 +3,7 @@ import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import _ from 'lodash';
+import { RequestError } from '@octokit/request-error';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
 const octokit = new Octokit();
@@ -60,14 +61,14 @@ export class MessageEvents {
             issue_number: Number(id),
           });
 
-          if (response.status === 200) {
-            const type = response.data.pull_request ? 'PR' : 'ISSUE';
-            links.add(`[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`);
+          const type = response.data.pull_request ? 'PR' : 'ISSUE';
+          links.add(`[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`);
+          continue;
+        } catch (error) {
+          if (error instanceof RequestError && error.status !== 404) {
+            console.log(`Could not fetch #${id}`);
             continue;
           }
-        } catch (error) {
-          console.log(`Could not fetch #${id}`);
-          continue;
         }
 
         try {
