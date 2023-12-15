@@ -194,8 +194,10 @@ export class HelpTicket {
         content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
       });
     }
+    const members = interaction.guild?.members.cache;
+    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor);
 
-    if (channel.ownerId !== interaction.user.id) {
+    if (channel.ownerId !== interaction.user.id && !isContributor) {
       return interaction.reply({ ephemeral: true, content: 'Only the OP can add files to this thread.' });
     }
 
