@@ -21,6 +21,7 @@ const linkCommands: Record<string, string> = {
   github: Constants.Urls.ImmichRepo,
   cli: Constants.Urls.Docs.CLI,
   'google-takeout': Constants.Urls.GoogleTakeOut,
+  faq: Constants.Urls.Docs.FAQ,
 };
 
 export const HELP_TEXTS = {

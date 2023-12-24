@@ -37,7 +37,6 @@ Thanks for reaching out to us. Please follow the recommended actions below; this
 - __Container Logs:__ \`docker compose logs\` [docs](${Constants.Urls.Docs.Logs})
 - __Container Status__:  \`docker compose ps\` [docs](${Constants.Urls.Docs.Containers})
 - __Reverse Proxy:__ ${Constants.Urls.Docs.ReverseProxy}
-- __Typesense:__ You can't fix this. Just wait until we get rid of it. Sorry.
 
 ## Checklist
 ${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
