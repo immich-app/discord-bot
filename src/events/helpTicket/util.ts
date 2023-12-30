@@ -26,7 +26,7 @@ export const getHelpDeskWelcomeMessage = (user: string, isChecked: boolean[] = [
     `I have reviewed [Github](${Constants.Urls.Issues}) for known issues.`,
     'I have tried accessing Immich via local ip (without a custom reverse proxy).',
     'I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the `/upload` command.',
-    'I have tried an incognito window, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
+    'I have tried an incognito window, disabled extensions, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
   ];
 
   return `:wave: Hey <@${user}>,
