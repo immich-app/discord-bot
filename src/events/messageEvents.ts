@@ -8,6 +8,8 @@ import { RequestError } from '@octokit/request-error';
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
 const octokit = new Octokit();
 
+let _counter = 3;
+
 @Discord()
 export class MessageEvents {
   @On({ event: 'messageCreate' })
@@ -16,7 +18,7 @@ export class MessageEvents {
       return;
     }
 
-    await Promise.all([this.handleGithubShortLinks(message)]);
+    await Promise.all([this.handleGithubShortLinks(message), this.handleJason(message)]);
   }
 
   @On({ event: 'messageUpdate' })
@@ -27,6 +29,16 @@ export class MessageEvents {
 
     if (!_.isEqual(oldMessage.embeds, newMessage.embeds)) {
       await this.handlePreventEmbeddings(newMessage);
+    }
+  }
+
+  private async handleJason(message: Message<boolean>) {
+    if (message.author.id !== '613523742479483183') {
+      return;
+    }
+
+    if (message.content.toLowerCase().includes('last year')) {
+      await message.reply(String(++_counter));
     }
   }
 
