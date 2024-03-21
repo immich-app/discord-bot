@@ -17,6 +17,7 @@ const docs = {
 const icons = {
   Checked: ':ballot_box_with_check:',
   Unchecked: ':blue_square:',
+  Immich: '<:immich:1216750773598294066>',
 };
 
 const urls = {

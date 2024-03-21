@@ -31,8 +31,7 @@ export const getHelpDeskWelcomeMessage = (user: string, isChecked: boolean[] = [
 
   return `:wave: Hey <@${user}>,
 
-Thanks for reaching out to us. Please follow the recommended actions below; this will help us be more effective in our support effort and leave more time for building Immich <:immich:991481316950425643>.
-
+Thanks for reaching out to us. Please follow the recommended actions below; this will help us be more effective in our support effort and leave more time for building Immich ${Constants.Icons.Immich}.
 ## References
 - __Container Logs:__ \`docker compose logs\` [docs](${Constants.Urls.Docs.Logs})
 - __Container Status__:  \`docker compose ps\` [docs](${Constants.Urls.Docs.Containers})
