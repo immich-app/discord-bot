@@ -138,7 +138,7 @@ export class Commands {
       ])
       .toHuman({ listStyle: 'long', maximumFractionDigits: 0 });
 
-    return interaction.reply(`Immich is ${age} old. <:immich:991481316950425643>`);
+    return interaction.reply(`Immich is ${age} old. ${Constants.Icons.Immich}`);
   }
 
   @Slash({ name: 'search', description: 'Search for PRs and Issues by title' })
