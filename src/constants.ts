@@ -1,7 +1,7 @@
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
 
 const docs = {
-  Logs: 'https://immich.app/docs/administration/reverse-proxy',
+  Logs: 'https://immich.app/docs/guides/docker-help#logs',
   ReverseProxy: `https://immich.app/docs/administration/reverse-proxy`,
   Containers: 'https://immich.app/docs/guides/docker-help#containers',
   Queries: `https://immich.app/docs/guides/database-queries`,
@@ -10,7 +10,7 @@ const docs = {
   Sidecar: `https://immich.app/docs/features/xmp-sidecars`,
   Docker: `https://immich.app/docs/guides/docker-help`,
   Backup: `https://immich.app/docs/administration/backup-and-restore`,
-  CLI: `https://immich.app/docs/features/bulk-upload`,
+  CLI: `https://immich.app/docs/features/command-line-interface`,
   FAQ: `https://immich.app/docs/FAQ`,
 };
 
