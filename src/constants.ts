@@ -2,16 +2,16 @@ export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immi
 
 const docs = {
   Logs: 'https://immich.app/docs/guides/docker-help#logs',
-  ReverseProxy: `https://immich.app/docs/administration/reverse-proxy`,
+  ReverseProxy: 'https://immich.app/docs/administration/reverse-proxy',
   Containers: 'https://immich.app/docs/guides/docker-help#containers',
-  Queries: `https://immich.app/docs/guides/database-queries`,
-  Upgrade: `https://immich.app/docs/install/docker-compose#step-4---upgrading`,
-  Libraries: `https://immich.app/docs/features/libraries`,
-  Sidecar: `https://immich.app/docs/features/xmp-sidecars`,
-  Docker: `https://immich.app/docs/guides/docker-help`,
-  Backup: `https://immich.app/docs/administration/backup-and-restore`,
-  CLI: `https://immich.app/docs/features/command-line-interface`,
-  FAQ: `https://immich.app/docs/FAQ`,
+  Queries: 'https://immich.app/docs/guides/database-queries',
+  Upgrade: 'https://immich.app/docs/install/docker-compose#step-4---upgrading',
+  Libraries: 'https://immich.app/docs/features/libraries',
+  Sidecar: 'https://immich.app/docs/features/xmp-sidecars',
+  Docker: 'https://immich.app/docs/guides/docker-help',
+  Backup: 'https://immich.app/docs/administration/backup-and-restore',
+  CLI: 'https://immich.app/docs/features/command-line-interface',
+  FAQ: 'https://immich.app/docs/FAQ',
 };
 
 const icons = {
