@@ -46,6 +46,7 @@ const roles = {
 const channels = {
   HelpDesk: '1049703391762321418',
   General: '994044917355663450',
+  BotSpam: '1159083520027787307',
 };
 
 const misc = {
