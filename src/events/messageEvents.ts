@@ -1,9 +1,9 @@
 import { Octokit } from '@octokit/rest';
-import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
+import { Constants } from '../constants.js';
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import _ from 'lodash';
-import { RequestError } from '@octokit/request-error';
+import { getDiscussion, getIssueOrPr } from '../utils.js';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
 const octokit = new Octokit();
@@ -46,50 +46,21 @@ export class MessageEvents {
   private async getGithubLinks(content: string): Promise<string[]> {
     content = content.replaceAll(/```.*```/gs, '');
     const matches = content.matchAll(/(^|\W)#(?<id>[0-9]+)/g);
-    const links = new Set<string>();
+    const ids = new Set<string>();
     for (const match of matches) {
       const id = match?.groups?.id;
       if (!id) {
         continue;
       }
 
-      if (Number(id) < 500 || Number(id) > 15000) {
-        continue;
-      }
-
-      const link = (await this.getIssueOrPr(id)) || (await this.getDiscussion(id));
-
-      link && links.add(link);
+      ids.add(id);
     }
 
-    return [...links];
-  }
+    const filteredIds = ids.size > 1 ? [...ids].filter((id) => Number(id) > 500 && Number(id) < 15000) : [...ids];
+    const links = await Promise.all(
+      filteredIds.map(async (id) => (await getIssueOrPr(octokit, id)) || (await getDiscussion(id))),
+    );
 
-  private async getIssueOrPr(id: string) {
-    try {
-      const response = await octokit.rest.issues.get({
-        ...IMMICH_REPOSITORY_BASE_OPTIONS,
-        issue_number: Number(id),
-      });
-
-      const type = response.data.pull_request ? 'Pull Request' : 'Issue';
-      return `[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`;
-    } catch (error) {
-      if (error instanceof RequestError && error.status !== 404) {
-        console.log(`Could not fetch #${id}`);
-      }
-    }
-  }
-
-  private async getDiscussion(id: string) {
-    try {
-      const { status } = await fetch(`${Constants.Urls.Discussions}/${id}}`);
-
-      if (status === 200) {
-        return `[Discussion] ([#${id}](${Constants.Urls.Discussions}/${id}))`;
-      }
-    } catch (error) {
-      console.log(`Could not fetch #${id}`);
-    }
+    return links.filter((link): link is string => link !== undefined);
   }
 }
