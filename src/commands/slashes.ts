@@ -9,6 +9,7 @@ import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { DateTime } from 'luxon';
 import { Octokit } from '@octokit/rest';
+import { getIssueOrPr } from '../utils.js';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': Constants.Urls.Docs.ReverseProxy,
@@ -142,7 +143,7 @@ export class Commands {
   }
 
   @Slash({ name: 'search', description: 'Search for PRs and Issues by title' })
-  handleSearch(
+  async handleSearch(
     @SlashOption({
       description: 'Query that applies to title',
       name: 'query',
@@ -169,7 +170,7 @@ export class Commands {
               const name = `${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`;
               return {
                 name: name.length > 100 ? name.substring(0, 97) + '...' : name,
-                value: `${item.pull_request ? '[PR]' : '[Issue]'} ([#${item.number}](${item.html_url}))`,
+                value: String(item.number),
               };
             }),
           );
@@ -179,9 +180,10 @@ export class Commands {
         }
       },
     })
-    content: string,
+    id: string,
     interaction: CommandInteraction,
   ) {
+    const content = await getIssueOrPr(octokit, id);
     return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
   }
 
