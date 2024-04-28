@@ -28,7 +28,7 @@ const urls = {
   Issues: 'https://github.com/immich-app/immich/issues',
   GitHubRepoApi: 'https://api.github.com/repos/immich-app/immich',
   GoogleTakeOut: 'https://github.com/immich-app/immich/discussions/1340',
-  Release: 'https://github.com/immich-app/immich/releases/latest',
+  Release: 'https://github.com/immich-app/immich/discussions?discussions_q=label%3Abreaking-change+sort%3Adate_created',
   Discussions: 'https://github.com/immich-app/immich/discussions',
 };
 
