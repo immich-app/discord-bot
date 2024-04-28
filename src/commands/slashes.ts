@@ -9,7 +9,7 @@ import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants } from '../constants.js';
 import { DateTime } from 'luxon';
 import { getForksMessage, getStarsMessage, handleSearchAutocompletion } from '../service.js';
-import { BotRepository } from '../repositories/bot.repository.js';
+import { GithubRepository } from '../repositories/github.repository.js';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': Constants.Urls.Docs.ReverseProxy,
@@ -34,7 +34,7 @@ export const HELP_TEXTS = {
 
 @Discord()
 export class Commands {
-  constructor(private repository: BotRepository = new BotRepository()) {}
+  constructor(private repository: GithubRepository = new GithubRepository()) {}
 
   @Slash({ name: 'link', description: 'Links to Immich pages' })
   handleLink(
@@ -114,7 +114,7 @@ export class Commands {
       type: ApplicationCommandOptionType.String,
       autocomplete: async (interaction: AutocompleteInteraction) =>
         interaction.respond(
-          await handleSearchAutocompletion(new BotRepository(), interaction.options.getFocused(true).value),
+          await handleSearchAutocompletion(new GithubRepository(), interaction.options.getFocused(true).value),
         ),
     })
     id: string,

@@ -3,7 +3,7 @@ import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { RequestError } from '@octokit/request-error';
 
 const octokit = new Octokit();
-export class BotRepository {
+export class GithubRepository {
   async getIssueOrPr(id: string) {
     try {
       const response = await octokit.rest.issues.get({

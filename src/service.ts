@@ -1,6 +1,6 @@
-import { BotRepository } from './repositories/bot.repository.js';
+import { GithubRepository } from './repositories/github.repository.js';
 
-export async function handleSearchAutocompletion(repository: BotRepository, value: string) {
+export async function handleSearchAutocompletion(repository: GithubRepository, value: string) {
   if (!value) {
     return [];
   }
@@ -29,7 +29,7 @@ export async function handleSearchAutocompletion(repository: BotRepository, valu
 
 const _star_history: Record<string, number | undefined> = {};
 
-export async function getStarsMessage(repository: BotRepository, channelId: string) {
+export async function getStarsMessage(repository: GithubRepository, channelId: string) {
   const lastStarsCount = _star_history[channelId];
 
   try {
@@ -48,7 +48,7 @@ export async function getStarsMessage(repository: BotRepository, channelId: stri
 
 const _fork_history: Record<string, number | undefined> = {};
 
-export async function getForksMessage(repository: BotRepository, channelId: string) {
+export async function getForksMessage(repository: GithubRepository, channelId: string) {
   const lastForksCount = _fork_history[channelId];
 
   try {
@@ -64,7 +64,7 @@ export async function getForksMessage(repository: BotRepository, channelId: stri
   }
 }
 
-export async function handleGithubReferences(repository: BotRepository, content: string) {
+export async function handleGithubReferences(repository: GithubRepository, content: string) {
   content = content.replaceAll(/```.*```/gs, '');
   const matches = content.matchAll(/(^|\W)#(?<id>[0-9]+)/g);
   const ids = new Set<string>();

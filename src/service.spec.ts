@@ -1,8 +1,8 @@
 import { Mocked, describe, expect, it, vitest } from 'vitest';
-import { BotRepository } from './repositories/bot.repository.js';
+import { GithubRepository } from './repositories/github.repository.js';
 import { getForksMessage, getStarsMessage, handleGithubReferences, handleSearchAutocompletion } from './service.js';
 
-const newRepository: () => Mocked<BotRepository> = () => ({
+const newRepository: () => Mocked<GithubRepository> = () => ({
   search: vitest.fn(),
   getDiscussion: vitest.fn(),
   getForkCount: vitest.fn(),
