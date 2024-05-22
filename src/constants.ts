@@ -47,6 +47,7 @@ const channels = {
   HelpDesk: '1049703391762321418',
   General: '994044917355663450',
   BotSpam: '1159083520027787307',
+  GithubStatus: '1240662502912692236',
 };
 
 const misc = {
