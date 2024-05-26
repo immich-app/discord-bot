@@ -4,6 +4,8 @@ import type { Interaction, Message, TextChannel } from 'discord.js';
 import { IntentsBitField, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { Constants } from './constants.js';
+import express from 'express';
+import { webhooks } from './controllers/webhooks.controller.js';
 
 export const bot = new Client({
   // Discord intents
@@ -32,6 +34,8 @@ const birthdayJob = new CronJob(Constants.Misc.ImmichBirthdayCron, async () => {
     await channel.send(`"Happy birthday my other child" - Alex`);
   }
 });
+
+const app = express();
 
 bot.once('ready', async () => {
   const sha = process.env.COMMIT_SHA;
@@ -79,6 +83,11 @@ async function run() {
   }
 
   // Log in with your bot token
+  app.use(express.json());
+  app.use('/webhooks', webhooks);
+  app.listen(8080, () => {
+    console.log('Bot listening on port 8080');
+  });
   await bot.login(process.env.BOT_TOKEN);
 }
 
