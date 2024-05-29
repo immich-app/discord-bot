@@ -1,7 +1,7 @@
 import express from 'express';
 import { bot } from '../main.js';
 import { Constants } from '../constants.js';
-import { TextChannel } from 'discord.js';
+import { EmbedBuilder, TextChannel } from 'discord.js';
 
 const app = express.Router();
 
@@ -81,12 +81,33 @@ app.post('/github-status/:slug', async (req, res) => {
   }
 
   const body = req.body;
-  console.log(body);
+  console.log(JSON.stringify(body));
+
   if (isGithubIncidentUpdate(body)) {
     const channel = (await bot.channels.fetch(Constants.Channels.GithubStatus)) as TextChannel;
-    await channel.send(
-      `# ${body.page.status_description}: ${body.incident.name}\n${body.incident.incident_updates[0].body}`,
-    );
+    const embed = new EmbedBuilder({
+      title: body.page.status_description,
+      author: { name: 'GitHub Status', url: 'https://githubstatus.com' },
+      url: body.incident.shortlink,
+      fields: [{ name: body.incident.name, value: body.incident.incident_updates[0].body.replaceAll('<br />', '\n') }],
+    });
+
+    if (body.incident.status === 'resolved') {
+      embed.setColor('Green');
+    } else {
+      switch (body.incident.impact) {
+        case 'minor':
+          embed.setColor('Orange');
+          break;
+        case 'major':
+          embed.setColor('Red');
+          break;
+        default:
+          embed.setColor('Grey');
+      }
+    }
+
+    await channel.send({ embeds: [embed] });
   }
 
   res.status(200).send();
