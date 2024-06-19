@@ -13,13 +13,13 @@ import {
 import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants } from '../../constants.js';
 import {
-  getLogsUploadModel,
-  getHelpDeskWelcomeMessage,
-  getComposeUploadModal,
-  getEnvUploadModal,
   getComposeButton,
+  getComposeUploadModal,
   getEnvButton,
+  getEnvUploadModal,
+  getHelpDeskWelcomeMessage,
   getLogsButton,
+  getLogsUploadModel,
 } from './util.js';
 
 const submitButton = new ButtonBuilder({
@@ -35,6 +35,20 @@ const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().a
   getLogsButton(),
   submitButton,
 );
+
+async function sendHelpdeskWelcomeMessage(user: string, thread: ThreadChannel) {
+  const welcomeMessage = getHelpDeskWelcomeMessage(user);
+  const message = await thread.send({
+      content: welcomeMessage,
+      components: [mainButtonRow],
+      flags: [MessageFlags.SuppressEmbeds],
+    });
+
+  const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
+  for (let i = 1; i <= itemCount; i++) {
+    await message.react(`${i}️⃣`);
+  }
+}
 
 @Discord()
 export class HelpTicket {
@@ -93,19 +107,8 @@ export class HelpTicket {
       return;
     }
 
-    const welcomeMessage = getHelpDeskWelcomeMessage(thread.ownerId ?? '');
-    const message = await thread.fetch().then((thread) =>
-      thread.send({
-        content: welcomeMessage,
-        components: [mainButtonRow],
-        flags: [MessageFlags.SuppressEmbeds],
-      }),
-    );
-
-    const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
-    for (let i = 1; i <= itemCount; i++) {
-      await message.react(`${i}️⃣`);
-    }
+    const user = thread.ownerId ?? '';
+    await sendHelpdeskWelcomeMessage(user, await thread.fetch());
   }
 
   @Slash({ name: 'helpdesk', description: 'Trigger help desk message' })
@@ -118,19 +121,8 @@ export class HelpTicket {
       return;
     }
 
-    const welcomeMessage = getHelpDeskWelcomeMessage(interaction.channel.ownerId ?? '');
-    const message = await interaction.channel.fetch().then((thread) =>
-      thread.send({
-        content: welcomeMessage,
-        components: [mainButtonRow],
-        flags: [MessageFlags.SuppressEmbeds],
-      }),
-    );
-
-    const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
-    for (let i = 1; i <= itemCount; i++) {
-      await message.react(`${i}️⃣`);
-    }
+    const user = interaction.channel.ownerId ?? '';
+    await sendHelpdeskWelcomeMessage(user, await interaction.channel.fetch())
   }
 
   @ButtonComponent({ id: 'openTicket' })
