@@ -39,10 +39,10 @@ const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().a
 async function sendHelpdeskWelcomeMessage(user: string, thread: ThreadChannel) {
   const welcomeMessage = getHelpDeskWelcomeMessage(user);
   const message = await thread.send({
-      content: welcomeMessage,
-      components: [mainButtonRow],
-      flags: [MessageFlags.SuppressEmbeds],
-    });
+    content: welcomeMessage,
+    components: [mainButtonRow],
+    flags: [MessageFlags.SuppressEmbeds],
+  });
 
   const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
   for (let i = 1; i <= itemCount; i++) {
@@ -112,7 +112,7 @@ export class HelpTicket {
     try {
       await sendHelpdeskWelcomeMessage(user, t);
     } catch (e) {
-      console.error("Retrying helpdesk welcome message:", e);
+      console.error('Retrying helpdesk welcome message:', e);
       setTimeout(async () => await sendHelpdeskWelcomeMessage(user, t), 5000);
     }
   }
@@ -128,7 +128,7 @@ export class HelpTicket {
     }
 
     const user = interaction.channel.ownerId ?? '';
-    await sendHelpdeskWelcomeMessage(user, await interaction.channel.fetch())
+    await sendHelpdeskWelcomeMessage(user, await interaction.channel.fetch());
     await interaction.reply({
       content: 'Helpdesk welcome message sent',
       flags: [MessageFlags.Ephemeral],
