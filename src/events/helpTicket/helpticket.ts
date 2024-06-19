@@ -123,6 +123,10 @@ export class HelpTicket {
 
     const user = interaction.channel.ownerId ?? '';
     await sendHelpdeskWelcomeMessage(user, await interaction.channel.fetch())
+    await interaction.reply({
+      content: 'Helpdesk welcome message sent',
+      flags: [MessageFlags.Ephemeral],
+    });
   }
 
   @ButtonComponent({ id: 'openTicket' })
