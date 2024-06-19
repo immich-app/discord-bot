@@ -108,7 +108,13 @@ export class HelpTicket {
     }
 
     const user = thread.ownerId ?? '';
-    await sendHelpdeskWelcomeMessage(user, await thread.fetch());
+    const t = await thread.fetch();
+    try {
+      await sendHelpdeskWelcomeMessage(user, t);
+    } catch (e) {
+      console.error("Retrying helpdesk welcome message:", e);
+      setTimeout(async () => await sendHelpdeskWelcomeMessage(user, t), 5000);
+    }
   }
 
   @Slash({ name: 'helpdesk', description: 'Trigger help desk message' })
