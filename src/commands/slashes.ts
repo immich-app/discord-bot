@@ -136,4 +136,14 @@ export class Commands {
       await interaction.reply(channel.appliedTags.join(', '));
     }
   }
+
+  @Slash({ name: 'rtfm', description: 'Release notes' })
+  async handleRTFM(interaction: CommandInteraction) {
+    const channel = interaction.channel;
+    if (channel instanceof ThreadChannel) {
+      await interaction.reply(
+        `Stop wasting our time by blindly updating software without reading the release notes. ${Constants.Urls.Release}`,
+      );
+    }
+  }
 }
