@@ -137,7 +137,7 @@ export class Commands {
     }
   }
 
-  @Slash({ name: 'rtfm', description: 'Release notes' })
+  @Slash({ name: 'release-notes', description: 'Release notes' })
   async handleRTFM(interaction: CommandInteraction) {
     await interaction.reply({
       content: `Please make sure you have read and followed the release notes: ${Constants.Urls.Release}`,
