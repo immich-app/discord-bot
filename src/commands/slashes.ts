@@ -139,11 +139,9 @@ export class Commands {
 
   @Slash({ name: 'rtfm', description: 'Release notes' })
   async handleRTFM(interaction: CommandInteraction) {
-    const channel = interaction.channel;
-    if (channel instanceof ThreadChannel) {
-      await interaction.reply(
-        `Please make sure you have read and followed the release notes: ${Constants.Urls.Release}`,
-      );
-    }
+    await interaction.reply({
+      content: `Please make sure you have read and followed the release notes: ${Constants.Urls.Release}`,
+      flags: [MessageFlags.SuppressEmbeds],
+    });
   }
 }
