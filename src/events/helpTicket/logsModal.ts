@@ -1,14 +1,9 @@
-import { ButtonInteraction, MessageFlags, ModalSubmitInteraction } from 'discord.js';
-import { ButtonComponent, Discord, ModalComponent } from 'discordx';
-import { LOGS_BUTTON_ID, LOGS_MODAL_ID, getLogsUploadModel } from './util.js';
+import { MessageFlags, ModalSubmitInteraction } from 'discord.js';
+import { Discord, ModalComponent } from 'discordx';
+import { LOGS_MODAL_ID } from './util.js';
 
 @Discord()
 export class LogsModal {
-  @ButtonComponent({ id: LOGS_BUTTON_ID })
-  async handleLogs(interaction: ButtonInteraction): Promise<void> {
-    await interaction.showModal(getLogsUploadModel());
-  }
-
   @ModalComponent({ id: LOGS_MODAL_ID })
   async handleLogsModal(interaction: ModalSubmitInteraction): Promise<void> {
     const [logsSource, logs] = ['logsSource', 'logs'].map((id) => interaction.fields.getTextInputValue(id));

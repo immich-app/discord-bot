@@ -12,15 +12,7 @@ import {
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants } from '../../constants.js';
-import {
-  getComposeButton,
-  getComposeUploadModal,
-  getEnvButton,
-  getEnvUploadModal,
-  getHelpDeskWelcomeMessage,
-  getLogsButton,
-  getLogsUploadModel,
-} from './util.js';
+import { getComposeUploadModal, getEnvUploadModal, getHelpDeskWelcomeMessage, getLogsUploadModel } from './util.js';
 
 const submitButton = new ButtonBuilder({
   customId: 'submit',
@@ -29,12 +21,7 @@ const submitButton = new ButtonBuilder({
   disabled: true,
 });
 
-const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-  getComposeButton(),
-  getEnvButton(),
-  getLogsButton(),
-  submitButton,
-);
+const mainButtonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(submitButton);
 
 async function sendHelpdeskWelcomeMessage(user: string, thread: ThreadChannel) {
   const welcomeMessage = getHelpDeskWelcomeMessage(user);

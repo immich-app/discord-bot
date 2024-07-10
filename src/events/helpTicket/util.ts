@@ -1,16 +1,5 @@
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-} from 'discord.js';
+import { ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { Constants } from '../../constants.js';
-
-export const LOGS_BUTTON_ID = 'logs';
-export const COMPOSE_BUTTON_ID = 'compose';
-export const ENV_BUTTON_ID = 'env';
 
 export const LOGS_MODAL_ID = 'logsModal';
 export const COMPOSE_MODAL_ID = 'composeModal';
@@ -44,30 +33,6 @@ ${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
 
 If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`;
 };
-
-export function getLogsButton() {
-  return new ButtonBuilder({
-    customId: LOGS_BUTTON_ID,
-    label: 'Attach logs',
-    style: ButtonStyle.Secondary,
-  });
-}
-
-export function getComposeButton() {
-  return new ButtonBuilder({
-    customId: COMPOSE_BUTTON_ID,
-    label: 'Attach docker-compose.yml',
-    style: ButtonStyle.Secondary,
-  });
-}
-
-export function getEnvButton() {
-  return new ButtonBuilder({
-    customId: ENV_BUTTON_ID,
-    label: 'Attach .env',
-    style: ButtonStyle.Secondary,
-  });
-}
 
 export function getLogsUploadModel() {
   const modal = new ModalBuilder({ customId: LOGS_MODAL_ID, title: 'Logs' });
