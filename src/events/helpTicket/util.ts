@@ -1,16 +1,5 @@
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-} from 'discord.js';
+import { ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { Constants } from '../../constants.js';
-
-export const LOGS_BUTTON_ID = 'logs';
-export const COMPOSE_BUTTON_ID = 'compose';
-export const ENV_BUTTON_ID = 'env';
 
 export const LOGS_MODAL_ID = 'logsModal';
 export const COMPOSE_MODAL_ID = 'composeModal';
@@ -25,7 +14,7 @@ export const getHelpDeskWelcomeMessage = (user: string, isChecked: boolean[] = [
     `I have reviewed the [FAQs](${Constants.Urls.Docs.FAQ}) for known issues.`,
     `I have reviewed [Github](${Constants.Urls.Issues}) for known issues.`,
     'I have tried accessing Immich via local ip (without a custom reverse proxy).',
-    'I have uploaded the relevant logs, docker compose, and .env files using the buttons below or the `/upload` command.',
+    'I have uploaded the relevant logs, docker compose, and .env files, making sure to use code formatting.',
     'I have tried an incognito window, disabled extensions, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
   ];
 
@@ -44,30 +33,6 @@ ${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
 
 If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`;
 };
-
-export function getLogsButton() {
-  return new ButtonBuilder({
-    customId: LOGS_BUTTON_ID,
-    label: 'Attach logs',
-    style: ButtonStyle.Secondary,
-  });
-}
-
-export function getComposeButton() {
-  return new ButtonBuilder({
-    customId: COMPOSE_BUTTON_ID,
-    label: 'Attach docker-compose.yml',
-    style: ButtonStyle.Secondary,
-  });
-}
-
-export function getEnvButton() {
-  return new ButtonBuilder({
-    customId: ENV_BUTTON_ID,
-    label: 'Attach .env',
-    style: ButtonStyle.Secondary,
-  });
-}
 
 export function getLogsUploadModel() {
   const modal = new ModalBuilder({ customId: LOGS_MODAL_ID, title: 'Logs' });
