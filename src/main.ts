@@ -7,6 +7,11 @@ import { Constants } from './constants.js';
 import express from 'express';
 import { githubWebhooks } from './controllers/webhooks/github.controller.js';
 import { stripeWebhooks } from './controllers/webhooks/stripe.controller.js';
+import { FileMigrationProvider, Migrator } from 'kysely';
+import { db } from './db.js';
+import path from 'node:path';
+import { promises as fs } from 'node:fs';
+import { logError } from './util';
 
 export const bot = new Client({
   // Discord intents
@@ -64,11 +69,7 @@ bot.on('messageCreate', async (message: Message) => {
   await bot.executeCommand(message);
 });
 
-bot.on('error', async (error) => {
-  console.log(`Error handling bot interaction: ${error}`);
-  const botSpamChannel = (await bot.channels.fetch(Constants.Channels.BotSpam)) as TextChannel;
-  await botSpamChannel.send(`Error handling bot interaction: ${error}`);
-});
+bot.on('error', (error) => logError('Error handling bot interaction', error, bot));
 
 async function run() {
   // The following syntax should be used in the commonjs environment
@@ -76,6 +77,31 @@ async function run() {
   // await importx(__dirname + "/{events,commands}/**/*.{ts,js}");
 
   // The following syntax should be used in the ECMAScript environment
+
+  const migrator = new Migrator({
+    db,
+    provider: new FileMigrationProvider({
+      fs,
+      path,
+      migrationFolder: path.join(import.meta.dirname, 'migrations'),
+    }),
+  });
+
+  const { error, results } = await migrator.migrateToLatest();
+  results?.forEach((it) => {
+    if (it.status === 'Success') {
+      console.log(`migration "${it.migrationName}" was executed successfully`);
+    } else if (it.status === 'Error') {
+      console.error(`failed to execute migration "${it.migrationName}"`);
+    }
+  });
+
+  if (error) {
+    console.error('failed to run db migrations');
+    console.error(error);
+    process.exit(1);
+  }
+
   await importx(`${dirname(import.meta.url)}/{events,commands}/**/*.{ts,js}`);
 
   // Let's start the bot
