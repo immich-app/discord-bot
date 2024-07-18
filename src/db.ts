@@ -2,7 +2,7 @@ import { Insertable, JSONColumnType, Kysely, PostgresDialect, Selectable } from 
 import pg from 'pg';
 
 export interface Database {
-  payments: PaymentTable;
+  payment: PaymentTable;
 }
 
 export interface PaymentTable {
