@@ -6,7 +6,10 @@ module.exports = {
     sourceType: 'module',
     tsconfigRootDir: __dirname,
   },
-  plugins: ['@typescript-eslint'],
-  rules: { '@typescript-eslint/no-floating-promises': 'error' },
+  plugins: ['@typescript-eslint', 'eslint-plugin-import'],
+  rules: {
+    '@typescript-eslint/no-floating-promises': 'error',
+    'import/extensions': ['error', 'always', { ts: 'never' }],
+  },
   root: true,
 };

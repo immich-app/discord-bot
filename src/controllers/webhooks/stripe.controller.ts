@@ -40,7 +40,7 @@ async function writePaymentToDb(event: StripeBase<PaymentIntent>) {
 
   try {
     await db
-      .insertInto('payments')
+      .insertInto('payment')
       .values({
         event_id: event.id,
         id,
@@ -61,7 +61,7 @@ async function writePaymentToDb(event: StripeBase<PaymentIntent>) {
 async function getTotalLicenseCount() {
   try {
     const result = await db
-      .selectFrom('payments')
+      .selectFrom('payment')
       .select([(b) => b.fn.count<number>('description').as('product_count'), 'description'])
       .where('livemode', '=', true)
       .where('status', '=', 'succeeded')
@@ -94,7 +94,7 @@ app.post('/stripe-payments/:slug', async (req, res) => {
   }
   const { id, description, amount, currency, status, livemode } = req.body.data.object;
 
-  void writePaymentToDb(req.body);
+  await writePaymentToDb(req.body);
 
   if (status !== 'succeeded') {
     return;
@@ -110,7 +110,7 @@ app.post('/stripe-payments/:slug', async (req, res) => {
         .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
         .setURL(`https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`)
         .setAuthor({ name: 'Stripe Payments', url: 'https://stripe.com' })
-        .setDescription(`Price: ${(amount / 100).toFixed(2)} ${currency}`)
+        .setDescription(`Price: ${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`)
         .setColor(livemode ? Colors.Green : Colors.Yellow)
         .setFields([
           {
