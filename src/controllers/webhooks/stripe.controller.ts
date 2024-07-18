@@ -49,8 +49,9 @@ app.post('/stripe-payments/:slug', async (req, res) => {
     title: `Immich ${licenseType} license purchased`,
     author: { name: 'Stripe Payments', url: 'https://stripe.com' },
     url: `https://dashboard.stripe.com/payments/${id}`,
-    description: `Total: ${amount} ${currency}`,
+    description: `Total: ${(amount / 100).toFixed(2)} ${currency}`,
   });
+  embed.setColor('Green');
   await channel.send({ embeds: [embed] });
 });
 
