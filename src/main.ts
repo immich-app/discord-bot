@@ -11,7 +11,7 @@ import { FileMigrationProvider, Migrator } from 'kysely';
 import { db } from './db.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { logError } from './util';
+import { logError } from './util.js';
 
 export const bot = new Client({
   // Discord intents

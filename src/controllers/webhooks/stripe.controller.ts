@@ -3,7 +3,7 @@ import { bot } from '../../main.js';
 import { Constants } from '../../constants.js';
 import { Colors, EmbedBuilder, TextChannel } from 'discord.js';
 import { db } from '../../db.js';
-import { logError } from '../../util';
+import { logError } from '../../util.js';
 
 const app = express.Router();
 
