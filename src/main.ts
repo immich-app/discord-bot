@@ -5,7 +5,8 @@ import { IntentsBitField, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { Constants } from './constants.js';
 import express from 'express';
-import { webhooks } from './controllers/webhooks.controller.js';
+import { githubWebhooks } from './controllers/webhooks/github.controller.js';
+import { stripeWebhooks } from './controllers/webhooks/stripe.controller.js';
 
 export const bot = new Client({
   // Discord intents
@@ -84,7 +85,7 @@ async function run() {
 
   // Log in with your bot token
   app.use(express.json());
-  app.use('/webhooks', webhooks);
+  app.use('/webhooks', [githubWebhooks, stripeWebhooks]);
   app.listen(8080, () => {
     console.log('Bot listening on port 8080');
   });
