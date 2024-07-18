@@ -28,8 +28,8 @@ type StripePaymentIntent = StripeBase & {
   };
 };
 
-const isStripePaymentIntentCreated = (payload: StripeBase): payload is StripePaymentIntent => {
-  if ((payload as StripeBase).type === 'payment_intent.created') {
+const isStripePaymentIntentSucceeded = (payload: StripeBase): payload is StripePaymentIntent => {
+  if ((payload as StripeBase).type === 'payment_intent.succeeded') {
     return true;
   }
   return false;
@@ -49,7 +49,7 @@ app.post('/stripe-payments/:slug', async (req, res) => {
 
   const body = req.body;
 
-  if (!isStripePaymentIntentCreated(body) || !isImmichPaymentIntent(body)) return;
+  if (!isStripePaymentIntentSucceeded(body) || !isImmichPaymentIntent(body)) return;
 
   const paymentIntent = body.data.object;
 
