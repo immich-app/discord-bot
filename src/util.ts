@@ -1,4 +1,4 @@
-import { Constants } from './constants';
+import { Constants } from './constants.js';
 import type { TextChannel } from 'discord.js';
 import { Client } from 'discordx';
 
