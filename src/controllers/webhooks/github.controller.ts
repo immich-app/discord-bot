@@ -1,6 +1,6 @@
 import express from 'express';
-import { bot } from '../main.js';
-import { Constants } from '../constants.js';
+import { bot } from '../../main.js';
+import { Constants } from '../../constants.js';
 import { EmbedBuilder, TextChannel } from 'discord.js';
 
 const app = express.Router();
@@ -113,4 +113,4 @@ app.post('/github-status/:slug', async (req, res) => {
   res.status(200).send();
 });
 
-export const webhooks = app;
+export const githubWebhooks = app;
