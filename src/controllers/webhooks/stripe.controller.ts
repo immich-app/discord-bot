@@ -1,7 +1,7 @@
 import express from 'express';
 import { bot } from '../../main.js';
 import { Constants } from '../../constants.js';
-import { EmbedBuilder, TextChannel } from 'discord.js';
+import { Colors, EmbedBuilder, TextChannel } from 'discord.js';
 
 const app = express.Router();
 
@@ -45,14 +45,16 @@ app.post('/stripe-payments/:slug', async (req, res) => {
   const { id, description, amount, currency } = req.body.data.object;
   const licenseType = description.split('-')[1];
   const channel = (await bot.channels.fetch(Constants.Channels.Stripe)) as TextChannel;
-  const embed = new EmbedBuilder({
-    title: `Immich ${licenseType} license purchased`,
-    author: { name: 'Stripe Payments', url: 'https://stripe.com' },
-    url: `https://dashboard.stripe.com/payments/${id}`,
-    description: `Total: ${(amount / 100).toFixed(2)} ${currency}`,
+  await channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(`Immich ${licenseType} license purchased`)
+        .setURL(`https://dashboard.stripe.com/payments/${id}`)
+        .setAuthor({ name: 'Stripe Payments', url: 'https://stripe.com' })
+        .setDescription(`Total: ${(amount / 100).toFixed(2)} ${currency}`)
+        .setColor(Colors.Green),
+    ],
   });
-  embed.setColor('Green');
-  await channel.send({ embeds: [embed] });
 });
 
 export const stripeWebhooks = app;
