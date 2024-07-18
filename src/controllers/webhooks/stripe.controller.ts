@@ -5,7 +5,7 @@ import { EmbedBuilder, TextChannel } from 'discord.js';
 
 const app = express.Router();
 
-type StripeBase = {
+type StripeBase<T = unknown> = {
   id: string;
   object: string;
   type: string;
@@ -13,31 +13,22 @@ type StripeBase = {
     object: {
       id: string;
       object: string;
-    };
+    } & T;
   };
 };
 
-type StripePaymentIntent = StripeBase & {
-  data: {
-    object: {
-      amount: number;
-      currency: number;
-      created: number;
-      description: string;
-    };
-  };
+type PaymentIntent = {
+  amount: number;
+  currency: number;
+  created: number;
+  description: string;
 };
 
-const isStripePaymentIntentSucceeded = (payload: StripeBase): payload is StripePaymentIntent => {
-  if ((payload as StripeBase).type === 'payment_intent.succeeded') {
-    return true;
-  }
-  return false;
-};
+const isPaymentEvent = (payload: StripeBase): payload is StripeBase<PaymentIntent> =>
+  payload.type === 'payment_intent.succeeded';
 
-const isImmichPaymentIntent = (payload: StripePaymentIntent): payload is StripePaymentIntent => {
-  return ['immich-server', 'immich-client'].includes((payload as StripePaymentIntent).data.object.description);
-};
+const isImmichProduct = (payload: StripeBase<PaymentIntent>) =>
+  ['immich-server', 'immich-client'].includes(payload.data.object.description);
 
 app.post('/stripe-payments/:slug', async (req, res) => {
   if (req.params.slug !== process.env.STRIPE_PAYMENT_SLUG) {
@@ -47,19 +38,18 @@ app.post('/stripe-payments/:slug', async (req, res) => {
 
   res.status(204).send();
 
-  const body = req.body;
+  if (!isPaymentEvent(req.body) || !isImmichProduct(req.body)) {
+    return;
+  }
 
-  if (!isStripePaymentIntentSucceeded(body) || !isImmichPaymentIntent(body)) return;
-
-  const paymentIntent = body.data.object;
-
-  const licenseType = paymentIntent.description.split('-')[1];
+  const { id, description, amount, currency } = req.body.data.object;
+  const licenseType = description.split('-')[1];
   const channel = (await bot.channels.fetch(Constants.Channels.Stripe)) as TextChannel;
   const embed = new EmbedBuilder({
     title: `Immich ${licenseType} license purchased`,
     author: { name: 'Stripe Payments', url: 'https://stripe.com' },
-    url: `https://dashboard.stripe.com/payments/${body.id}`,
-    description: `Total: ${paymentIntent.amount} ${paymentIntent.currency}`,
+    url: `https://dashboard.stripe.com/payments/${id}`,
+    description: `Total: ${amount} ${currency}`,
   });
   await channel.send({ embeds: [embed] });
 });
