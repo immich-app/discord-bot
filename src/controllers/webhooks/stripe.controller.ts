@@ -8,24 +8,35 @@ const app = express.Router();
 type StripeBase = {
   id: string;
   object: string;
+  type: string;
+  data: {
+    object: {
+      id: string;
+      object: string;
+    };
+  };
 };
 
 type StripePaymentIntent = StripeBase & {
-  amount: number;
-  currency: number;
-  created: number;
-  description: string;
+  data: {
+    object: {
+      amount: number;
+      currency: number;
+      created: number;
+      description: string;
+    };
+  };
 };
 
-const isStripePaymentIntent = (payload: StripeBase): payload is StripePaymentIntent => {
-  if ((payload as StripeBase).object === 'payment_intent') {
+const isStripePaymentIntentCreated = (payload: StripeBase): payload is StripePaymentIntent => {
+  if ((payload as StripeBase).type === 'payment_intent.created') {
     return true;
   }
   return false;
 };
 
 const isImmichPaymentIntent = (payload: StripePaymentIntent): payload is StripePaymentIntent => {
-  return ['immich-server', 'immich-client'].includes((payload as StripePaymentIntent).description);
+  return ['immich-server', 'immich-client'].includes((payload as StripePaymentIntent).data.object.description);
 };
 
 app.post('/stripe-payments/:slug', async (req, res) => {
@@ -37,17 +48,18 @@ app.post('/stripe-payments/:slug', async (req, res) => {
   res.status(204).send();
 
   const body = req.body;
-  console.log(JSON.stringify(body));
 
-  if (!isStripePaymentIntent(body) || !isImmichPaymentIntent(body)) return;
+  if (!isStripePaymentIntentCreated(body) || !isImmichPaymentIntent(body)) return;
 
-  const licenseType = body.description.split('-')[1];
+  const paymentIntent = body.data.object;
+
+  const licenseType = paymentIntent.description.split('-')[1];
   const channel = (await bot.channels.fetch(Constants.Channels.Stripe)) as TextChannel;
   const embed = new EmbedBuilder({
     title: `Immich ${licenseType} license purchased`,
     author: { name: 'Stripe Payments', url: 'https://stripe.com' },
     url: `https://dashboard.stripe.com/payments/${body.id}`,
-    description: `Total: ${body.amount} ${body.currency}`,
+    description: `Total: ${paymentIntent.amount} ${paymentIntent.currency}`,
   });
   await channel.send({ embeds: [embed] });
 });
