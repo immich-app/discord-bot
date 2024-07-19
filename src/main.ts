@@ -1,16 +1,19 @@
 import { dirname, importx } from '@discordx/importer';
+import cors from 'cors';
 import { CronJob } from 'cron';
 import type { Interaction, Message, TextChannel } from 'discord.js';
 import { IntentsBitField, Partials } from 'discord.js';
 import { Client } from 'discordx';
-import { Constants } from './constants.js';
 import express from 'express';
-import { githubWebhooks } from './controllers/webhooks/github.controller.js';
-import { stripeWebhooks } from './controllers/webhooks/stripe.controller.js';
 import { FileMigrationProvider, Migrator } from 'kysely';
-import { db } from './db.js';
-import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { config } from './config.js';
+import { Constants } from './constants.js';
+import { githubWebhooks } from './controllers/webhooks/github.controller.js';
+import { oauth } from './controllers/webhooks/oauth.controller.js';
+import { stripeWebhooks } from './controllers/webhooks/stripe.controller.js';
+import { db } from './db.js';
 import { logError } from './util.js';
 
 export const bot = new Client({
@@ -109,13 +112,18 @@ async function run() {
     throw Error('Could not find BOT_TOKEN in your environment');
   }
 
-  // Log in with your bot token
+  app.use(cors());
   app.use(express.json());
   app.use('/webhooks', [githubWebhooks, stripeWebhooks]);
+  app.use('/oauth', oauth);
   app.listen(8080, () => {
     console.log('Bot listening on port 8080');
   });
-  await bot.login(process.env.BOT_TOKEN);
+
+  // Log in with your bot token
+  if (config.bot.token !== 'dev') {
+    await bot.login(config.bot.token);
+  }
 }
 
 await run();

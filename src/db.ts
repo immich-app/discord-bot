@@ -1,5 +1,6 @@
 import { Insertable, JSONColumnType, Kysely, PostgresDialect, Selectable } from 'kysely';
 import pg from 'pg';
+import { config } from './config.js';
 
 export interface Database {
   payment: PaymentTable;
@@ -22,7 +23,7 @@ export type NewPayment = Insertable<PaymentTable>;
 
 const dialect = new PostgresDialect({
   pool: new pg.Pool({
-    connectionString: process.env.uri,
+    connectionString: config.database.uri,
   }),
 });
 
