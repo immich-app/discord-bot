@@ -1,9 +1,10 @@
-import { Insertable, JSONColumnType, Kysely, PostgresDialect, Selectable } from 'kysely';
+import { Insertable, JSONColumnType, Kysely, PostgresDialect, Selectable, Updateable } from 'kysely';
 import pg from 'pg';
 import { config } from './config.js';
 
 export interface Database {
   payment: PaymentTable;
+  sponsor: SponsorTable;
 }
 
 export interface PaymentTable {
@@ -20,6 +21,18 @@ export interface PaymentTable {
 
 export type Payment = Selectable<PaymentTable>;
 export type NewPayment = Insertable<PaymentTable>;
+
+export interface SponsorTable {
+  username: string;
+  email: string;
+  total: number;
+  claimed: boolean;
+  licenseType: 'client' | 'server';
+  licenses: { license: string; activation: string }[];
+}
+
+export type Sponsor = Selectable<SponsorTable>;
+export type UpdateSponsor = Updateable<SponsorTable>;
 
 const dialect = new PostgresDialect({
   pool: new pg.Pool({

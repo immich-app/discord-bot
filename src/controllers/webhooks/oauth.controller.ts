@@ -1,6 +1,7 @@
 import express from 'express';
 import { generators, Issuer } from 'openid-client';
 import { config } from '../../config.js';
+import { getSponsorLicenses } from '../../repositories/sponsor.repository.js';
 
 type GithubProfile = {
   login: string;
@@ -61,18 +62,12 @@ app.post('/callback', async (req, res) => {
     const tokens = await client.oauthCallback(redirectUri, params, { state: stateItem.value });
     const profile = await client.userinfo<GithubProfile>(tokens);
 
+    const licenses = await getSponsorLicenses(profile.login);
+
     return res.status(200).send({
       username: profile.login,
       imageUrl: profile.avatar_url,
-      licenses: [
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X0' },
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X1' },
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X2' },
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X3' },
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X4' },
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X5' },
-        { licenseKey: 'IMSV-6ECZ-91TE-WZRM-Q7AQ-MBN4-UW48-2CPT-71X6' },
-      ],
+      licenses,
     });
   } catch (error) {
     console.error(error);
