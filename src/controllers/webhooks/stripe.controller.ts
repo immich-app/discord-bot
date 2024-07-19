@@ -40,7 +40,7 @@ async function writePaymentToDb(event: StripeBase<PaymentIntent>) {
 
   try {
     await db
-      .insertInto('payments')
+      .insertInto('payment')
       .values({
         event_id: event.id,
         id,
@@ -61,7 +61,7 @@ async function writePaymentToDb(event: StripeBase<PaymentIntent>) {
 async function getTotalLicenseCount() {
   try {
     const result = await db
-      .selectFrom('payments')
+      .selectFrom('payment')
       .select([(b) => b.fn.count<number>('description').as('product_count'), 'description'])
       .where('livemode', '=', true)
       .where('status', '=', 'succeeded')
