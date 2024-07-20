@@ -43,26 +43,17 @@ const roles = {
   Contributor: '980972470964215870',
 };
 
-const channels = {
-  HelpDesk: '1049703391762321418',
-  General: '994044917355663450',
-  BotSpam: '1159083520027787307',
-  GithubStatus: '1240662502912692236',
-  Stripe: '1263492970691297300',
-};
-
-const misc = {
-  ImmichBirthdayCron: '36 4 3 2 *',
+const cron = {
+  ImmichBirthday: '36 4 3 2 *',
 };
 
 export const Constants = {
-  Misc: misc,
   Urls: {
     Docs: docs,
     ...urls,
   },
   Icons: icons,
-  Channels: channels,
   Roles: roles,
   Tags: tags,
+  Cron: cron,
 };

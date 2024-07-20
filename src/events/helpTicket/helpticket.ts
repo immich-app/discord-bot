@@ -11,8 +11,14 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import { ArgsOf, ButtonComponent, Discord, On, Slash, SlashChoice, SlashOption } from 'discordx';
-import { Constants } from '../../constants.js';
-import { getComposeUploadModal, getEnvUploadModal, getHelpDeskWelcomeMessage, getLogsUploadModel } from './util.js';
+import { Constants } from 'src/constants';
+import {
+  getComposeUploadModal,
+  getEnvUploadModal,
+  getHelpDeskWelcomeMessage,
+  getLogsUploadModel,
+} from 'src/events/helpTicket/util';
+import { DiscordChannel } from 'src/interfaces/discord.interface';
 
 const submitButton = new ButtonBuilder({
   customId: 'submit',
@@ -67,7 +73,7 @@ export class HelpTicket {
       return;
     }
 
-    if (channel.parentId !== Constants.Channels.HelpDesk) {
+    if (channel.parentId !== DiscordChannel.HelpDesk) {
       return;
     }
 
@@ -90,7 +96,7 @@ export class HelpTicket {
 
   @On({ event: 'threadCreate' })
   async handleThreadCreate([thread]: ArgsOf<'threadCreate'>) {
-    if (thread.parentId !== Constants.Channels.HelpDesk) {
+    if (thread.parentId !== DiscordChannel.HelpDesk) {
       return;
     }
 
@@ -106,7 +112,7 @@ export class HelpTicket {
 
   @Slash({ name: 'helpdesk', description: 'Trigger help desk message' })
   async handleHelpDeskCommand(interaction: CommandInteraction) {
-    if (!interaction.channel?.isThread() || interaction.channel.parentId !== Constants.Channels.HelpDesk) {
+    if (!interaction.channel?.isThread() || interaction.channel.parentId !== DiscordChannel.HelpDesk) {
       await interaction.reply({
         content: 'This command may only be executed in help desk threads',
         flags: [MessageFlags.Ephemeral],
@@ -127,11 +133,11 @@ export class HelpTicket {
   async handleTicketOpen(interaction: BaseInteraction) {
     const channel = interaction.channel;
 
-    if (!(channel instanceof ThreadChannel) || channel.parentId !== Constants.Channels.HelpDesk) {
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== DiscordChannel.HelpDesk) {
       if (interaction instanceof CommandInteraction) {
         return interaction?.reply({
           ephemeral: true,
-          content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
+          content: `This command can only be invoked in <#${DiscordChannel.HelpDesk}> tickets.`,
         });
       }
       return;
@@ -144,10 +150,10 @@ export class HelpTicket {
   @Slash({ name: 'close', description: 'Closes the ticket. Can be re-opened if need be' })
   async handleTicketClose(interaction: CommandInteraction) {
     const channel = interaction.channel;
-    if (!(channel instanceof ThreadChannel) || channel.parentId !== Constants.Channels.HelpDesk) {
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== DiscordChannel.HelpDesk) {
       return interaction.reply({
         ephemeral: true,
-        content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
+        content: `This command can only be invoked in <#${DiscordChannel.HelpDesk}> tickets.`,
       });
     }
 
@@ -177,10 +183,10 @@ export class HelpTicket {
     interaction: CommandInteraction,
   ) {
     const channel = interaction.channel;
-    if (!(channel instanceof ThreadChannel) || channel.parentId !== Constants.Channels.HelpDesk) {
+    if (!(channel instanceof ThreadChannel) || channel.parentId !== DiscordChannel.HelpDesk) {
       return interaction.reply({
         ephemeral: true,
-        content: `This command can only be invoked in <#${Constants.Channels.HelpDesk}> tickets.`,
+        content: `This command can only be invoked in <#${DiscordChannel.HelpDesk}> tickets.`,
       });
     }
     const members = interaction.guild?.members.cache;

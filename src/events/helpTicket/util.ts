@@ -1,5 +1,5 @@
 import { ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
-import { Constants } from '../../constants.js';
+import { Constants } from 'src/constants';
 
 export const LOGS_MODAL_ID = 'logsModal';
 export const COMPOSE_MODAL_ID = 'composeModal';

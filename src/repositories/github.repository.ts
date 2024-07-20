@@ -1,6 +1,6 @@
-import { Octokit } from '@octokit/rest';
-import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { RequestError } from '@octokit/request-error';
+import { Octokit } from '@octokit/rest';
+import { Constants, IMMICH_REPOSITORY_BASE_OPTIONS } from 'src/constants';
 
 const octokit = new Octokit();
 export class GithubRepository {

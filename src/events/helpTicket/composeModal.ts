@@ -1,6 +1,6 @@
 import { MessageFlags, ModalSubmitInteraction } from 'discord.js';
 import { Discord, ModalComponent } from 'discordx';
-import { COMPOSE_MODAL_ID } from './util.js';
+import { COMPOSE_MODAL_ID } from 'src/events/helpTicket/util';
 
 @Discord()
 export class ComposeModal {

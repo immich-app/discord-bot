@@ -1,6 +1,6 @@
 import { Mocked, describe, expect, it, vitest } from 'vitest';
-import { GithubRepository } from './repositories/github.repository.js';
-import { getForksMessage, getStarsMessage, handleGithubReferences, handleSearchAutocompletion } from './service.js';
+import { GithubRepository } from './repositories/github.repository';
+import { getForksMessage, getStarsMessage, handleGithubReferences, handleSearchAutocompletion } from './service';
 
 const newRepository: () => Mocked<GithubRepository> = () => ({
   search: vitest.fn(),

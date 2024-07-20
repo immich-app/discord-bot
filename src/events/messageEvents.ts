@@ -1,9 +1,9 @@
-import { Constants } from '../constants.js';
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import _ from 'lodash';
-import { GithubRepository } from '../repositories/github.repository.js';
-import { handleGithubReferences } from '../service.js';
+import { Constants } from 'src/constants';
+import { GithubRepository } from 'src/repositories/github.repository';
+import { handleGithubReferences } from 'src/service';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
 

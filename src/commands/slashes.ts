@@ -1,15 +1,16 @@
 import {
   ApplicationCommandOptionType,
-  MessageFlags,
-  type CommandInteraction,
   AutocompleteInteraction,
+  MessageFlags,
   ThreadChannel,
+  type CommandInteraction,
 } from 'discord.js';
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
-import { Constants } from '../constants.js';
 import { DateTime } from 'luxon';
-import { getForksMessage, getStarsMessage, handleSearchAutocompletion } from '../service.js';
+import { DiscordChannel } from 'src/interfaces/discord.interface.js';
+import { Constants } from '../constants.js';
 import { GithubRepository } from '../repositories/github.repository.js';
+import { getForksMessage, getStarsMessage, handleSearchAutocompletion } from '../service.js';
 
 const linkCommands: Record<string, string> = {
   'reverse proxy': Constants.Urls.Docs.ReverseProxy,
@@ -27,7 +28,7 @@ const linkCommands: Record<string, string> = {
 
 export const HELP_TEXTS = {
   'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${Constants.Urls.Docs.Docker}`,
-  'help ticket': `Please open a <#${Constants.Channels.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
+  'help ticket': `Please open a <#${DiscordChannel.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
   'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${Constants.Urls.Docs.ReverseProxy}.`,
   'feature request': `For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](${Constants.Urls.FeatureRequest}). However, please make sure to search for similar requests first to avoid duplicates.`,
 };

@@ -1,4 +1,4 @@
-import { GithubRepository } from './repositories/github.repository.js';
+import { GithubRepository } from './repositories/github.repository';
 
 export async function handleSearchAutocompletion(repository: GithubRepository, value: string) {
   if (!value) {

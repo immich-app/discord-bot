@@ -4,5 +4,5 @@
   "printWidth": 120,
   "semi": true,
   "organizeImportsSkipDestructiveCodeActions": true,
-  "pluginSearchDirs": false
+  "plugins": ["prettier-plugin-organize-imports"]
 }
