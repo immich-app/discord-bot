@@ -17,7 +17,7 @@ import {
   getEnvUploadModal,
   getHelpDeskWelcomeMessage,
   getLogsUploadModel,
-} from 'src/events/helpTicket/util';
+} from 'src/discord/util';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 
 const submitButton = new ButtonBuilder({

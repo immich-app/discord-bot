@@ -1,5 +1,4 @@
-import { importx } from '@discordx/importer';
-import { IntentsBitField, MessageCreateOptions, Partials, TextChannel } from 'discord.js';
+import { IntentsBitField, MessageCreateOptions, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import EventEmitter from 'node:events';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -29,14 +28,14 @@ export class DiscordRepository extends EventEmitter implements IDiscordInterface
   constructor() {
     super();
 
-    bot.on('ready', () => void this.emit('ready'));
-    bot.on('error', (error) => void this.emit('error', error));
-    bot.on('interactionCreate', (interaction) => void bot.executeInteraction(interaction));
-    bot.on('messageCreate', async (message) => void bot.executeCommand(message));
+    bot
+      .on('ready', () => void this.emit('ready'))
+      .on('error', (error) => void this.emit('error', error))
+      .on('interactionCreate', (interaction) => bot.executeInteraction(interaction) as Promise<void>)
+      .on('messageCreate', (message) => bot.executeCommand(message) as Promise<void>);
   }
 
   async login(token: string) {
-    await importx(__dirname + '/{events,commands}/**/*.{ts,js}');
     await bot.login(token);
   }
 
@@ -45,7 +44,9 @@ export class DiscordRepository extends EventEmitter implements IDiscordInterface
   }
 
   async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<void> {
-    const textChannel = (await bot.channels.fetch(channel)) as TextChannel;
-    await textChannel.send(message);
+    const textChannel = await bot.channels.fetch(channel);
+    if (textChannel && textChannel.isTextBased()) {
+      await textChannel.send(message);
+    }
   }
 }

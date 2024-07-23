@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { Colors, EmbedBuilder } from 'discord.js';
-import { config } from 'src/config';
+import { getConfig } from 'src/config';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -26,7 +26,8 @@ export class WebhookService {
   ) {}
 
   async onGithubStatus(dto: GithubStatusIncident | GithubStatusComponent, slug: string) {
-    if (slug !== config.slugs.githubWebhook) {
+    const { slugs } = getConfig();
+    if (!slugs.githubWebhook || slug !== slugs.githubWebhook) {
       throw new UnauthorizedException();
     }
 
@@ -60,7 +61,8 @@ export class WebhookService {
   }
 
   onStripePayment(dto: StripeBase, slug: string) {
-    if (slug !== config.slugs.githubWebhook) {
+    const { slugs } = getConfig();
+    if (!slugs.stripeWebhook || slug !== slugs.stripeWebhook) {
       throw new UnauthorizedException();
     }
 

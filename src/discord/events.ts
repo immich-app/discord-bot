@@ -1,18 +1,19 @@
+import { Injectable } from '@nestjs/common';
 import { Message, MessageFlags, PartialMessage } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import _ from 'lodash';
 import { Constants } from 'src/constants';
-import { GithubRepository } from 'src/repositories/github.repository';
-import { handleGithubReferences } from 'src/service';
+import { DiscordService } from 'src/services/discord.service';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
 
 @Discord()
-export class MessageEvents {
-  constructor(private githubRepository: GithubRepository = new GithubRepository()) {}
+@Injectable()
+export class BotEvents {
+  constructor(private service: DiscordService) {}
 
   @On({ event: 'messageCreate' })
-  async handleMessageCreate([message]: ArgsOf<'messageCreate'>) {
+  async onMessageCreate([message]: ArgsOf<'messageCreate'>) {
     if (message.author.bot) {
       return;
     }
@@ -21,7 +22,7 @@ export class MessageEvents {
   }
 
   @On({ event: 'messageUpdate' })
-  async handleMessageUpdate([oldMessage, newMessage]: ArgsOf<'messageUpdate'>) {
+  async onMessageUpdate([oldMessage, newMessage]: ArgsOf<'messageUpdate'>) {
     if (oldMessage.author?.bot) {
       return;
     }
@@ -32,7 +33,7 @@ export class MessageEvents {
   }
 
   private async handleGithubShortLinks(message: Message<boolean>) {
-    const links = await handleGithubReferences(this.githubRepository, message.content);
+    const links = await this.service.handleGithubReferences(message.content);
     if (links.length !== 0) {
       await message.reply({ content: links.join('\n'), flags: [MessageFlags.SuppressEmbeds] });
     }

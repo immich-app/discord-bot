@@ -1,3 +1,5 @@
+import { DiscordChannel } from 'src/interfaces/discord.interface';
+
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
 
 const docs = {
@@ -56,4 +58,25 @@ export const Constants = {
   Roles: roles,
   Tags: tags,
   Cron: cron,
+};
+
+export const linkCommands: Record<string, string> = {
+  'reverse proxy': Constants.Urls.Docs.ReverseProxy,
+  database: Constants.Urls.Docs.Queries,
+  upgrade: Constants.Urls.Docs.Upgrade,
+  libraries: Constants.Urls.Docs.Libraries,
+  'xmp sidecar': Constants.Urls.Docs.Sidecar,
+  docker: Constants.Urls.Docs.Docker,
+  backup: Constants.Urls.Docs.Backup,
+  github: Constants.Urls.ImmichRepo,
+  cli: Constants.Urls.Docs.CLI,
+  'google-takeout': Constants.Urls.GoogleTakeOut,
+  faq: Constants.Urls.Docs.FAQ,
+};
+
+export const HELP_TEXTS = {
+  'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${Constants.Urls.Docs.Docker}`,
+  'help ticket': `Please open a <#${DiscordChannel.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
+  'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${Constants.Urls.Docs.ReverseProxy}.`,
+  'feature request': `For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](${Constants.Urls.FeatureRequest}). However, please make sure to search for similar requests first to avoid duplicates.`,
 };

@@ -3,23 +3,27 @@ import { FileMigrationProvider, Kysely, Migrator, PostgresDialect } from 'kysely
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
-import { config } from 'src/config';
+import { getConfig } from 'src/config';
 import { Database, IDatabaseRepository, LicenseType, NewPayment } from 'src/interfaces/database.interface';
-
-const db = new Kysely<Database>({
-  dialect: new PostgresDialect({
-    pool: new pg.Pool({
-      connectionString: config.database.uri,
-    }),
-  }),
-});
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
+  private db: Kysely<Database>;
+
+  constructor() {
+    const { database } = getConfig();
+    this.db = new Kysely<Database>({
+      dialect: new PostgresDialect({
+        pool: new pg.Pool({
+          connectionString: database.uri,
+        }),
+      }),
+    });
+  }
 
   async runMigrations() {
     const migrator = new Migrator({
-      db,
+      db: this.db,
       provider: new FileMigrationProvider({
         fs,
         path,
@@ -43,11 +47,11 @@ export class DatabaseRepository implements IDatabaseRepository {
   }
 
   async createPayment(entity: NewPayment) {
-    await db.insertInto('payment').values(entity).execute();
+    await this.db.insertInto('payment').values(entity).execute();
   }
 
   async getTotalLicenseCount() {
-    const result = await db
+    const result = await this.db
       .selectFrom('payment')
       .select([(b) => b.fn.count<number>('description').as('product_count'), 'description'])
       .where('livemode', '=', true)
@@ -62,7 +66,7 @@ export class DatabaseRepository implements IDatabaseRepository {
   }
 
   async getSponsorLicenses(githubUsername: string) {
-    const sponsor = await db
+    const sponsor = await this.db
       .selectFrom('sponsor')
       .selectAll()
       .where('username', '=', githubUsername)
@@ -72,7 +76,7 @@ export class DatabaseRepository implements IDatabaseRepository {
       return [];
     }
 
-    await db.updateTable('sponsor').set('claimed', true).where('username', '=', githubUsername).execute();
+    await this.db.updateTable('sponsor').set('claimed', true).where('username', '=', githubUsername).execute();
 
     return sponsor.licenses.map(({ activation, license }) => ({
       type: sponsor.license_type === 'client' ? LicenseType.Client : LicenseType.Server,
