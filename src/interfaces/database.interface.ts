@@ -27,7 +27,7 @@ export interface SponsorTable {
   email: string;
   total: number;
   claimed: boolean;
-  licenseType: 'client' | 'server';
+  license_type: 'client' | 'server';
   licenses: { license: string; activation: string }[];
 }
 

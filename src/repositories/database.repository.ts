@@ -75,7 +75,7 @@ export class DatabaseRepository implements IDatabaseRepository {
     await db.updateTable('sponsor').set('claimed', true).where('username', '=', githubUsername).execute();
 
     return sponsor.licenses.map(({ activation, license }) => ({
-      type: sponsor.licenseType === 'client' ? LicenseType.Client : LicenseType.Server,
+      type: sponsor.license_type === 'client' ? LicenseType.Client : LicenseType.Server,
       licenseKey: license,
       activationKey: activation,
     }));
