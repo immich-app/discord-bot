@@ -3,7 +3,7 @@ import { Discord, ModalComponent } from 'discordx';
 import { COMPOSE_MODAL_ID, ENV_MODAL_ID, LOGS_MODAL_ID } from 'src/discord/util';
 
 @Discord()
-export class ComposeModal {
+export class BotComposeModal {
   @ModalComponent({ id: COMPOSE_MODAL_ID })
   async handleComposeModal(interaction: ModalSubmitInteraction): Promise<void> {
     const compose = interaction.fields.getTextInputValue('compose');
@@ -18,7 +18,7 @@ export class ComposeModal {
 }
 
 @Discord()
-export class EnvModal {
+export class BotEnvModal {
   @ModalComponent({ id: ENV_MODAL_ID })
   async handleEnvModal(interaction: ModalSubmitInteraction): Promise<void> {
     const env = interaction.fields.getTextInputValue('env');
@@ -33,7 +33,7 @@ export class EnvModal {
 }
 
 @Discord()
-export class LogsModal {
+export class BotLogsModal {
   @ModalComponent({ id: LOGS_MODAL_ID })
   async handleLogsModal(interaction: ModalSubmitInteraction): Promise<void> {
     const [logsSource, logs] = ['logsSource', 'logs'].map((id) => interaction.fields.getTextInputValue(id));
