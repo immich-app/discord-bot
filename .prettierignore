@@ -5,7 +5,6 @@ node_modules
 .env.*
 !.env.example
 *.md
-*.json
 /.github
 
 # Ignore files for PNPM, NPM and YARN

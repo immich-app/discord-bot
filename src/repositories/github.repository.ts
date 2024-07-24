@@ -1,9 +1,11 @@
-import { Octokit } from '@octokit/rest';
-import { IMMICH_REPOSITORY_BASE_OPTIONS, Constants } from '../constants.js';
 import { RequestError } from '@octokit/request-error';
+import { Octokit } from '@octokit/rest';
+import { Constants, IMMICH_REPOSITORY_BASE_OPTIONS } from 'src/constants';
+import { IGithubInterface } from 'src/interfaces/github.interface';
 
 const octokit = new Octokit();
-export class GithubRepository {
+
+export class GithubRepository implements IGithubInterface {
   async getIssueOrPr(id: string) {
     try {
       const response = await octokit.rest.issues.get({
@@ -55,6 +57,6 @@ export class GithubRepository {
   }) {
     return octokit.rest.search
       .issuesAndPullRequests({ q: query, per_page, page, sort, order })
-      .then((response) => response.data);
+      .then((response) => response.data) as any;
   }
 }

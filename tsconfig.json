@@ -1,21 +1,25 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "outDir": "build",
-    "rootDir": "src",
+    "module": "node16",
     "strict": true,
-    "moduleResolution": "Node",
-    "allowSyntheticDefaultImports": true,
-
-    "experimentalDecorators": true,
+    "declaration": true,
+    "removeComments": true,
     "emitDecoratorMetadata": true,
-
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "target": "es2022",
+    "moduleResolution": "node16",
+    "lib": ["dom", "es2023"],
+    "sourceMap": true,
+    "outDir": "./dist",
+    "incremental": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "esModuleInterop": true,
+    "preserveWatchOutput": true,
+    "baseUrl": "./",
+    "jsx": "react",
+    "types": ["vitest/globals"],
   },
-  "ts-node": {
-    "esm": true,
-  },
-  "exclude": ["build", "node_modules"],
+  "exclude": ["dist", "node_modules", "upload"],
 }
