@@ -1,5 +1,22 @@
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 
+export enum DiscordModal {
+  Env = 'envModal',
+  Logs = 'logsModal',
+  Compose = 'composeModal',
+}
+
+export enum DiscordButton {
+  Submit = 'submit',
+  OpenTicket = 'openTicket',
+}
+
+export enum DiscordField {
+  Env = 'env',
+  Logs = 'logs',
+  Source = 'source',
+}
+
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
 
 const docs = {
