@@ -4,12 +4,14 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { controllers } from 'src/controllers';
 import { BotCommands } from 'src/discord/commands';
 import { BotEvents } from 'src/discord/events';
+import { BotHelpTicket } from 'src/discord/help-ticket';
+import { BotComposeModal, BotEnvModal, BotLogsModal } from 'src/discord/modals';
 import { providers } from 'src/repositories';
 import { services } from 'src/services';
 import { DatabaseService } from 'src/services/database.service';
 
 const middleware = [{ provide: APP_PIPE, useValue: new ValidationPipe({ transform: true, whitelist: true }) }];
-const discord = [BotCommands, BotEvents];
+const discord = [BotCommands, BotEvents, BotHelpTicket, BotComposeModal, BotEnvModal, BotLogsModal];
 
 @Module({
   imports: [ScheduleModule.forRoot()],

@@ -44,7 +44,7 @@ async function sendHelpdeskWelcomeMessage(user: string, thread: ThreadChannel) {
 }
 
 @Discord()
-export class HelpTicket {
+export class BotHelpTicket {
   @ButtonComponent({ id: 'submit' })
   async handleSubmit(interaction: ButtonInteraction): Promise<void> {
     const thread = interaction.message.channel as ThreadChannel;
