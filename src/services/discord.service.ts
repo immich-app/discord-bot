@@ -1,6 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DateTime } from 'luxon';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, HELP_TEXTS, linkCommands } from 'src/constants';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -150,17 +152,24 @@ export class DiscordService {
 
   private async onReady() {
     this.logger.log('Bot.onReady');
-    const { commitSha: sha } = getConfig();
-    const commit = sha && `[${sha.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})`;
-    const fullVersion = commit && `${process.env.npm_package_version}@${commit}`;
 
     // Synchronize applications commands with Discord
     await this.discord.initApplicationCommands();
 
-    this.logger.log(`Bot ${fullVersion} started`);
+    const { commitSha: sha } = getConfig();
 
-    if (fullVersion) {
-      await this.discord.sendMessage(DiscordChannel.BotSpam, `I'm alive, running ${fullVersion}!`);
+    try {
+      const commit = sha && `[${sha.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})`;
+      const pkg = await readFile(join(__dirname, '..', '..', 'package.json'));
+      const { version } = JSON.parse(pkg.toString());
+      const fullVersion = commit && `${version}@${commit}`;
+      this.logger.log(`Bot ${fullVersion} started`);
+
+      if (fullVersion) {
+        await this.discord.sendMessage(DiscordChannel.BotSpam, `I'm alive, running ${fullVersion}!`);
+      }
+    } catch (error: Error | any) {
+      this.logger.error(`Unable to send ready message:${error}`, error?.stack);
     }
   }
 
