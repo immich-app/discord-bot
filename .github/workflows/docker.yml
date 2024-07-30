@@ -55,7 +55,7 @@ jobs:
             type=ref,event=tag
 
       - name: Build and push image
-        uses: docker/build-push-action@v4.2.1
+        uses: docker/build-push-action@v6.5.0
         with:
           platforms: linux/amd64,linux/arm64
           # Skip pushing when PR
