@@ -16,7 +16,6 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
-  initApplicationCommands: vitest.fn(),
   sendMessage: vitest.fn(),
 });
 
