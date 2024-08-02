@@ -17,6 +17,15 @@ export enum DiscordField {
   Source = 'source',
 }
 
+export enum GithubRepo {
+  Immich = 'immich',
+  StaticPages = 'static-pages',
+}
+
+export enum GithubOrg {
+  ImmichApp = 'immich-app',
+}
+
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
 
 const docs = {

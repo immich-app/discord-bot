@@ -8,7 +8,9 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   search: vitest.fn(),
   getDiscussion: vitest.fn(),
   getForkCount: vitest.fn(),
-  getIssueOrPr: vitest.fn(),
+  getIssueOrPr: vitest
+    .fn()
+    .mockImplementation((org, repo, id) => Promise.resolve(`https://github.com/${org}/${repo}/pull/${id}`)),
   getStarCount: vitest.fn(),
 });
 
@@ -181,39 +183,33 @@ describe('Bot test', () => {
 
   describe('handleGithubReferences', () => {
     it.each([
-      { name: 'find single reference', content: '#4242', referenceCount: 1 },
-      { name: 'find multiple references', content: '#4242 #6969', referenceCount: 2 },
+      {
+        name: 'single reference',
+        message: '#4242',
+        links: ['https://github.com/immich-app/immich/pull/4242'],
+      },
+      {
+        name: 'multiple references',
+        message: '#4242 #6969',
+        links: ['https://github.com/immich-app/immich/pull/4242', 'https://github.com/immich-app/immich/pull/6969'],
+      },
       {
         name: 'ignore unusual references if multiple references are present',
-        content: '#123 #4242',
-        referenceCount: 1,
+        message: '#123 #4242',
+        links: ['https://github.com/immich-app/immich/pull/4242'],
       },
-      { name: 'find single unusual reference', content: '#123', referenceCount: 1 },
-      { name: 'ignore references in code blocks', content: '```#4242 #123``` #6969', referenceCount: 1 },
-    ])('should $name for PRs', async ({ content, referenceCount }) => {
-      githubMock.getIssueOrPr.mockResolvedValue('https://some-github-link/<id>');
-
-      await expect(sut.handleGithubReferences(content)).resolves.toEqual(
-        Array(referenceCount).fill('https://some-github-link/<id>'),
-      );
-    });
-
-    it.each([
-      { name: 'find single reference', content: '#4242', referenceCount: 1 },
-      { name: 'find multiple references', content: '#4242 #6969', referenceCount: 2 },
       {
-        name: 'ignore unusual references if multiple references are present',
-        content: '#123 #4242',
-        referenceCount: 1,
+        name: 'find single unusual reference',
+        message: '#123',
+        links: ['https://github.com/immich-app/immich/pull/123'],
       },
-      { name: 'find single unusual reference', content: '#123', referenceCount: 1 },
-      { name: 'ignore references in code blocks', content: '```#4242 #123``` #6969', referenceCount: 1 },
-    ])('should $name for discussions', async ({ content, referenceCount }) => {
-      githubMock.getDiscussion.mockResolvedValue('https://some-github-link/<id>');
-
-      await expect(sut.handleGithubReferences(content)).resolves.toEqual(
-        Array(referenceCount).fill('https://some-github-link/<id>'),
-      );
+      {
+        name: 'ignore references in code blocks',
+        message: '```#4242 #123``` #6969',
+        links: ['https://github.com/immich-app/immich/pull/6969'],
+      },
+    ])('should $name', async ({ message: message, links }) => {
+      await expect(sut.handleGithubReferences(message)).resolves.toEqual(links);
     });
   });
 });
