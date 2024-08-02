@@ -56,7 +56,7 @@ export class DiscordEvents {
     if (!_.isEqual(oldMessage.embeds, newMessage.embeds)) {
       this.logger.verbose('Removing embeds', oldMessage.embeds, newMessage.embeds);
       const urls = newMessage.embeds.map((embed) => embed.url).filter((url): url is string => !!url);
-      if (await this.service.hasBlacklistUrl(urls)) {
+      if (this.service.hasBlacklistUrl(urls)) {
         await newMessage.suppressEmbeds(true);
       }
     } else {

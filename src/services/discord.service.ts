@@ -57,11 +57,6 @@ export class DiscordService {
     if (versionMessage) {
       await this.discord.sendMessage(DiscordChannel.BotSpam, `I'm alive, running ${versionMessage}!`);
     }
-
-    // Synchronize applications commands with Discord
-    this.logger.log('Synchronizing application commands with Discord');
-    await this.discord.initApplicationCommands();
-    this.logger.log('Finished synchronizing applications commands');
   }
 
   async onError(error: Error) {

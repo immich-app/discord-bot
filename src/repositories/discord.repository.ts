@@ -26,17 +26,13 @@ const bot = new Client({
 export class DiscordRepository implements IDiscordInterface {
   constructor() {
     bot
+      .once('ready', async () => await bot.initApplicationCommands())
       .on('interactionCreate', (interaction) => bot.executeInteraction(interaction) as Promise<void>)
       .on('messageCreate', (message) => bot.executeCommand(message) as Promise<void>);
   }
 
   async login(token: string) {
     await bot.login(token);
-  }
-
-  async initApplicationCommands(): Promise<void> {
-    // await bot.clearApplicationCommands();
-    await bot.initApplicationCommands();
   }
 
   async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<void> {

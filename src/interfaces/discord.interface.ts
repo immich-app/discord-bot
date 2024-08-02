@@ -19,6 +19,5 @@ export enum DiscordEvents {
 
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
-  initApplicationCommands(): Promise<void>;
   sendMessage(channel: DiscordChannel, message: string | MessageCreateOptions): Promise<void>;
 }
