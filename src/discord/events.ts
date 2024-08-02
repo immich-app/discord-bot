@@ -5,7 +5,7 @@ import _ from 'lodash';
 import { Constants } from 'src/constants';
 import { DiscordService } from 'src/services/discord.service';
 
-const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub];
+const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
 
 @Discord()
 @Injectable()
