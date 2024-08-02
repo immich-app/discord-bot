@@ -19,12 +19,7 @@ export class DiscordService {
   constructor(
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IGithubInterface) private github: IGithubInterface,
-  ) {
-    this.discord
-      //
-      .once('ready', () => this.onReady())
-      .on('error', (error) => this.onError(error));
-  }
+  ) {}
 
   async init() {
     const { bot } = getConfig();
@@ -36,6 +31,40 @@ export class DiscordService {
   @Cron(Constants.Cron.ImmichBirthday)
   async onBirthday() {
     await this.discord.sendMessage(DiscordChannel.General, `"Happy birthday my other child" - Alex`);
+  }
+
+  private async getVersionMessage() {
+    try {
+      const { commitSha: sha } = getConfig();
+      const commit = sha && `[${sha.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})`;
+      const pkg = await readFile(join(__dirname, '..', '..', 'package.json'));
+      const { version } = JSON.parse(pkg.toString());
+      return commit && `${version}@${commit}`;
+    } catch (error: Error | any) {
+      this.logger.error(`Unable to send ready message:${error}`, error?.stack);
+      return 'Unknown version';
+    }
+  }
+
+  async onReady() {
+    this.logger.verbose('DiscordBot.onReady');
+
+    const versionMessage = await this.getVersionMessage();
+    this.logger.log(`Bot ${versionMessage} started`);
+
+    if (versionMessage) {
+      await this.discord.sendMessage(DiscordChannel.BotSpam, `I'm alive, running ${versionMessage}!`);
+    }
+
+    // Synchronize applications commands with Discord
+    this.logger.log('Synchronizing application commands with Discord');
+    await this.discord.initApplicationCommands();
+    this.logger.log('Finished synchronizing applications commands');
+  }
+
+  async onError(error: Error) {
+    this.logger.verbose(`DiscordBot.onError - ${error}`);
+    await logError('Discord bot error', error, { discord: this.discord, logger: this.logger });
   }
 
   getHelpMessage(name: keyof typeof HELP_TEXTS) {
@@ -120,7 +149,7 @@ export class DiscordService {
         };
       });
     } catch (error) {
-      console.log('Could not fetch search results from GitHub');
+      this.logger.log('Could not fetch search results from GitHub');
       return [];
     }
   }
@@ -148,32 +177,5 @@ export class DiscordService {
 
   getPrOrIssue(id: string) {
     return this.github.getIssueOrPr(id);
-  }
-
-  private async onReady() {
-    this.logger.log('Bot.onReady');
-
-    // Synchronize applications commands with Discord
-    await this.discord.initApplicationCommands();
-
-    const { commitSha: sha } = getConfig();
-
-    try {
-      const commit = sha && `[${sha.substring(0, 8)}](https://github.com/immich-app/discord-bot/commit/${sha})`;
-      const pkg = await readFile(join(__dirname, '..', '..', 'package.json'));
-      const { version } = JSON.parse(pkg.toString());
-      const fullVersion = commit && `${version}@${commit}`;
-      this.logger.log(`Bot ${fullVersion} started`);
-
-      if (fullVersion) {
-        await this.discord.sendMessage(DiscordChannel.BotSpam, `I'm alive, running ${fullVersion}!`);
-      }
-    } catch (error: Error | any) {
-      this.logger.error(`Unable to send ready message:${error}`, error?.stack);
-    }
-  }
-
-  private async onError(error: Error) {
-    await logError('Discord bot error', error, { discord: this.discord, logger: this.logger });
   }
 }

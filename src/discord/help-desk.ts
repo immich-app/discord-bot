@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ActionRowBuilder,
   AnyThreadChannel,
@@ -36,7 +37,9 @@ enum UploadFileType {
 }
 
 @Discord()
-export class BotHelpDesk {
+export class DiscordHelpDesk {
+  private logger = new Logger(DiscordHelpDesk.name);
+
   @Slash({ name: 'helpdesk', description: 'Trigger help desk message' })
   async handleCreate(interaction: CommandInteraction) {
     if (!interaction.channel?.isThread() || interaction.channel.parentId !== DiscordChannel.HelpDesk) {
@@ -215,7 +218,7 @@ export class BotHelpDesk {
     try {
       await this.sendWelcomeMessage(user, t);
     } catch (e) {
-      console.error('Retrying helpdesk welcome message:', e);
+      this.logger.error('Retrying helpdesk welcome message:', e);
       setTimeout(async () => await this.sendWelcomeMessage(user, t), 5000);
     }
   }

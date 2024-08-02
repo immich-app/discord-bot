@@ -14,7 +14,6 @@ export class NoopRegistryEngine implements IDependencyRegistryEngine {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getService<T>(_classType: T): InstanceOf<T> | null {
-    console.log('NoopRegistryEngine.getService');
     return null;
   }
 }
@@ -34,7 +33,10 @@ async function bootstrap() {
   const port = Number(process.env.IMMICH_PORT) || 8080;
 
   DIService.engine = new NoopRegistryEngine();
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { cors: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    logger: ['error', 'warn', 'log', 'debug', 'verbose'],
+    cors: true,
+  });
   DIService.engine = new NestjsRegistryEngine(app);
 
   await app.get(DiscordService).init();

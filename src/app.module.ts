@@ -2,15 +2,15 @@ import { Module, OnModuleInit, ValidationPipe } from '@nestjs/common';
 import { APP_PIPE } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { controllers } from 'src/controllers';
-import { BotCommands } from 'src/discord/commands';
-import { BotEvents } from 'src/discord/events';
-import { BotHelpDesk } from 'src/discord/help-desk';
+import { DiscordCommands } from 'src/discord/commands';
+import { DiscordEvents } from 'src/discord/events';
+import { DiscordHelpDesk } from 'src/discord/help-desk';
 import { providers } from 'src/repositories';
 import { services } from 'src/services';
 import { DatabaseService } from 'src/services/database.service';
 
 const middleware = [{ provide: APP_PIPE, useValue: new ValidationPipe({ transform: true, whitelist: true }) }];
-const discord = [BotCommands, BotEvents, BotHelpDesk];
+const discord = [DiscordCommands, DiscordEvents, DiscordHelpDesk];
 
 @Module({
   imports: [ScheduleModule.forRoot()],

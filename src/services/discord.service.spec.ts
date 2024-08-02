@@ -13,8 +13,6 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
-  once: vitest.fn() as any,
-  on: vitest.fn() as any,
   login: vitest.fn(),
   initApplicationCommands: vitest.fn(),
   sendMessage: vitest.fn(),
@@ -28,9 +26,6 @@ describe('Bot test', () => {
 
   beforeEach(() => {
     discordMock = newDiscordMockRepository();
-    discordMock.on.mockReturnValue(discordMock);
-    discordMock.once.mockReturnValue(discordMock);
-
     githubMock = newGithubMockRepository();
 
     sut = new DiscordService(discordMock, githubMock);

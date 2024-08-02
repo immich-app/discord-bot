@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { RequestError } from '@octokit/request-error';
 import { Octokit } from '@octokit/rest';
 import { Constants, IMMICH_REPOSITORY_BASE_OPTIONS } from 'src/constants';
@@ -6,6 +7,8 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 const octokit = new Octokit();
 
 export class GithubRepository implements IGithubInterface {
+  private logger = new Logger(GithubRepository.name);
+
   async getIssueOrPr(id: string) {
     try {
       const response = await octokit.rest.issues.get({
@@ -17,7 +20,7 @@ export class GithubRepository implements IGithubInterface {
       return `[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`;
     } catch (error) {
       if (error instanceof RequestError && error.status !== 404) {
-        console.log(`Could not fetch #${id}`);
+        this.logger.log(`Could not fetch #${id}`);
       }
     }
   }
@@ -30,7 +33,7 @@ export class GithubRepository implements IGithubInterface {
         return `[Discussion] ([#${id}](${Constants.Urls.Discussions}/${id}))`;
       }
     } catch (error) {
-      console.log(`Could not fetch #${id}`);
+      this.logger.log(`Could not fetch #${id}`);
     }
   }
 

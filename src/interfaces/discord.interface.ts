@@ -18,8 +18,6 @@ export enum DiscordEvents {
 }
 
 export interface IDiscordInterface {
-  once(event: 'ready', listener: () => void): this;
-  on(event: 'error', listener: (error: Error) => void): this;
   login(token: string): Promise<void>;
   initApplicationCommands(): Promise<void>;
   sendMessage(channel: DiscordChannel, message: string | MessageCreateOptions): Promise<void>;
