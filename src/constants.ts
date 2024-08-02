@@ -49,7 +49,6 @@ const icons = {
 };
 
 const urls = {
-  Discussions: 'https://github.com/immich-app/immich/discussions',
   FeatureRequest: 'https://github.com/immich-app/immich/discussions/new?category=feature-request',
   GitHub: 'https://github.com',
   GitHubRepoApi: 'https://api.github.com/repos/immich-app/immich',

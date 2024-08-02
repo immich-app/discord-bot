@@ -1,24 +1,20 @@
 import { Logger } from '@nestjs/common';
 import { RequestError } from '@octokit/request-error';
 import { Octokit } from '@octokit/rest';
-import { Constants } from 'src/constants';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 
 const octokit = new Octokit();
 
+const makeLink = (org: string, repo: string, id: number, url: string) => `[${org}/${repo}#${id}](${url})`;
+
 export class GithubRepository implements IGithubInterface {
   private logger = new Logger(GithubRepository.name);
 
-  async getIssueOrPr(org: string, repo: string, id: string) {
+  async getIssueOrPr(org: string, repo: string, id: number) {
     try {
-      const response = await octokit.rest.issues.get({
-        owner: org,
-        repo,
-        issue_number: Number(id),
-      });
-
+      const response = await octokit.rest.issues.get({ owner: org, repo, issue_number: id });
       const type = response.data.pull_request ? 'Pull Request' : 'Issue';
-      return `[${type}] ${response.data.title} ([#${id}](${response.data.html_url}))`;
+      return `[${type}] ${response.data.title} (${makeLink(org, repo, id, response.data.html_url)})`;
     } catch (error) {
       if (error instanceof RequestError && error.status !== 404) {
         this.logger.log(`Could not fetch #${id}`);
@@ -26,12 +22,13 @@ export class GithubRepository implements IGithubInterface {
     }
   }
 
-  async getDiscussion(id: string) {
+  async getDiscussion(org: string, repo: string, id: number) {
+    const url = `https://github.com/${org}/${repo}/discussions/${id}`;
     try {
-      const { status } = await fetch(`${Constants.Urls.Discussions}/${id}}`);
+      const { status } = await fetch(url);
 
       if (status === 200) {
-        return `[Discussion] ([#${id}](${Constants.Urls.Discussions}/${id}))`;
+        return `[Discussion] (${makeLink(org, repo, id, url)})`;
       }
     } catch (error) {
       this.logger.log(`Could not fetch #${id}`);
