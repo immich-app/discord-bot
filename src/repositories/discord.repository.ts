@@ -35,7 +35,7 @@ export class DiscordRepository implements IDiscordInterface {
   }
 
   async initApplicationCommands(): Promise<void> {
-    await bot.clearApplicationCommands();
+    // await bot.clearApplicationCommands();
     await bot.initApplicationCommands();
   }
 
