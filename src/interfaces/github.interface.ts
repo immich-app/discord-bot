@@ -21,8 +21,8 @@ export interface SearchResult {
 }
 
 export interface IGithubInterface {
-  getIssueOrPr(org: GithubOrg | string, repo: GithubRepo | string, id: string): Promise<string | undefined>;
-  getDiscussion(org: GithubOrg | string, repo: GithubRepo | string, id: string): Promise<string | undefined>;
+  getIssueOrPr(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
+  getDiscussion(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
   getForkCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   getStarCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   search(options: SearchOptions): Promise<SearchResult>;

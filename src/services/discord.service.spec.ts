@@ -194,19 +194,42 @@ describe('Bot test', () => {
         links: ['https://github.com/immich-app/immich/pull/4242', 'https://github.com/immich-app/immich/pull/6969'],
       },
       {
-        name: 'ignore unusual references if multiple references are present',
+        name: 'ignore a single reference under 1000',
         message: '#123 #4242',
         links: ['https://github.com/immich-app/immich/pull/4242'],
       },
       {
-        name: 'find single unusual reference',
-        message: '#123',
-        links: ['https://github.com/immich-app/immich/pull/123'],
+        name: 'ignore a single reference under 1000, but find another one',
+        message: '#123 #4242',
+        links: ['https://github.com/immich-app/immich/pull/4242'],
       },
       {
         name: 'ignore references in code blocks',
-        message: '```#4242 #123``` #6969',
+        message: '```#4242 #1234``` #6969',
         links: ['https://github.com/immich-app/immich/pull/6969'],
+      },
+      {
+        name: 'single reference for another immich repo',
+        message: 'static-pages#4242',
+        links: ['https://github.com/immich-app/static-pages/pull/4242'],
+      },
+      {
+        name: 'single reference for another repo',
+        message: 'octokit/rest.js#4242',
+        links: ['https://github.com/octokit/rest.js/pull/4242'],
+      },
+      {
+        name: 'return all the links',
+        message: ['#1234', 'immich#123', 'static-pages#123', 'immich-app/static-pages#123', 'octokit/rest.js#123'].join(
+          '\n',
+        ),
+        links: [
+          'https://github.com/immich-app/immich/pull/1234',
+          'https://github.com/immich-app/immich/pull/123',
+          'https://github.com/immich-app/static-pages/pull/123',
+          'https://github.com/immich-app/static-pages/pull/123',
+          'https://github.com/octokit/rest.js/pull/123',
+        ],
       },
     ])('should $name', async ({ message: message, links }) => {
       await expect(sut.handleGithubReferences(message)).resolves.toEqual(links);

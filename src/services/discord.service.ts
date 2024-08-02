@@ -157,24 +157,34 @@ export class DiscordService {
   }
 
   async handleGithubReferences(content: string) {
-    content = content.replaceAll(/```.*```/gs, '');
-    const matches = content.matchAll(/(^|\W)#(?<id>[0-9]+)/g);
-    const ids = new Set<string>();
+    const candidates: Array<{ org: GithubOrg | string; repo: GithubRepo | string; id: number }> = [];
+
+    const matches = content
+      .replaceAll(/```.*```/gs, '')
+      .matchAll(/(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g);
+
     for (const match of matches) {
-      const id = match?.groups?.id;
-      if (!id) {
+      if (!match || !match.groups) {
         continue;
       }
 
-      ids.add(id);
+      const { org, repo, num } = match.groups;
+      const id = Number(num);
+      if (Number.isNaN(id)) {
+        continue;
+      }
+
+      if (!org && !repo && id < 1000) {
+        continue;
+      }
+
+      candidates.push({ org: org || GithubOrg.ImmichApp, repo: repo || GithubRepo.Immich, id });
     }
 
-    const filteredIds = ids.size > 1 ? [...ids].filter((id) => Number(id) > 500 && Number(id) < 15000) : [...ids];
     const links = await Promise.all(
-      filteredIds.map(
-        async (id) =>
-          (await this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id)) ||
-          (await this.github.getDiscussion(GithubOrg.ImmichApp, GithubRepo.Immich, id)),
+      candidates.map(
+        async ({ org, repo, id }) =>
+          (await this.github.getIssueOrPr(org, repo, id)) || (await this.github.getDiscussion(org, repo, id)),
       ),
     );
 
@@ -191,7 +201,7 @@ export class DiscordService {
     return false;
   }
 
-  getPrOrIssue(id: string) {
+  getPrOrIssue(id: number) {
     return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
   }
 }

@@ -109,7 +109,7 @@ export class DiscordCommands {
       return interaction.respond(message);
     }
 
-    const content = await this.service.getPrOrIssue(id);
+    const content = await this.service.getPrOrIssue(Number(id));
     return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
   }
 }
