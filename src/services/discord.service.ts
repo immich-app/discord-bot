@@ -9,6 +9,8 @@ import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interf
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { logError } from 'src/util';
 
+const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
+
 const _star_history: Record<string, number | undefined> = {};
 const _fork_history: Record<string, number | undefined> = {};
 
@@ -173,6 +175,16 @@ export class DiscordService {
     );
 
     return links.filter((link): link is string => link !== undefined);
+  }
+
+  hasBlacklistUrl(urls: string[]) {
+    for (const url of urls) {
+      if (PREVIEW_BLACKLIST.some((blacklist) => url.startsWith(blacklist))) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   getPrOrIssue(id: string) {
