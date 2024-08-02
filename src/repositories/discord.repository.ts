@@ -1,6 +1,5 @@
 import { IntentsBitField, MessageCreateOptions, Partials } from 'discord.js';
 import { Client } from 'discordx';
-import EventEmitter from 'node:events';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
 const bot = new Client({
@@ -24,13 +23,9 @@ const bot = new Client({
   partials: [Partials.Message, Partials.Reaction],
 });
 
-export class DiscordRepository extends EventEmitter implements IDiscordInterface {
+export class DiscordRepository implements IDiscordInterface {
   constructor() {
-    super();
-
     bot
-      .on('ready', () => void this.emit('ready'))
-      .on('error', (error) => void this.emit('error', error))
       .on('interactionCreate', (interaction) => bot.executeInteraction(interaction) as Promise<void>)
       .on('messageCreate', (message) => bot.executeCommand(message) as Promise<void>);
   }
@@ -39,8 +34,9 @@ export class DiscordRepository extends EventEmitter implements IDiscordInterface
     await bot.login(token);
   }
 
-  initApplicationCommands(): Promise<void> {
-    return bot.initApplicationCommands();
+  async initApplicationCommands(): Promise<void> {
+    await bot.clearApplicationCommands();
+    await bot.initApplicationCommands();
   }
 
   async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<void> {

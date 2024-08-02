@@ -7,7 +7,7 @@ export const logError = async (message: string, error: unknown, { discord, logge
   try {
     await discord.sendMessage(DiscordChannel.BotSpam, `${message}: ${error}`);
   } catch (error) {
-    console.error('Failed to send error message to bot spam channel', error);
+    logger.error('Failed to send error message to bot spam channel', error);
   }
 };
 

@@ -12,7 +12,7 @@ import { DiscordService } from 'src/services/discord.service';
 
 @Discord()
 @Injectable()
-export class BotCommands {
+export class DiscordCommands {
   constructor(private service: DiscordService) {}
 
   @Slash({ name: 'age', description: 'Immich age' })
