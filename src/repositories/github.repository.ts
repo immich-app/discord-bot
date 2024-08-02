@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { RequestError } from '@octokit/request-error';
 import { Octokit } from '@octokit/rest';
-import { Constants, IMMICH_REPOSITORY_BASE_OPTIONS } from 'src/constants';
+import { Constants } from 'src/constants';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 
 const octokit = new Octokit();
@@ -9,10 +9,11 @@ const octokit = new Octokit();
 export class GithubRepository implements IGithubInterface {
   private logger = new Logger(GithubRepository.name);
 
-  async getIssueOrPr(id: string) {
+  async getIssueOrPr(org: string, repo: string, id: string) {
     try {
       const response = await octokit.rest.issues.get({
-        ...IMMICH_REPOSITORY_BASE_OPTIONS,
+        owner: org,
+        repo,
         issue_number: Number(id),
       });
 
@@ -37,12 +38,12 @@ export class GithubRepository implements IGithubInterface {
     }
   }
 
-  async getStarCount() {
-    return octokit.rest.repos.get(IMMICH_REPOSITORY_BASE_OPTIONS).then((repo) => repo.data.stargazers_count);
+  async getStarCount(org: string, repo: string) {
+    return octokit.rest.repos.get({ owner: org, repo }).then((repo) => repo.data.stargazers_count);
   }
 
-  async getForkCount() {
-    return octokit.rest.repos.get(IMMICH_REPOSITORY_BASE_OPTIONS).then((repo) => repo.data.forks_count);
+  async getForkCount(org: string, repo: string) {
+    return octokit.rest.repos.get({ owner: org, repo }).then((repo) => repo.data.forks_count);
   }
 
   async search({

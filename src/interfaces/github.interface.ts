@@ -1,3 +1,5 @@
+import { GithubOrg, GithubRepo } from 'src/constants';
+
 export const IGithubInterface = 'IGithubRepository';
 
 export interface SearchOptions {
@@ -19,9 +21,9 @@ export interface SearchResult {
 }
 
 export interface IGithubInterface {
-  getIssueOrPr(id: string): Promise<string | undefined>;
-  getDiscussion(id: string): Promise<string | undefined>;
-  getForkCount(): Promise<number>;
-  getStarCount(): Promise<number>;
+  getIssueOrPr(org: GithubOrg | string, repo: GithubRepo | string, id: string): Promise<string | undefined>;
+  getDiscussion(org: GithubOrg | string, repo: GithubRepo | string, id: string): Promise<string | undefined>;
+  getForkCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
+  getStarCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   search(options: SearchOptions): Promise<SearchResult>;
 }

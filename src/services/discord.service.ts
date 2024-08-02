@@ -4,7 +4,7 @@ import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
-import { Constants, HELP_TEXTS, linkCommands } from 'src/constants';
+import { Constants, GithubOrg, GithubRepo, HELP_TEXTS, linkCommands } from 'src/constants';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { logError } from 'src/util';
@@ -100,7 +100,7 @@ export class DiscordService {
     const lastStarsCount = _star_history[channelId];
 
     try {
-      const starsCount = await this.github.getStarCount();
+      const starsCount = await this.github.getStarCount(GithubOrg.ImmichApp, GithubRepo.Immich);
       const delta = lastStarsCount && starsCount - lastStarsCount;
       const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
 
@@ -117,7 +117,7 @@ export class DiscordService {
     const lastForksCount = _fork_history[channelId];
 
     try {
-      const forksCount = await this.github.getForkCount();
+      const forksCount = await this.github.getForkCount(GithubOrg.ImmichApp, GithubRepo.Immich);
       const delta = lastForksCount && forksCount - lastForksCount;
       const formattedDelta = delta && Intl.NumberFormat(undefined, { signDisplay: 'always' }).format(delta);
 
@@ -171,7 +171,11 @@ export class DiscordService {
 
     const filteredIds = ids.size > 1 ? [...ids].filter((id) => Number(id) > 500 && Number(id) < 15000) : [...ids];
     const links = await Promise.all(
-      filteredIds.map(async (id) => (await this.github.getIssueOrPr(id)) || (await this.github.getDiscussion(id))),
+      filteredIds.map(
+        async (id) =>
+          (await this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id)) ||
+          (await this.github.getDiscussion(GithubOrg.ImmichApp, GithubRepo.Immich, id)),
+      ),
     );
 
     return links.filter((link): link is string => link !== undefined);
@@ -188,6 +192,6 @@ export class DiscordService {
   }
 
   getPrOrIssue(id: string) {
-    return this.github.getIssueOrPr(id);
+    return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
   }
 }
