@@ -20,42 +20,43 @@ export enum DiscordField {
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
 
 const docs = {
-  Logs: 'https://immich.app/docs/guides/docker-help#logs',
-  ReverseProxy: 'https://immich.app/docs/administration/reverse-proxy',
-  Containers: 'https://immich.app/docs/guides/docker-help#containers',
-  Queries: 'https://immich.app/docs/guides/database-queries',
-  Upgrade: 'https://immich.app/docs/install/docker-compose#step-4---upgrading',
-  Libraries: 'https://immich.app/docs/features/libraries',
-  Sidecar: 'https://immich.app/docs/features/xmp-sidecars',
-  Docker: 'https://immich.app/docs/guides/docker-help',
   Backup: 'https://immich.app/docs/administration/backup-and-restore',
   CLI: 'https://immich.app/docs/features/command-line-interface',
+  Containers: 'https://immich.app/docs/guides/docker-help#containers',
+  Docker: 'https://immich.app/docs/guides/docker-help',
   FAQ: 'https://immich.app/docs/FAQ',
+  Libraries: 'https://immich.app/docs/features/libraries',
+  Logs: 'https://immich.app/docs/guides/docker-help#logs',
+  Queries: 'https://immich.app/docs/guides/database-queries',
+  ReverseProxy: 'https://immich.app/docs/administration/reverse-proxy',
+  Sidecar: 'https://immich.app/docs/features/xmp-sidecars',
+  Upgrade: 'https://immich.app/docs/install/docker-compose#step-4---upgrading',
 };
 
 const icons = {
   Checked: ':ballot_box_with_check:',
-  Unchecked: ':blue_square:',
   Immich: '<:immich:1216750773598294066>',
+  Unchecked: ':blue_square:',
 };
 
 const urls = {
-  Immich: 'https://immich.app',
-  ImmichRepo: 'https://github.com/immich-app/immich',
-  GitHub: 'https://github.com',
+  Discussions: 'https://github.com/immich-app/immich/discussions',
   FeatureRequest: 'https://github.com/immich-app/immich/discussions/new?category=feature-request',
-  Issues: 'https://github.com/immich-app/immich/issues',
+  GitHub: 'https://github.com',
   GitHubRepoApi: 'https://api.github.com/repos/immich-app/immich',
   GoogleTakeOut: 'https://github.com/immich-app/immich/discussions/1340',
+  Immich: 'https://immich.app',
+  ImmichRepo: 'https://github.com/immich-app/immich',
+  Issues: 'https://github.com/immich-app/immich/issues',
+  MyImmich: 'https://my.immich.app',
   Release: 'https://github.com/immich-app/immich/discussions?discussions_q=label%3Abreaking-change+sort%3Adate_created',
-  Discussions: 'https://github.com/immich-app/immich/discussions',
 };
 
 const tags = {
   Question: '1049704189686730823',
+  Ready: '1166852154292699207',
   Setup: '1049704231692677120',
   Usage: '1049704247517794315',
-  Ready: '1166852154292699207',
 };
 
 const roles = {
