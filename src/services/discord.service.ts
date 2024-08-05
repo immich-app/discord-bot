@@ -14,6 +14,14 @@ const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constan
 const _star_history: Record<string, number | undefined> = {};
 const _fork_history: Record<string, number | undefined> = {};
 
+type GithubLink = {
+  org: GithubOrg | string;
+  repo: GithubRepo | string;
+  id: number;
+  type?: LinkType;
+};
+type LinkType = 'issue' | 'pull' | 'discussion';
+
 @Injectable()
 export class DiscordService {
   private logger = new Logger(DiscordService.name);
@@ -152,13 +160,12 @@ export class DiscordService {
   }
 
   async handleGithubReferences(content: string) {
-    const candidates: Array<{ org: GithubOrg | string; repo: GithubRepo | string; id: number }> = [];
+    const links: GithubLink[] = [];
 
-    const matches = content
-      .replaceAll(/```.*```/gs, '')
-      .matchAll(/(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g);
+    content = content.replaceAll(/```.*```/gs, '');
 
-    for (const match of matches) {
+    const shortMatches = content.matchAll(/(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g);
+    for (const match of shortMatches) {
       if (!match || !match.groups) {
         continue;
       }
@@ -173,17 +180,48 @@ export class DiscordService {
         continue;
       }
 
-      candidates.push({ org: org || GithubOrg.ImmichApp, repo: repo || GithubRepo.Immich, id });
+      links.push({ org: org || GithubOrg.ImmichApp, repo: repo || GithubRepo.Immich, id });
     }
 
-    const links = await Promise.all(
-      candidates.map(
-        async ({ org, repo, id }) =>
-          (await this.github.getIssueOrPr(org, repo, id)) || (await this.github.getDiscussion(org, repo, id)),
-      ),
+    const longMatches = content.matchAll(
+      /https:\/\/github\.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/(?<category>(pull|issue|discussion))\/(?<num>\d+)/g,
+    );
+    for (const match of longMatches) {
+      if (!match || !match.groups) {
+        continue;
+      }
+
+      const { org, repo, category, num } = match.groups;
+      const id = Number(num);
+      if (Number.isNaN(id)) {
+        continue;
+      }
+
+      links.push({
+        id,
+        org: org || GithubOrg.ImmichApp,
+        repo: repo || GithubRepo.Immich,
+        type: category as LinkType,
+      });
+    }
+
+    const results = await Promise.all(
+      links.map(async ({ org, repo, id, type }) => {
+        switch (type) {
+          case 'issue':
+          case 'pull':
+            return this.github.getIssueOrPr(org, repo, id);
+
+          case 'discussion':
+            return this.github.getDiscussion(org, repo, id);
+
+          default:
+            return (await this.github.getIssueOrPr(org, repo, id)) || (await this.github.getDiscussion(org, repo, id));
+        }
+      }),
     );
 
-    return links.filter((link): link is string => link !== undefined);
+    return results.filter((link): link is string => link !== undefined);
   }
 
   hasBlacklistUrl(urls: string[]) {
