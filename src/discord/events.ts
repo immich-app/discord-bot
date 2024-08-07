@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { MessageFlags } from 'discord.js';
-import { ArgsOf, Discord, On, Once } from 'discordx';
+import { ArgsOf, Discord, On, Once, RestArgsOf } from 'discordx';
 import _ from 'lodash';
 import { DiscordService } from 'src/services/discord.service';
 
@@ -19,6 +19,11 @@ export class DiscordEvents {
 
   constructor(private service: DiscordService) {}
 
+  @On.rest({ event: 'restDebug' })
+  onDebug([message]: RestArgsOf<'restDebug'>) {
+    this.logger.debug(message);
+  }
+
   @Once({ event: 'ready' })
   async onReady() {
     await this.service.onReady();
@@ -31,9 +36,6 @@ export class DiscordEvents {
 
   @On({ event: 'messageCreate' })
   async onMessageCreate([message]: ArgsOf<'messageCreate'>) {
-    this.logger.verbose(
-      `DiscordBot.onMessageCreate [${message.author.username}] ${shorten(message.content)} ${message.embeds.length} - embed(s)`,
-    );
     if (message.author.bot) {
       return;
     }
