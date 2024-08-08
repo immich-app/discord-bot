@@ -55,7 +55,7 @@ export class DiscordRepository implements IDiscordInterface {
     bot
       .once('ready', async () => {
         // await bot.clearApplicationCommands();
-        await bot.initApplicationCommands();
+        // await bot.initApplicationCommands();
       })
       .on('interactionCreate', (interaction) => bot.executeInteraction(interaction) as Promise<void>)
       .on('messageCreate', (message) => bot.executeCommand(message) as Promise<void>);
