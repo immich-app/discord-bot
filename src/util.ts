@@ -27,3 +27,22 @@ export const withErrorLogging = async <T = unknown>(options: WithErrorOptions<T>
     return fallbackValue;
   }
 };
+
+export const getTotal = ({ server, client }: { server: number; client: number }) => {
+  return '$' + (server * 100 + client * 25).toLocaleString();
+};
+
+export const makeLicenseFields = ({ server, client }: { server: number; client: number }) => {
+  return [
+    {
+      name: 'Server licenses',
+      value: `$${(server * 100).toLocaleString()} - ${server.toLocaleString()} licenses`,
+      inline: true,
+    },
+    {
+      name: 'Client licenses',
+      value: `$${(client * 25).toLocaleString()} - ${client.toLocaleString()} licenses`,
+      inline: true,
+    },
+  ];
+};

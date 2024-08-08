@@ -4,7 +4,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
 import { getConfig } from 'src/config';
-import { Database, IDatabaseRepository, LicenseType, NewPayment } from 'src/interfaces/database.interface';
+import {
+  Database,
+  IDatabaseRepository,
+  LicenseCountOptions,
+  LicenseType,
+  NewPayment,
+} from 'src/interfaces/database.interface';
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
@@ -50,14 +56,36 @@ export class DatabaseRepository implements IDatabaseRepository {
     await this.db.insertInto('payment').values(entity).execute();
   }
 
-  async getTotalLicenseCount() {
-    const result = await this.db
+  async getTotalLicenseCount(options: LicenseCountOptions) {
+    const { day, week, month } = options || {};
+    let builder = this.db
       .selectFrom('payment')
       .select([(b) => b.fn.count<number>('description').as('product_count'), 'description'])
-      .where('livemode', '=', true)
-      .where('status', '=', 'succeeded')
       .groupBy('description')
-      .execute();
+      .where('livemode', '=', true)
+      .where('status', '=', 'succeeded');
+
+    if (day) {
+      builder = builder.where((eq) =>
+        eq.between('created', day.minus({ days: 1 }).toUnixInteger(), day.toUnixInteger()),
+      );
+    }
+
+    if (week) {
+      builder = builder.where((eq) =>
+        eq.between('created', week.minus({ week: 1 }).toUnixInteger(), week.toUnixInteger()),
+      );
+    }
+
+    if (month) {
+      builder = builder.where((eq) =>
+        eq.between('created', month.minus({ month: 1 }).toUnixInteger(), month.toUnixInteger()),
+      );
+    }
+
+    this.logger.log(`Query: ${builder.compile().sql}`);
+
+    const result = await builder.execute();
 
     return {
       server: result.find((r) => r.description === 'immich-server')?.product_count || 0,

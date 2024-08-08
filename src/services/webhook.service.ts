@@ -4,7 +4,7 @@ import { getConfig } from 'src/config';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
-import { withErrorLogging } from 'src/util';
+import { makeLicenseFields, withErrorLogging } from 'src/util';
 
 const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dto is GithubStatusIncident => {
   return !!(dto as GithubStatusIncident).incident;
@@ -112,20 +112,9 @@ export class WebhookService {
           .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
           .setURL(`https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`)
           .setAuthor({ name: 'Stripe Payments', url: 'https://stripe.com' })
-          .setDescription(`Price: ${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`)
+          .setDescription(`Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`)
           .setColor(livemode ? Colors.Green : Colors.Yellow)
-          .setFields([
-            {
-              name: 'Server licenses',
-              value: `$${(server * 99.99).toFixed(2)} - ${server} licenses`,
-              inline: true,
-            },
-            {
-              name: 'Client licenses',
-              value: `$${(client * 24.99).toFixed(2)} - ${client} licenses`,
-              inline: true,
-            },
-          ]),
+          .setFields(makeLicenseFields({ server, client })),
       ],
     });
   }
