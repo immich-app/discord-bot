@@ -71,10 +71,6 @@ const roles = {
   Contributor: '980972470964215870',
 };
 
-const cron = {
-  ImmichBirthday: '36 4 3 2 *',
-};
-
 export const Constants = {
   Urls: {
     Docs: docs,
@@ -83,7 +79,11 @@ export const Constants = {
   Icons: icons,
   Roles: roles,
   Tags: tags,
-  Cron: cron,
+  Cron: {
+    ImmichBirthday: '36 4 3 2 *',
+    DailyReport: '0 12 * * *',
+    WeeklyReport: '0 12 * * 4',
+  },
 };
 
 export const linkCommands: Record<string, string> = {

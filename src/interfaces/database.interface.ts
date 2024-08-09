@@ -1,4 +1,5 @@
 import { Insertable, JSONColumnType, Selectable, Updateable } from 'kysely';
+import { DateTime } from 'luxon';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
 
@@ -45,9 +46,15 @@ export interface Database {
   sponsor: SponsorTable;
 }
 
+export type LicenseCountOptions = {
+  day?: DateTime;
+  week?: DateTime;
+  month?: DateTime;
+};
+
 export interface IDatabaseRepository {
   runMigrations(): Promise<void>;
   createPayment(entitY: NewPayment): Promise<void>;
-  getTotalLicenseCount(): Promise<{ server: number; client: number }>;
+  getTotalLicenseCount(options?: LicenseCountOptions): Promise<{ server: number; client: number }>;
   getSponsorLicenses(githubUsername: string): Promise<License[]>;
 }
