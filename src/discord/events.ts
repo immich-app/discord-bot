@@ -42,7 +42,10 @@ export class DiscordEvents {
 
     const links = await this.service.handleGithubReferences(message.content);
     if (links.length !== 0) {
-      await message.reply({ content: links.join('\n'), flags: [MessageFlags.SuppressEmbeds] });
+      await message.reply({
+        content: links.join('\n'),
+        flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
+      });
     }
   }
 
