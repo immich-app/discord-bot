@@ -83,6 +83,7 @@ export const Constants = {
     ImmichBirthday: '36 4 3 2 *',
     DailyReport: '0 12 * * *',
     WeeklyReport: '0 12 * * 4',
+    MonthlyReport: '0 12 19 * *',
   },
 };
 

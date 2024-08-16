@@ -46,4 +46,21 @@ export class ReportService {
       ],
     });
   }
+
+  @Cron(Constants.Cron.MonthlyReport)
+  async onMonthlyReport() {
+    const endOfYesterday = DateTime.now().minus({ days: 1 }).endOf('day');
+    const lastMonth = endOfYesterday.minus({ months: 1 });
+    const { server, client } = await this.database.getTotalLicenseCount({ month: endOfYesterday });
+
+    await this.discord.sendMessage(DiscordChannel.Stripe, {
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`Monthly report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`)
+          .setDescription(`Total: ${getTotal({ server, client })}`)
+          .setColor(Colors.Purple)
+          .setFields(makeLicenseFields({ server, client })),
+      ],
+    });
+  }
 }
