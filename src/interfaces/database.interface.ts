@@ -1,4 +1,4 @@
-import { Insertable, JSONColumnType, Selectable, Updateable } from 'kysely';
+import { Generated, Insertable, JSONColumnType, Selectable, Updateable } from 'kysely';
 import { DateTime } from 'luxon';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
@@ -41,9 +41,23 @@ export interface License {
 export type Sponsor = Selectable<SponsorTable>;
 export type UpdateSponsor = Updateable<SponsorTable>;
 
+export interface DiscordLinksTable {
+  id: Generated<string>;
+  createdAt: Generated<Date>;
+  author: string;
+  link: string;
+  name: string;
+  usageCount: Generated<number>;
+}
+
+export type DiscordLink = Selectable<DiscordLinksTable>;
+export type NewDiscordLink = Insertable<DiscordLinksTable>;
+export type DiscordLinkUpdate = Updateable<DiscordLinksTable> & { id: string };
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
+  discord_links: DiscordLinksTable;
 }
 
 export type LicenseCountOptions = {
@@ -57,4 +71,9 @@ export interface IDatabaseRepository {
   createPayment(entitY: NewPayment): Promise<void>;
   getTotalLicenseCount(options?: LicenseCountOptions): Promise<{ server: number; client: number }>;
   getSponsorLicenses(githubUsername: string): Promise<License[]>;
+  getDiscordLinks(): Promise<DiscordLink[]>;
+  getDiscordLink(name: string): Promise<DiscordLink | undefined>;
+  addDiscordLink(link: NewDiscordLink): Promise<void>;
+  removeDiscordLink(id: string): Promise<void>;
+  updateDiscordLink(link: DiscordLinkUpdate): Promise<void>;
 }

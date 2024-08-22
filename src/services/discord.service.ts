@@ -4,12 +4,14 @@ import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
-import { Constants, GithubOrg, GithubRepo, HELP_TEXTS, linkCommands } from 'src/constants';
+import { Constants, GithubOrg, GithubRepo, HELP_TEXTS } from 'src/constants';
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { logError } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
+const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
 
 const _star_history: Record<string, number | undefined> = {};
 const _fork_history: Record<string, number | undefined> = {};
@@ -29,6 +31,7 @@ export class DiscordService {
   constructor(
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IGithubInterface) private github: IGithubInterface,
+    @Inject(IDatabaseRepository) private database: IDatabaseRepository,
   ) {}
 
   async init() {
@@ -76,8 +79,49 @@ export class DiscordService {
     return HELP_TEXTS[name];
   }
 
-  getLink(name: string, message: string | null) {
-    return message ? `${message}: ${linkCommands[name]}` : linkCommands[name];
+  async getLink(name: string, message: string | null) {
+    const item = await this.database.getDiscordLink(name);
+    if (!item) {
+      return LINK_NOT_FOUND;
+    }
+
+    await this.database.updateDiscordLink({ id: item.id, usageCount: item.usageCount + 1 });
+
+    return {
+      message: (message ? `${message} - ` : '') + item.link,
+      isPrivate: false,
+    };
+  }
+
+  async getLinks(value?: string) {
+    let links = await this.database.getDiscordLinks();
+    if (value) {
+      const query = value.toLowerCase();
+      links = links.filter(
+        ({ name, link }) => name.toLowerCase().includes(query) || link.toLowerCase().includes(query),
+      );
+    }
+
+    return links.map(({ name, link }) => ({
+      name: `${name} - ${link}`,
+      value: name,
+    }));
+  }
+
+  async addLink({ name, link, author }: { name: string; link: string; author: string }) {
+    await this.database.addDiscordLink({ name, link, author });
+    return `Added ${link}`;
+  }
+
+  async removeLink({ name }: { name: string }) {
+    const link = await this.database.getDiscordLink(name);
+    if (!link) {
+      return LINK_NOT_FOUND;
+    }
+
+    await this.database.removeDiscordLink(link.id);
+
+    return { message: `Removed ${link.name} - ${link.link}`, isPrivate: false };
   }
 
   getAge() {

@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { DiscordService } from 'src/services/discord.service';
@@ -23,17 +24,31 @@ const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   sendMessage: vitest.fn(),
 });
 
+const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
+  addDiscordLink: vitest.fn(),
+  createPayment: vitest.fn(),
+  getDiscordLinks: vitest.fn(),
+  getDiscordLink: vitest.fn(),
+  removeDiscordLink: vitest.fn(),
+  getSponsorLicenses: vitest.fn(),
+  getTotalLicenseCount: vitest.fn(),
+  runMigrations: vitest.fn(),
+  updateDiscordLink: vitest.fn(),
+});
+
 describe('Bot test', () => {
   let sut: DiscordService;
 
   let discordMock: Mocked<IDiscordInterface>;
   let githubMock: Mocked<IGithubInterface>;
+  let databaseMock: Mocked<IDatabaseRepository>;
 
   beforeEach(() => {
     discordMock = newDiscordMockRepository();
     githubMock = newGithubMockRepository();
+    databaseMock = newDatabaseMockRepository();
 
-    sut = new DiscordService(discordMock, githubMock);
+    sut = new DiscordService(discordMock, githubMock, databaseMock);
   });
 
   it('should work', () => {

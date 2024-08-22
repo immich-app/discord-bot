@@ -8,6 +8,8 @@ export enum DiscordChannel {
   BotSpam = '1159083520027787307',
   GithubStatus = '1240662502912692236',
   Stripe = '1263492970691297300',
+  SupportCrew = '1184258493948117084',
+  QQ = '1157429449671856148',
 }
 
 export enum DiscordEvents {
