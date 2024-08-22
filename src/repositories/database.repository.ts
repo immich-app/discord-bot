@@ -6,9 +6,12 @@ import pg from 'pg';
 import { getConfig } from 'src/config';
 import {
   Database,
+  DiscordLink,
+  DiscordLinkUpdate,
   IDatabaseRepository,
   LicenseCountOptions,
   LicenseType,
+  NewDiscordLink,
   NewPayment,
 } from 'src/interfaces/database.interface';
 
@@ -111,5 +114,25 @@ export class DatabaseRepository implements IDatabaseRepository {
       licenseKey: license,
       activationKey: activation,
     }));
+  }
+
+  getDiscordLinks(): Promise<DiscordLink[]> {
+    return this.db.selectFrom('discord_links').selectAll().execute();
+  }
+
+  getDiscordLink(name: string): Promise<DiscordLink | undefined> {
+    return this.db.selectFrom('discord_links').where('name', '=', name).selectAll().executeTakeFirst();
+  }
+
+  async addDiscordLink(link: NewDiscordLink) {
+    await this.db.insertInto('discord_links').values(link).execute();
+  }
+
+  async removeDiscordLink(id: string) {
+    await this.db.deleteFrom('discord_links').where('id', '=', id).execute();
+  }
+
+  async updateDiscordLink({ id, ...link }: DiscordLinkUpdate) {
+    await this.db.updateTable('discord_links').set(link).where('id', '=', id).execute();
   }
 }

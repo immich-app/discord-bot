@@ -87,20 +87,6 @@ export const Constants = {
   },
 };
 
-export const linkCommands: Record<string, string> = {
-  'reverse proxy': Constants.Urls.Docs.ReverseProxy,
-  database: Constants.Urls.Docs.Queries,
-  upgrade: Constants.Urls.Docs.Upgrade,
-  libraries: Constants.Urls.Docs.Libraries,
-  'xmp sidecar': Constants.Urls.Docs.Sidecar,
-  docker: Constants.Urls.Docs.Docker,
-  backup: Constants.Urls.Docs.Backup,
-  github: Constants.Urls.ImmichRepo,
-  cli: Constants.Urls.Docs.CLI,
-  'google-takeout': Constants.Urls.GoogleTakeOut,
-  faq: Constants.Urls.Docs.FAQ,
-};
-
 export const HELP_TEXTS = {
   'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${Constants.Urls.Docs.Docker}`,
   'help ticket': `Please open a <#${DiscordChannel.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
