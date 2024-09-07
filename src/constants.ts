@@ -69,6 +69,7 @@ const tags = {
 
 const roles = {
   Contributor: '980972470964215870',
+  SupportCrew: '1184258769312551053',
 };
 
 export const Constants = {
