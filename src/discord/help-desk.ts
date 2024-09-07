@@ -69,10 +69,12 @@ export class DiscordHelpDesk {
     }
 
     const members = interaction.guild?.members.cache;
-    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor);
+    const userRoles = members?.get(interaction.user.id)?.roles.cache;
+    const isContributor = userRoles?.has(Constants.Roles.Contributor);
+    const isSupportCrew = userRoles?.has(Constants.Roles.SupportCrew);
 
-    if (!(isContributor || channel.ownerId === interaction.user.id)) {
-      return interaction.reply({ ephemeral: true, content: 'Only the OP and contributors can close a thread.' });
+    if (!(isContributor || isSupportCrew || channel.ownerId === interaction.user.id)) {
+      return interaction.reply({ ephemeral: true, content: 'Only the OP and team members can close a thread.' });
     }
 
     const buttonRow = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
