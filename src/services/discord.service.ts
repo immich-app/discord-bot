@@ -102,10 +102,13 @@ export class DiscordService {
       );
     }
 
-    return links.map(({ name, link }) => ({
-      name: `${name} - ${link}`,
-      value: name,
-    }));
+    return links.map(({ name, link }) => {
+      const formattedName = `${name} — ${link}`;
+      return {
+        name: formattedName.length < 100 ? formattedName : `${formattedName.slice(0, 97)}...`,
+        value: name,
+      };
+    });
   }
 
   async addLink({ name, link, author }: { name: string; link: string; author: string }) {
