@@ -62,7 +62,7 @@ export class DiscordCommands {
       author: interaction.user.username,
     });
 
-    return interaction.reply({ content: message });
+    return interaction.reply({ content: message, flags: [MessageFlags.SuppressEmbeds] });
   }
 
   @Slash({ name: 'link-remove', description: 'Remove an existing link' })
@@ -89,7 +89,7 @@ export class DiscordCommands {
 
     const { message, isPrivate } = await this.service.removeLink({ name });
 
-    return interaction.reply({ content: message, ephemeral: isPrivate });
+    return interaction.reply({ content: message, ephemeral: isPrivate, flags: [MessageFlags.SuppressEmbeds] });
   }
 
   @Slash({ name: 'age', description: 'Immich age' })
