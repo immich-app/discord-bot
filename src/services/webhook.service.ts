@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { Colors, EmbedBuilder } from 'discord.js';
+import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
 import { getConfig } from 'src/config';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
@@ -116,6 +116,7 @@ export class WebhookService {
           .setColor(livemode ? Colors.Green : Colors.Yellow)
           .setFields(makeLicenseFields({ server, client })),
       ],
+      flags: [MessageFlags.SuppressNotifications],
     });
   }
 }

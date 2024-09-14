@@ -102,13 +102,10 @@ export class DiscordService {
       );
     }
 
-    return links.map(({ name, link }) => {
-      const formattedName = `${name} — ${link}`;
-      return {
-        name: formattedName.length < 100 ? formattedName : `${formattedName.slice(0, 97)}...`,
-        value: name,
-      };
-    });
+    return links.map(({ name, link }) => ({
+      name: this.shortenName(`${name} — ${link}`),
+      value: name,
+    }));
   }
 
   async addLink({ name, link, author }: { name: string; link: string; author: string }) {
@@ -193,13 +190,10 @@ export class DiscordService {
         order: 'desc',
       });
 
-      return result.items.map((item) => {
-        const name = `${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`;
-        return {
-          name: name.length > 100 ? name.substring(0, 97) + '...' : name,
-          value: String(item.number),
-        };
-      });
+      return result.items.map((item) => ({
+        name: this.shortenName(`${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`),
+        value: String(item.number),
+      }));
     } catch (error) {
       this.logger.log('Could not fetch search results from GitHub');
       return [];
@@ -283,5 +277,9 @@ export class DiscordService {
 
   getPrOrIssue(id: number) {
     return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
+  }
+
+  private shortenName(name: string, maxLength: number = 100) {
+    return name.length > maxLength ? `${name.substring(0, maxLength - 3)}...` : name;
   }
 }
