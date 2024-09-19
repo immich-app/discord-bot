@@ -1,7 +1,8 @@
 import { DatabaseService } from 'src/services/database.service';
-import { DiscordService } from './discord.service';
-import { OAuthService } from './oauth.service';
-import { ReportService } from './report.service';
-import { WebhookService } from './webhook.service';
+import { DiscordService } from 'src/services/discord.service';
+import { OAuthService } from 'src/services/oauth.service';
+import { ReportService } from 'src/services/report.service';
+import { WebhookService } from 'src/services/webhook.service';
+import { ZulipService } from 'src/services/zulip.service';
 
-export const services = [DatabaseService, DiscordService, OAuthService, ReportService, WebhookService];
+export const services = [DatabaseService, DiscordService, OAuthService, ReportService, WebhookService, ZulipService];

@@ -2,6 +2,7 @@ import { FlatCompat } from '@eslint/eslintrc';
 import js from '@eslint/js';
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
+import noRelativeImportPaths from 'eslint-plugin-no-relative-import-paths';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +34,7 @@ export default [
   {
     plugins: {
       '@typescript-eslint': typescriptEslint,
+      'no-relative-import-paths': noRelativeImportPaths,
     },
 
     languageOptions: {
@@ -49,6 +51,7 @@ export default [
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-explicit-any': 'off',
+      'no-relative-import-paths/no-relative-import-paths': 'error',
     },
   },
 ];
