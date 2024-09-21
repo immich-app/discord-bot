@@ -67,7 +67,7 @@ export class DiscordRepository implements IDiscordInterface {
 
   async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<void> {
     const textChannel = await bot.channels.fetch(channel);
-    if (textChannel && textChannel.isTextBased()) {
+    if (textChannel?.isSendable()) {
       await textChannel.send(message);
     }
   }
