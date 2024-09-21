@@ -155,7 +155,7 @@ export class DiscordService {
       return `Stars ⭐: ${starsCount}${
         formattedDelta ? ` (${formattedDelta} stars since the last call in this channel)` : ''
       }`;
-    } catch (error) {
+    } catch {
       return 'Could not fetch stars count from the GitHub API';
     }
   }
@@ -171,7 +171,7 @@ export class DiscordService {
       _fork_history[channelId] = forksCount;
 
       return `Forks: ${forksCount}${formattedDelta ? ` (${formattedDelta} forks since the last call in this channel)` : ''}`;
-    } catch (error) {
+    } catch {
       return 'Could not fetch forks count from the GitHub API';
     }
   }
@@ -194,7 +194,7 @@ export class DiscordService {
         name: this.shortenName(`${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`),
         value: String(item.number),
       }));
-    } catch (error) {
+    } catch {
       this.logger.log('Could not fetch search results from GitHub');
       return [];
     }
