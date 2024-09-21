@@ -40,7 +40,6 @@
     "discord.js": "^14.14.0",
     "discordx": "^11.7.6",
     "dotenv": "^16.4.5",
-    "eslint-plugin-import": "^2.29.1",
     "express": "^4.19.2",
     "kysely": "^0.27.4",
     "lodash": "^4.17.21",
