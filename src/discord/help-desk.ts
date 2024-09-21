@@ -146,35 +146,48 @@ export class DiscordHelpDesk {
   async handleLogsModal(interaction: ModalSubmitInteraction): Promise<void> {
     const logs = interaction.fields.getTextInputValue(DiscordField.Logs);
     const source = interaction.fields.getTextInputValue(DiscordField.Source);
+    const channel = interaction.channel;
 
-    await interaction.channel?.send({
-      content: `${interaction.user} uploaded`,
-      files: [{ attachment: Buffer.from(logs), name: `${source}.txt` }],
-      flags: [MessageFlags.SuppressNotifications],
-    });
+    if (channel?.isSendable()) {
+      await channel.send({
+        content: `${interaction.user} uploaded`,
+        files: [{ attachment: Buffer.from(logs), name: `${source}.txt` }],
+        flags: [MessageFlags.SuppressNotifications],
+      });
+    }
+
     await interaction.deferUpdate();
   }
 
   @ModalComponent({ id: DiscordModal.Compose })
   async handleComposeModal(interaction: ModalSubmitInteraction): Promise<void> {
     const compose = interaction.fields.getTextInputValue('compose');
+    const channel = interaction.channel;
 
-    await interaction.channel?.send({
-      content: `${interaction.user} uploaded`,
-      files: [{ attachment: Buffer.from(compose), name: 'docker-compose.yml' }],
-      flags: [MessageFlags.SuppressNotifications],
-    });
+    if (channel?.isSendable()) {
+      await channel.send({
+        content: `${interaction.user} uploaded`,
+        files: [{ attachment: Buffer.from(compose), name: 'docker-compose.yml' }],
+        flags: [MessageFlags.SuppressNotifications],
+      });
+    }
+
     await interaction.deferUpdate();
   }
 
   @ModalComponent({ id: DiscordModal.Env })
   async handleEnvModal(interaction: ModalSubmitInteraction): Promise<void> {
     const env = interaction.fields.getTextInputValue(DiscordField.Env);
-    await interaction.channel?.send({
-      content: `${interaction.user} uploaded`,
-      files: [{ attachment: Buffer.from(env), name: 'env.txt' }],
-      flags: [MessageFlags.SuppressNotifications],
-    });
+    const channel = interaction.channel;
+
+    if (channel?.isSendable()) {
+      await channel.send({
+        content: `${interaction.user} uploaded`,
+        files: [{ attachment: Buffer.from(env), name: 'env.txt' }],
+        flags: [MessageFlags.SuppressNotifications],
+      });
+    }
+
     await interaction.deferUpdate();
   }
 
