@@ -30,7 +30,7 @@ export class GithubRepository implements IGithubInterface {
       if (status === 200) {
         return `[Discussion] (${makeLink(org, repo, id, url)})`;
       }
-    } catch (error) {
+    } catch {
       this.logger.log(`Could not fetch #${id}`);
     }
   }
