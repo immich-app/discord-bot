@@ -24,6 +24,32 @@ type GithubLink = {
 };
 type LinkType = 'issue' | 'pull' | 'discussion';
 
+type SevenTVResponse = {
+  id: string;
+  name: string;
+  host: {
+    url: string;
+    files: [
+      {
+        name: string;
+        static_name: string;
+        width: number;
+        height: number;
+        frame_count: number;
+        size: number;
+        format: string;
+      },
+    ];
+  };
+};
+
+type BetterTTVResponse = {
+  id: string;
+  code: string;
+  imageType: string;
+  animated: string;
+};
+
 @Injectable()
 export class DiscordService {
   private logger = new Logger(DiscordService.name);
@@ -324,5 +350,45 @@ export class DiscordService {
       return this.database.updateDiscordMessage({ id: message.id, name, content, lastEditedBy: author });
     }
     return this.database.addDiscordMessage({ name, content, lastEditedBy: author });
+  }
+
+  async createEmote(name: string, emote: string | Buffer, guildId: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    return this.discord.createEmote(name, emote, guildId);
+  }
+
+  async create7TvEmote(id: string, guildId: string | null, name: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    const rawResponse = await fetch(`https://7tv.io/v3/emotes/${id}`);
+    if (rawResponse.status !== 200) {
+      return;
+    }
+
+    const response = (await rawResponse.json()) as SevenTVResponse;
+    const gif = response.host.files.findLast((file) => file.format === 'GIF' && file.size < 256_000);
+    const file = gif || response.host.files.findLast((file) => file.format === 'WEBP' && file.size < 256_000)!;
+
+    return this.discord.createEmote(name || response.name, `https:${response.host.url}/${file.name}`, guildId);
+  }
+
+  async createBttvEmote(id: string, guildId: string | null, name: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    const rawResponse = await fetch(`https://api.betterttv.net/3/emotes/${id}`);
+    if (rawResponse.status !== 200) {
+      return;
+    }
+
+    const response = (await rawResponse.json()) as BetterTTVResponse;
+
+    return this.discord.createEmote(name || response.code, `https://cdn.betterttv.net/emote/${id}/3x`, guildId);
   }
 }

@@ -83,4 +83,8 @@ export class DiscordRepository implements IDiscordInterface {
       }
     }
   }
+
+  async createEmote(name: string, emote: string | Buffer, guildId: string) {
+    return bot.guilds.cache.get(guildId)?.emojis.create({ name, attachment: emote });
+  }
 }
