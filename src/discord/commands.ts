@@ -195,4 +195,25 @@ export class DiscordCommands {
     const content = await this.service.getPrOrIssue(Number(id));
     return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
   }
+
+  @Slash({ name: 'emote-add', description: 'Add new emotes to the server' })
+  async handleEmoteAdd(
+    @SlashOption({
+      name: '7tv',
+      description: 'A 7TV ID of an emote',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    sevenTvId: string,
+    interaction: CommandInteraction,
+  ) {
+    const emote = await this.service.create7TvEmote(sevenTvId, interaction.guildId);
+
+    if (!emote) {
+      await interaction.reply({ content: `Could not find 7TV emote with id ${sevenTvId}` });
+      return;
+    }
+
+    await interaction.reply({ content: `Emote successfully added! ${emote.toString()}` });
+  }
 }

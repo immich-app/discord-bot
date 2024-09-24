@@ -1,4 +1,4 @@
-import { MessageCreateOptions } from 'discord.js';
+import { GuildEmoji, MessageCreateOptions } from 'discord.js';
 
 export const IDiscordInterface = 'IDiscordInterface';
 
@@ -22,4 +22,5 @@ export enum DiscordEvents {
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
   sendMessage(channel: DiscordChannel, message: string | MessageCreateOptions): Promise<void>;
+  createEmote(name: string, emote: string | Buffer, guildId: string): Promise<GuildEmoji | undefined>;
 }

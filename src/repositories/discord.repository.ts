@@ -71,4 +71,8 @@ export class DiscordRepository implements IDiscordInterface {
       await textChannel.send(message);
     }
   }
+
+  async createEmote(name: string, emote: string | Buffer, guildId: string) {
+    return bot.guilds.cache.get(guildId)?.emojis.create({ name, attachment: emote });
+  }
 }
