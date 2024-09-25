@@ -16,6 +16,9 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
       Promise.resolve(`https://github.com/${org}/${repo}/${id % 2 === 0 ? 'pull' : 'issue'}/${id}`),
     ),
   getStarCount: vitest.fn(),
+  getStargazers: vitest.fn(),
+  getIssues: vitest.fn(),
+  getPullRequests: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
