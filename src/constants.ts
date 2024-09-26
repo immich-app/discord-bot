@@ -86,6 +86,10 @@ export const Constants = {
     WeeklyReport: '0 12 * * 4',
     MonthlyReport: '0 12 19 * *',
   },
+  Zulip: {
+    Streams: { Immich: 54 },
+    Topics: { ImmichRelease: 'release' },
+  },
 };
 
 export const HELP_TEXTS = {

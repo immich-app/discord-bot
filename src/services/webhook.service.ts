@@ -1,9 +1,12 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { WebhookEvent } from '@octokit/webhooks-types';
 import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
 import { getConfig } from 'src/config';
+import { Constants } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { makeLicenseFields, withErrorLogging } from 'src/util';
 
 const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dto is GithubStatusIncident => {
@@ -23,11 +26,31 @@ export class WebhookService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
+    @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
+
+  async onGithub(dto: WebhookEvent, slug: string) {
+    const { slugs } = getConfig();
+    if (!slugs.githubWebhook || slug !== slugs.githubWebhook) {
+      throw new UnauthorizedException();
+    }
+
+    if (!('action' in dto)) {
+      return;
+    }
+
+    if ('release' in dto && dto.action === 'released') {
+      await this.zulip.sendMessage({
+        stream: Constants.Zulip.Streams.Immich,
+        topic: Constants.Zulip.Topics.ImmichRelease,
+        content: `A day with a release is a good day! ${dto.release.html_url} 🚀`,
+      });
+    }
+  }
 
   async onGithubStatus(dto: GithubStatusIncident | GithubStatusComponent, slug: string) {
     const { slugs } = getConfig();
-    if (!slugs.githubWebhook || slug !== slugs.githubWebhook) {
+    if (!slugs.githubStatusWebhook || slug !== slugs.githubStatusWebhook) {
       throw new UnauthorizedException();
     }
 
