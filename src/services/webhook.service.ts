@@ -1,8 +1,9 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { WebhookEvent } from '@octokit/webhooks-types';
+import { User, WebhookEvent } from '@octokit/webhooks-types';
 import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
+import _ from 'lodash';
 import { getConfig } from 'src/config';
-import { Constants } from 'src/constants';
+import { Constants, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -18,6 +19,14 @@ const isPaymentEvent = (payload: StripeBase): payload is StripeBase<PaymentInten
 
 const isImmichProduct = (payload: StripeBase<PaymentIntent>) =>
   ['immich-server', 'immich-client'].includes(payload.data.object.description);
+
+type BaseEvent = {
+  number: number;
+  title: string;
+  user: User;
+  html_url: string;
+  body: string | null;
+};
 
 @Injectable()
 export class WebhookService {
@@ -39,12 +48,50 @@ export class WebhookService {
       return;
     }
 
-    if ('release' in dto && dto.action === 'released') {
-      await this.zulip.sendMessage({
-        stream: Constants.Zulip.Streams.Immich,
-        topic: Constants.Zulip.Topics.ImmichRelease,
-        content: `A day with a release is a good day! ${dto.release.html_url} 🚀`,
+    const { action } = dto;
+
+    if (
+      'pull_request' in dto &&
+      (action === 'opened' || action === 'closed' || action === 'converted_to_draft' || action === 'ready_for_review')
+    ) {
+      const embed = this.getEmbed(action, dto.repository.full_name, 'Pull request', dto.pull_request);
+      const color = this.getPrEmbedColor({
+        action,
+        isDraft: dto.pull_request.draft,
+        isMerged: dto.pull_request.merged,
       });
+      embed.setColor(color);
+
+      await this.discord.sendMessage(DiscordChannel.PullRequests, { embeds: [embed] });
+      return;
+    }
+
+    if ('issue' in dto && (action === 'opened' || action === 'closed')) {
+      const embed = this.getEmbed(action, dto.repository.full_name, 'Issue', dto.issue);
+      embed.setColor(this.getIssueEmbedColor({ action }));
+
+      await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
+      return;
+    }
+
+    if ('discussion' in dto && (action === 'created' || action === 'deleted' || action === 'answered')) {
+      const embed = this.getEmbed(action, dto.repository.full_name, 'Issue', dto.discussion);
+      embed.setColor(this.getDiscussionEmbedColor({ action }));
+
+      await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
+      return;
+    }
+
+    if ('release' in dto && action === 'released') {
+      const content = `${_.sample(ReleaseMessages)} ${dto.release.html_url}`;
+      await Promise.all([
+        this.zulip.sendMessage({
+          stream: Constants.Zulip.Streams.Immich,
+          topic: Constants.Zulip.Topics.ImmichRelease,
+          content,
+        }),
+        this.discord.sendMessage(DiscordChannel.Releases, { content, flags: [MessageFlags.SuppressEmbeds] }),
+      ]);
     }
   }
 
@@ -141,5 +188,68 @@ export class WebhookService {
       ],
       flags: [MessageFlags.SuppressNotifications],
     });
+  }
+
+  private getEmbed(action: string, repositoryName: string, title: string, event: BaseEvent) {
+    return new EmbedBuilder({
+      title: `[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}`,
+      author: {
+        name: event.user.login,
+        url: event.user.html_url,
+        iconURL: event.user.avatar_url,
+      },
+      url: event.html_url,
+      description: action === 'opened' || action === 'created' ? (event.body ?? undefined) : undefined,
+    });
+  }
+
+  private getPrEmbedColor(dto: {
+    action: 'opened' | 'closed' | 'converted_to_draft' | 'ready_for_review';
+    isDraft: boolean;
+    isMerged: boolean | null;
+  }) {
+    switch (dto.action) {
+      case 'opened': {
+        return dto.isDraft ? 'Grey' : 'Green';
+      }
+      case 'closed': {
+        if (dto.isMerged === null) {
+          this.logger.error('Closed PR should have isMerged set.');
+          return null;
+        }
+        return dto.isMerged ? 'Purple' : 'Red';
+      }
+      case 'converted_to_draft': {
+        return 'Grey';
+      }
+      case 'ready_for_review': {
+        return 'Green';
+      }
+    }
+  }
+
+  private getIssueEmbedColor(dto: { action: 'opened' | 'closed' }) {
+    switch (dto.action) {
+      case 'opened': {
+        return 'Green';
+      }
+      case 'closed': {
+        return 'NotQuiteBlack';
+      }
+    }
+  }
+
+  private getDiscussionEmbedColor(dto: { action: 'created' | 'deleted' | 'answered' }) {
+    switch (dto.action) {
+      case 'created': {
+        return 'Orange';
+      }
+      case 'deleted': {
+        return 'NotQuiteBlack';
+      }
+      case 'answered': {
+        return 'Green';
+      }
+    }
   }
 }

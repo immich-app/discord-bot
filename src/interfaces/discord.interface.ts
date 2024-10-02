@@ -10,6 +10,9 @@ export enum DiscordChannel {
   Stripe = '1263492970691297300',
   SupportCrew = '1184258493948117084',
   QQ = '1157429449671856148',
+  PullRequests = '991483093179445350',
+  IssuesAndDiscussions = '991483015958106202',
+  Releases = '991477056791658567',
 }
 
 export enum DiscordEvents {
