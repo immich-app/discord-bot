@@ -8,9 +8,10 @@ import { DiscordHelpDesk } from 'src/discord/help-desk';
 import { providers } from 'src/repositories';
 import { services } from 'src/services';
 import { DatabaseService } from 'src/services/database.service';
+import { DiscordContextMenus } from './discord/context-menus';
 
 const middleware = [{ provide: APP_PIPE, useValue: new ValidationPipe({ transform: true, whitelist: true }) }];
-const discord = [DiscordCommands, DiscordEvents, DiscordHelpDesk];
+const discord = [DiscordCommands, DiscordEvents, DiscordHelpDesk, DiscordContextMenus];
 
 @Module({
   imports: [ScheduleModule.forRoot()],

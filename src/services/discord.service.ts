@@ -24,6 +24,25 @@ type GithubLink = {
 };
 type LinkType = 'issue' | 'pull' | 'discussion';
 
+type SevenTVResponse = {
+  id: string;
+  name: string;
+  host: {
+    url: string;
+    files: [
+      {
+        name: string;
+        static_name: string;
+        width: number;
+        height: number;
+        frame_count: number;
+        size: number;
+        format: string;
+      },
+    ];
+  };
+};
+
 @Injectable()
 export class DiscordService {
   private logger = new Logger(DiscordService.name);
@@ -277,6 +296,29 @@ export class DiscordService {
 
   getPrOrIssue(id: number) {
     return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
+  }
+
+  async createEmote(name: string, emote: string | Buffer, guildId: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    return this.discord.createEmote(name, emote, guildId);
+  }
+
+  async create7TvEmote(id: string, guildId: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    const rawResponse = await fetch(`https://7tv.io/v3/emotes/${id}`);
+    if (rawResponse.status === 400) {
+      return;
+    }
+
+    const response = (await rawResponse.json()) as SevenTVResponse;
+    const file = response.host.files.findLast((file) => file.format === 'WEBP' && file.size < 256000)!;
+    return this.discord.createEmote(response.name, `https:${response.host.url}/${file.name}`, guildId);
   }
 
   private shortenName(name: string, maxLength: number = 100) {
