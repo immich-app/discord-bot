@@ -8,7 +8,7 @@ import { Constants, GithubOrg, GithubRepo, HELP_TEXTS } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
-import { logError } from 'src/util';
+import { logError, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
@@ -103,7 +103,7 @@ export class DiscordService {
     }
 
     return links.map(({ name, link }) => ({
-      name: this.shortenName(`${name} — ${link}`),
+      name: shorten(`${name} — ${link}`),
       value: name,
     }));
   }
@@ -191,7 +191,7 @@ export class DiscordService {
       });
 
       return result.items.map((item) => ({
-        name: this.shortenName(`${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`),
+        name: shorten(`${item.pull_request ? '[PR]' : '[Issue]'} (${item.number}) ${item.title}`),
         value: String(item.number),
       }));
     } catch {
@@ -277,9 +277,5 @@ export class DiscordService {
 
   getPrOrIssue(id: number) {
     return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
-  }
-
-  private shortenName(name: string, maxLength: number = 100) {
-    return name.length > maxLength ? `${name.substring(0, maxLength - 3)}...` : name;
   }
 }

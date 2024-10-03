@@ -8,7 +8,7 @@ import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase 
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
-import { makeLicenseFields, withErrorLogging } from 'src/util';
+import { makeLicenseFields, shorten, withErrorLogging } from 'src/util';
 
 const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dto is GithubStatusIncident => {
   return !!(dto as GithubStatusIncident).incident;
@@ -199,7 +199,8 @@ export class WebhookService {
         iconURL: event.user.avatar_url,
       },
       url: event.html_url,
-      description: action === 'opened' || action === 'created' ? (event.body ?? undefined) : undefined,
+      description:
+        action === 'opened' || action === 'created' ? (event.body ? shorten(event.body, 4096) : undefined) : undefined,
     });
   }
 
