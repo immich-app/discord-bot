@@ -46,3 +46,7 @@ export const makeLicenseFields = ({ server, client }: { server: number; client: 
     },
   ];
 };
+
+export const shorten = (text: string, maxLength: number = 100) => {
+  return text.length > maxLength ? `${text.substring(0, maxLength - 3)}...` : text;
+};
