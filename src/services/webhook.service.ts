@@ -200,7 +200,7 @@ export class WebhookService {
       },
       url: event.html_url,
       description:
-        action === 'opened' || action === 'created' ? (event.body ? shorten(event.body, 4096) : undefined) : undefined,
+        action === 'opened' || action === 'created' ? (event.body ? shorten(event.body, 500) : undefined) : undefined,
     });
   }
 
