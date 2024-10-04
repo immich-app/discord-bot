@@ -75,7 +75,7 @@ export class WebhookService {
     }
 
     if ('discussion' in dto && (action === 'created' || action === 'deleted' || action === 'answered')) {
-      const embed = this.getEmbed(action, dto.repository.full_name, 'Issue', dto.discussion);
+      const embed = this.getEmbed(action, dto.repository.full_name, 'Discussion', dto.discussion);
       embed.setColor(this.getDiscussionEmbedColor({ action }));
 
       await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
@@ -84,14 +84,24 @@ export class WebhookService {
 
     if ('release' in dto && action === 'released') {
       const content = `${_.sample(ReleaseMessages)} ${dto.release.html_url}`;
-      await Promise.all([
-        this.zulip.sendMessage({
-          stream: Constants.Zulip.Streams.Immich,
-          topic: Constants.Zulip.Topics.ImmichRelease,
-          content,
+      const messages = [
+        this.discord.sendMessage(DiscordChannel.Releases, {
+          content: `[${dto.repository.full_name}] ${content}`,
+          flags: [MessageFlags.SuppressEmbeds],
         }),
-        this.discord.sendMessage(DiscordChannel.Releases, { content, flags: [MessageFlags.SuppressEmbeds] }),
-      ]);
+      ];
+
+      if (dto.repository.full_name === 'immich-app/immich') {
+        messages.push(
+          this.zulip.sendMessage({
+            stream: Constants.Zulip.Streams.Immich,
+            topic: Constants.Zulip.Topics.ImmichRelease,
+            content,
+          }),
+        );
+      }
+
+      await Promise.all(messages);
     }
   }
 
