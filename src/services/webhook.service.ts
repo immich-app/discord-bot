@@ -54,7 +54,13 @@ export class WebhookService {
       'pull_request' in dto &&
       (action === 'opened' || action === 'closed' || action === 'converted_to_draft' || action === 'ready_for_review')
     ) {
-      const embed = this.getEmbed(action, dto.repository.full_name, 'Pull request', dto.pull_request);
+      const embed = this.getEmbed({
+        action,
+        repositoryName: dto.repository.full_name,
+        title: 'Pull request',
+        user: dto.sender,
+        event: dto.pull_request,
+      });
       const color = this.getPrEmbedColor({
         action,
         isDraft: dto.pull_request.draft,
@@ -67,7 +73,13 @@ export class WebhookService {
     }
 
     if ('issue' in dto && (action === 'opened' || action === 'closed')) {
-      const embed = this.getEmbed(action, dto.repository.full_name, 'Issue', dto.issue);
+      const embed = this.getEmbed({
+        action,
+        repositoryName: dto.repository.full_name,
+        title: 'Issue',
+        user: dto.sender,
+        event: dto.issue,
+      });
       embed.setColor(this.getIssueEmbedColor({ action }));
 
       await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
@@ -75,7 +87,13 @@ export class WebhookService {
     }
 
     if ('discussion' in dto && (action === 'created' || action === 'deleted' || action === 'answered')) {
-      const embed = this.getEmbed(action, dto.repository.full_name, 'Discussion', dto.discussion);
+      const embed = this.getEmbed({
+        action,
+        repositoryName: dto.repository.full_name,
+        title: 'Discussion',
+        user: dto.sender,
+        event: dto.discussion,
+      });
       embed.setColor(this.getDiscussionEmbedColor({ action }));
 
       await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
@@ -200,13 +218,25 @@ export class WebhookService {
     });
   }
 
-  private getEmbed(action: string, repositoryName: string, title: string, event: BaseEvent) {
+  private getEmbed({
+    action,
+    repositoryName,
+    title,
+    user,
+    event,
+  }: {
+    action: string;
+    repositoryName: string;
+    title: string;
+    user: User;
+    event: BaseEvent;
+  }) {
     return new EmbedBuilder({
       title: `[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}`,
       author: {
-        name: event.user.login,
-        url: event.user.html_url,
-        iconURL: event.user.avatar_url,
+        name: user.login,
+        url: user.html_url,
+        iconURL: user.avatar_url,
       },
       url: event.html_url,
       description:
