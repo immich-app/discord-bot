@@ -57,7 +57,8 @@ const urls = {
   ImmichRepo: 'https://github.com/immich-app/immich',
   Issues: 'https://github.com/immich-app/immich/issues',
   MyImmich: 'https://my.immich.app',
-  Release: 'https://github.com/immich-app/immich/discussions?discussions_q=label%3Abreaking-change+sort%3Adate_created',
+  Release:
+    'https://github.com/immich-app/immich/discussions?discussions_q=label%3Achangelog%3Abreaking-change+sort%3Adate_created',
 };
 
 const tags = {
