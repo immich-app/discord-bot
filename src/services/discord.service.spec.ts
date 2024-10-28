@@ -33,6 +33,11 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getTotalLicenseCount: vitest.fn(),
   runMigrations: vitest.fn(),
   updateDiscordLink: vitest.fn(),
+  addDiscordMessage: vitest.fn(),
+  getDiscordMessage: vitest.fn(),
+  getDiscordMessages: vitest.fn(),
+  removeDiscordMessage: vitest.fn(),
+  updateDiscordMessage: vitest.fn(),
 });
 
 describe('Bot test', () => {

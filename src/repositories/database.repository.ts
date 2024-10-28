@@ -8,11 +8,14 @@ import {
   Database,
   DiscordLink,
   DiscordLinkUpdate,
+  DiscordMessage,
   IDatabaseRepository,
   LicenseCountOptions,
   LicenseType,
   NewDiscordLink,
+  NewDiscordMessage,
   NewPayment,
+  UpdateDiscordMessage,
 } from 'src/interfaces/database.interface';
 
 export class DatabaseRepository implements IDatabaseRepository {
@@ -134,5 +137,25 @@ export class DatabaseRepository implements IDatabaseRepository {
 
   async updateDiscordLink({ id, ...link }: DiscordLinkUpdate) {
     await this.db.updateTable('discord_links').set(link).where('id', '=', id).execute();
+  }
+
+  getDiscordMessages(): Promise<DiscordMessage[]> {
+    return this.db.selectFrom('discord_messages').selectAll().execute();
+  }
+
+  getDiscordMessage(name: string): Promise<DiscordMessage | undefined> {
+    return this.db.selectFrom('discord_messages').where('name', '=', name).selectAll().executeTakeFirst();
+  }
+
+  async addDiscordMessage(message: NewDiscordMessage): Promise<void> {
+    await this.db.insertInto('discord_messages').values(message).execute();
+  }
+
+  async removeDiscordMessage(id: string): Promise<void> {
+    await this.db.deleteFrom('discord_messages').where('id', '=', id).execute();
+  }
+
+  async updateDiscordMessage({ id, ...message }: UpdateDiscordMessage): Promise<void> {
+    await this.db.updateTable('discord_messages').set(message).where('id', '=', id).execute();
   }
 }
