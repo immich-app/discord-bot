@@ -54,10 +54,24 @@ export type DiscordLink = Selectable<DiscordLinksTable>;
 export type NewDiscordLink = Insertable<DiscordLinksTable>;
 export type DiscordLinkUpdate = Updateable<DiscordLinksTable> & { id: string };
 
+export interface DiscordMessagesTable {
+  id: Generated<string>;
+  createdAt: Generated<Date>;
+  lastEditedBy: string;
+  name: string;
+  content: string;
+  usageCount: Generated<number>;
+}
+
+export type DiscordMessage = Selectable<DiscordMessagesTable>;
+export type NewDiscordMessage = Insertable<DiscordMessagesTable>;
+export type UpdateDiscordMessage = Updateable<DiscordMessagesTable> & { id: string };
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
   discord_links: DiscordLinksTable;
+  discord_messages: DiscordMessagesTable;
 }
 
 export type LicenseCountOptions = {
@@ -76,4 +90,9 @@ export interface IDatabaseRepository {
   addDiscordLink(link: NewDiscordLink): Promise<void>;
   removeDiscordLink(id: string): Promise<void>;
   updateDiscordLink(link: DiscordLinkUpdate): Promise<void>;
+  getDiscordMessages(): Promise<DiscordMessage[]>;
+  getDiscordMessage(name: string): Promise<DiscordMessage | undefined>;
+  addDiscordMessage(message: NewDiscordMessage): Promise<void>;
+  updateDiscordMessage(message: UpdateDiscordMessage): Promise<void>;
+  removeDiscordMessage(id: string): Promise<void>;
 }

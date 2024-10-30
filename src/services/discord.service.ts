@@ -4,7 +4,7 @@ import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
-import { Constants, GithubOrg, GithubRepo, HELP_TEXTS } from 'src/constants';
+import { Constants, GithubOrg, GithubRepo } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
@@ -73,10 +73,6 @@ export class DiscordService {
   async onError(error: Error) {
     this.logger.verbose(`DiscordBot.onError - ${error}`);
     await logError('Discord bot error', error, { discord: this.discord, logger: this.logger });
-  }
-
-  getHelpMessage(name: keyof typeof HELP_TEXTS) {
-    return HELP_TEXTS[name];
   }
 
   async getLink(name: string, message: string | null) {
@@ -277,5 +273,50 @@ export class DiscordService {
 
   getPrOrIssue(id: number) {
     return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
+  }
+
+  async getMessages(value?: string) {
+    let messages = await this.database.getDiscordMessages();
+    if (value) {
+      const query = value.toLowerCase();
+      messages = messages.filter(({ name }) => name.toLowerCase().includes(query));
+    }
+
+    return messages.map(({ name, content }) => ({
+      name: shorten(`${name} — ${content}`, 40),
+      value: name,
+    }));
+  }
+
+  async getMessage(name: string, increaseUsageCount: boolean = true) {
+    const item = await this.database.getDiscordMessage(name);
+    if (!item) {
+      return;
+    }
+
+    if (increaseUsageCount) {
+      await this.database.updateDiscordLink({ id: item.id, usageCount: item.usageCount + 1 });
+    }
+
+    return item;
+  }
+
+  async removeMessage(name: string) {
+    const message = await this.database.getDiscordMessage(name);
+    if (!message) {
+      return LINK_NOT_FOUND;
+    }
+
+    await this.database.removeDiscordMessage(message.id);
+
+    return { message: shorten(`Removed ${message.name} - ${message.content}`), isPrivate: false };
+  }
+
+  async addOrUpdateMessage({ name, content, author }: { name: string; content: string; author: string }) {
+    const message = await this.database.getDiscordMessage(name);
+    if (message) {
+      return this.database.updateDiscordMessage({ id: message.id, name, content, lastEditedBy: author });
+    }
+    return this.database.addDiscordMessage({ name, content, lastEditedBy: author });
   }
 }

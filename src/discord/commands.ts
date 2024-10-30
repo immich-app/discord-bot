@@ -1,13 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import {
+  ActionRowBuilder,
   ApplicationCommandOptionType,
   AutocompleteInteraction,
   MessageFlags,
+  ModalBuilder,
+  ModalSubmitInteraction,
+  TextInputBuilder,
+  TextInputStyle,
   ThreadChannel,
   type CommandInteraction,
 } from 'discord.js';
-import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
-import { Constants, HELP_TEXTS } from 'src/constants';
+import { Discord, ModalComponent, Slash, SlashOption } from 'discordx';
+import { Constants, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 import { DiscordService } from 'src/services/discord.service';
 
@@ -157,21 +162,31 @@ export class DiscordCommands {
       await interaction.reply(channel.appliedTags.join(', '));
     }
   }
-
   @Slash({ name: 'messages', description: 'Text blocks for reoccurring questions' })
-  handleMessages(
-    @SlashChoice(...Object.keys(HELP_TEXTS))
+  async handleMessages(
     @SlashOption({
-      description: 'Which message do you need',
+      description: 'Which message do you need?',
       name: 'type',
       required: true,
+      autocomplete: true,
       type: ApplicationCommandOptionType.String,
     })
-    name: keyof typeof HELP_TEXTS,
-    interaction: CommandInteraction,
+    name: string,
+    interaction: CommandInteraction | AutocompleteInteraction,
   ) {
-    const message = this.service.getHelpMessage(name);
-    return interaction.reply({ content: message, flags: [MessageFlags.SuppressEmbeds] });
+    if (interaction.isAutocomplete()) {
+      const value = interaction.options.getFocused(true).value;
+      const message = await this.service.getMessages(value);
+      return interaction.respond(message);
+    }
+
+    const message = await this.service.getMessage(name);
+
+    if (!message) {
+      return interaction.reply({ content: 'Message could not be found', ephemeral: true });
+    }
+
+    return interaction.reply({ content: message.content, flags: [MessageFlags.SuppressEmbeds] });
   }
 
   @Slash({ name: 'search', description: 'Search for PRs and Issues by title' })
@@ -194,5 +209,122 @@ export class DiscordCommands {
 
     const content = await this.service.getPrOrIssue(Number(id));
     return interaction.reply({ content, flags: [MessageFlags.SuppressEmbeds] });
+  }
+
+  @Slash({ name: 'message-add', description: 'Add a new message' })
+  async handleMessageAdd(interaction: CommandInteraction) {
+    if (!(await authGuard(interaction))) {
+      return;
+    }
+
+    const modal = new ModalBuilder({ customId: DiscordModal.Message, title: 'Add message' }).addComponents(
+      new ActionRowBuilder<TextInputBuilder>({
+        components: [
+          new TextInputBuilder({ customId: DiscordField.Name, label: 'Message name', style: TextInputStyle.Short }),
+        ],
+      }),
+      new ActionRowBuilder<TextInputBuilder>({
+        components: [
+          new TextInputBuilder({
+            customId: DiscordField.Message,
+            label: 'Message content',
+            style: TextInputStyle.Paragraph,
+          }),
+        ],
+      }),
+    );
+
+    return interaction.showModal(modal);
+  }
+
+  @Slash({ name: 'message-edit', description: 'Edit a message' })
+  async handleMessageEdit(
+    @SlashOption({
+      name: 'name',
+      description: 'The name of the message to edit',
+      required: true,
+      type: ApplicationCommandOptionType.String,
+      autocomplete: true,
+    })
+    messageName: string,
+    interaction: CommandInteraction | AutocompleteInteraction,
+  ) {
+    if (interaction.isAutocomplete()) {
+      const value = interaction.options.getFocused(true).value;
+      const message = await this.service.getMessages(value);
+      return interaction.respond(message);
+    }
+
+    if (!(await authGuard(interaction))) {
+      return;
+    }
+
+    const message = await this.service.getMessage(messageName);
+
+    if (!message) {
+      return interaction.reply({ content: 'Message could not be found', ephemeral: true });
+    }
+
+    const modal = new ModalBuilder({ customId: DiscordModal.Message, title: 'Edit message' }).addComponents(
+      new ActionRowBuilder<TextInputBuilder>({
+        components: [
+          new TextInputBuilder({
+            customId: DiscordField.Name,
+            label: 'Message name',
+            style: TextInputStyle.Short,
+            value: message.name,
+          }),
+        ],
+      }),
+      new ActionRowBuilder<TextInputBuilder>({
+        components: [
+          new TextInputBuilder({
+            customId: DiscordField.Message,
+            label: 'Message content',
+            style: TextInputStyle.Paragraph,
+            value: message.content,
+          }),
+        ],
+      }),
+    );
+
+    return interaction.showModal(modal);
+  }
+
+  @Slash({ name: 'message-remove', description: 'Remove an existing message' })
+  async handleMessageRemove(
+    @SlashOption({
+      description: 'The name of the message to remove',
+      name: 'name',
+      required: true,
+      autocomplete: true,
+      type: ApplicationCommandOptionType.String,
+    })
+    name: string,
+    interaction: CommandInteraction | AutocompleteInteraction,
+  ) {
+    if (interaction.isAutocomplete()) {
+      const value = interaction.options.getFocused(true).value;
+      const message = await this.service.getMessages(value);
+      return interaction.respond(message);
+    }
+
+    if (!(await authGuard(interaction))) {
+      return;
+    }
+
+    const { message, isPrivate } = await this.service.removeMessage(name);
+
+    return interaction.reply({ content: message, ephemeral: isPrivate, flags: [MessageFlags.SuppressEmbeds] });
+  }
+
+  @ModalComponent({ id: DiscordModal.Message })
+  async handleMessageModal(interaction: ModalSubmitInteraction) {
+    const name = interaction.fields.getTextInputValue(DiscordField.Name);
+    const content = interaction.fields.getTextInputValue(DiscordField.Message);
+
+    await this.service.addOrUpdateMessage({ name, content, author: interaction.user.id });
+
+    await interaction.deferUpdate();
   }
 }

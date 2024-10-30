@@ -1,9 +1,8 @@
-import { DiscordChannel } from 'src/interfaces/discord.interface';
-
 export enum DiscordModal {
   Env = 'envModal',
   Logs = 'logsModal',
   Compose = 'composeModal',
+  Message = 'messageModal',
 }
 
 export enum DiscordButton {
@@ -15,6 +14,8 @@ export enum DiscordField {
   Env = 'env',
   Logs = 'logs',
   Source = 'source',
+  Name = 'name',
+  Message = 'message',
 }
 
 export enum GithubRepo {
@@ -91,13 +92,6 @@ export const Constants = {
     Streams: { Immich: 54 },
     Topics: { ImmichRelease: 'release' },
   },
-};
-
-export const HELP_TEXTS = {
-  'docker logs': `View container logs by running \`docker compose logs\`. For further information refer to ${Constants.Urls.Docs.Docker}`,
-  'help ticket': `Please open a <#${DiscordChannel.HelpDesk}> ticket with more information and we can help you troubleshoot the issue.`,
-  'reverse proxy': `This sounds like it could be a reverse proxy issue. Here's a link to the relevant documentation page: ${Constants.Urls.Docs.ReverseProxy}.`,
-  'feature request': `For ideas or features you'd like Immich to have, feel free to [open a feature request in the Github discussions](${Constants.Urls.FeatureRequest}). However, please make sure to search for similar requests first to avoid duplicates.`,
 };
 
 export const ReleaseMessages = [
