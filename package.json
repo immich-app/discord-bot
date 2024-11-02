@@ -27,7 +27,7 @@
     "@nestjs/core": "^10.3.10",
     "@nestjs/platform-express": "^10.3.10",
     "@nestjs/schedule": "^4.1.0",
-    "@nestjs/swagger": "^7.4.0",
+    "@nestjs/swagger": "^8.0.0",
     "@octokit/request-error": "^5.0.1",
     "@octokit/rest": "^20.0.2",
     "@octokit/types": "^13.4.1",
