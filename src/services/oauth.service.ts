@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Octokit } from '@octokit/rest';
 // @ts-expect-error f'ing ts does not let you import types from esm
 import type { Configuration, ServerMetadata } from 'openid-client';
 // @ts-expect-error we have the experimental flag enabled so we can import esm packages
@@ -21,7 +22,6 @@ export class OAuthService {
       issuer: 'https://github.com',
       authorization_endpoint: 'https://github.com/login/oauth/authorize',
       token_endpoint: 'https://github.com/login/oauth/access_token',
-      userinfo_endpoint: 'https://api.github.com/user',
     };
 
     this.config = new client.Configuration(server, github.clientId, github.clientSecret);
@@ -56,14 +56,10 @@ export class OAuthService {
       const tokens = await client.authorizationCodeGrant(this.config, currentUrl, {
         expectedState: stateItem.value,
       });
-      const profile = await client.fetchUserInfo(this.config, tokens.access_token, tokens.claims()?.sub || '');
-      const login = profile.login as string;
-      const avatarUrl = profile.avatar_Url as string;
 
-      if (!login || !avatarUrl) {
-        throw new Error('Could not fetch user info');
-      }
-
+      const { data } = await new Octokit({ auth: tokens.access_token }).rest.users.getAuthenticated();
+      const login = data.login;
+      const avatarUrl = data.avatar_url;
       const licenses = await this.database.getSponsorLicenses(login);
 
       return {
