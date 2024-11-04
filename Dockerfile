@@ -19,4 +19,4 @@ ARG COMMIT
 ENV COMMIT_SHA=${COMMIT}
 USER node
 ENTRYPOINT ["/sbin/tini", "--", "/bin/sh"]
-CMD ["-c", "node dist/main.js"]
+CMD ["-c", "node --experimental-require-module dist/main.js "]
