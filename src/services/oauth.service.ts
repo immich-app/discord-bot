@@ -29,7 +29,7 @@ export class OAuthService {
 
   authorize(dto: OAuthAuthorizeDto) {
     const state = client.randomState();
-    stateMap.set(dto.redirectUri, { value: state, expiresAt: Date.now() + 5 * 60 * 1000 });
+    stateMap.set(state, { value: state, expiresAt: Date.now() + 5 * 60 * 1000 });
     return {
       url: client.buildAuthorizationUrl(this.config, {
         state,
@@ -41,18 +41,19 @@ export class OAuthService {
 
   async callback({ url }: OAuthCallbackDto) {
     try {
-      const redirectUri = new URL(url).origin + '/claim/callback';
+      const currentUrl = new URL(url);
+      const state = currentUrl.searchParams.get('state');
 
-      if (!stateMap.has(redirectUri)) {
+      if (!state || !stateMap.has(state)) {
         throw new BadRequestException('Invalid state parameter');
       }
 
-      const stateItem = stateMap.get(redirectUri);
+      const stateItem = stateMap.get(state);
       if (!stateItem || stateItem.expiresAt < Date.now()) {
         throw new BadRequestException('Invalid state parameter');
       }
 
-      const tokens = await client.authorizationCodeGrant(this.config, new URL(redirectUri), {
+      const tokens = await client.authorizationCodeGrant(this.config, currentUrl, {
         expectedState: stateItem.value,
       });
       const profile = await client.fetchUserInfo(this.config, tokens.access_token, tokens.claims()?.sub || '');
