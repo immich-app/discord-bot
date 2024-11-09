@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { IntentsBitField, MessageCreateOptions, Partials } from 'discord.js';
+import { IntentsBitField, Message, MessageCreateOptions, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
@@ -65,10 +65,10 @@ export class DiscordRepository implements IDiscordInterface {
     await bot.login(token);
   }
 
-  async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<void> {
+  async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<Message | undefined> {
     const textChannel = await bot.channels.fetch(channel);
     if (textChannel?.isSendable()) {
-      await textChannel.send(message);
+      return textChannel.send(message);
     }
   }
 }

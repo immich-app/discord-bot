@@ -103,10 +103,13 @@ export class WebhookService {
     if ('release' in dto && action === 'released') {
       const content = `${_.sample(ReleaseMessages)} ${dto.release.html_url}`;
       const messages = [
-        this.discord.sendMessage(DiscordChannel.Releases, {
-          content: `[${dto.repository.full_name}] ${content}`,
-          flags: [MessageFlags.SuppressEmbeds],
-        }),
+        (async () => {
+          const message = await this.discord.sendMessage(DiscordChannel.Releases, {
+            content: `[${dto.repository.full_name}] ${content}`,
+            flags: [MessageFlags.SuppressEmbeds],
+          });
+          await message?.crosspost();
+        })(),
       ];
 
       if (dto.repository.full_name === 'immich-app/immich') {
