@@ -1,4 +1,4 @@
-import { MessageCreateOptions } from 'discord.js';
+import { Message, MessageCreateOptions } from 'discord.js';
 
 export const IDiscordInterface = 'IDiscordInterface';
 
@@ -24,5 +24,5 @@ export enum DiscordEvents {
 
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
-  sendMessage(channel: DiscordChannel, message: string | MessageCreateOptions): Promise<void>;
+  sendMessage(channel: DiscordChannel, message: string | MessageCreateOptions): Promise<Message | undefined>;
 }
