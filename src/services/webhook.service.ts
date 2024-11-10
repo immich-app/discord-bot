@@ -72,7 +72,7 @@ export class WebhookService {
       return;
     }
 
-    if ('issue' in dto && (action === 'opened' || action === 'closed')) {
+    if ('issue' in dto && (action === 'opened' || action === 'reopened' || action === 'closed')) {
       const embed = this.getEmbed({
         action,
         repositoryName: dto.repository.full_name,
@@ -272,10 +272,13 @@ export class WebhookService {
     }
   }
 
-  private getIssueEmbedColor(dto: { action: 'opened' | 'closed' }) {
+  private getIssueEmbedColor(dto: { action: 'opened' | 'reopened' | 'closed' }) {
     switch (dto.action) {
       case 'opened': {
         return 'Green';
+      }
+      case 'reopened': {
+        return 'DarkGreen';
       }
       case 'closed': {
         return 'NotQuiteBlack';
