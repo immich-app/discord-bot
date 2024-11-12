@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DIService, IDependencyRegistryEngine, InstanceOf } from 'discordx';
 import { AppModule } from 'src/app.module';
 import { DiscordService } from 'src/services/discord.service';
+import { TwitterService } from 'src/services/twitter.service';
 import { ZulipService } from 'src/services/zulip.service';
 
 export class NoopRegistryEngine implements IDependencyRegistryEngine {
@@ -42,6 +43,7 @@ async function bootstrap() {
 
   await app.get(DiscordService).init();
   await app.get(ZulipService).init();
+  await app.get(TwitterService).init();
   await app.listen(port);
   logger.log(`Immich Api is running on: ${await app.getUrl()}`);
 }

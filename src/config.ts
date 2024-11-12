@@ -10,13 +10,32 @@ export const getConfig = () => {
   const zulipUsername = process.env.ZULIP_USERNAME;
   const zulipApiKey = process.env.ZULIP_API_KEY;
   const zulipDomain = process.env.ZULIP_DOMAIN;
+  const twitterBearerToken = process.env.TWITTER_BEARER_TOKEN;
   const githubWebhookSlug = process.env.GITHUB_SLUG;
   const githubStatusWebhookSlug = process.env.GITHUB_STATUS_SLUG;
   const stripeWebhookSlug = process.env.STRIPE_PAYMENT_SLUG;
   const commitSha = process.env.COMMIT_SHA;
 
-  if (!clientId || !clientSecret || !databaseUri || !botToken || !zulipUsername || !zulipApiKey || !zulipDomain) {
-    console.log({ clientId, clientSecret, databaseUri, botToken, zulipUsername, zulipApiKey, zulipDomain });
+  if (
+    !clientId ||
+    !clientSecret ||
+    !databaseUri ||
+    !botToken ||
+    !zulipUsername ||
+    !zulipApiKey ||
+    !zulipDomain ||
+    !twitterBearerToken
+  ) {
+    console.log({
+      clientId,
+      clientSecret,
+      databaseUri,
+      botToken,
+      zulipUsername,
+      zulipApiKey,
+      zulipDomain,
+      twitterBearerToken,
+    });
     throw new Error('Missing required environment variables');
   }
 
@@ -41,6 +60,9 @@ export const getConfig = () => {
       username: zulipUsername,
       apiKey: zulipApiKey,
       realm: zulipDomain,
+    },
+    twitter: {
+      bearerToken: twitterBearerToken,
     },
   };
 };

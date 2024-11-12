@@ -7,6 +7,7 @@ import { Constants, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { ITwitterInterface } from 'src/interfaces/twitter.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { makeLicenseFields, shorten, withErrorLogging } from 'src/util';
 
@@ -35,6 +36,7 @@ export class WebhookService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
+    @Inject(ITwitterInterface) private twitter: ITwitterInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -116,6 +118,7 @@ export class WebhookService {
             topic: Constants.Zulip.Topics.ImmichRelease,
             content,
           }),
+          this.twitter.sendTweet(content),
         );
       }
 

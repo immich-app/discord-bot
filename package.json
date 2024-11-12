@@ -48,6 +48,7 @@
     "luxon": "^3.4.3",
     "openid-client": "6.1.3",
     "pg": "^8.12.0",
+    "twitter-api-v2": "^1.18.1",
     "zulip-js": "^2.0.9"
   },
   "devDependencies": {
