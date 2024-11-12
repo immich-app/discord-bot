@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/commo
 import { User, WebhookEvent } from '@octokit/webhooks-types';
 import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
 import _ from 'lodash';
+import semver from 'semver';
 import { getConfig } from 'src/config';
 import { Constants, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
@@ -19,6 +20,8 @@ const isPaymentEvent = (payload: StripeBase): payload is StripeBase<PaymentInten
 
 const isImmichProduct = (payload: StripeBase<PaymentIntent>) =>
   ['immich-server', 'immich-client'].includes(payload.data.object.description);
+
+const isMainRepo = (name: string) => name === 'immich-app/immich';
 
 type BaseEvent = {
   number: number;
@@ -68,7 +71,7 @@ export class WebhookService {
       });
       embed.setColor(color);
 
-      await this.discord.sendMessage(DiscordChannel.PullRequests, { embeds: [embed] });
+      await this.discord.sendMessage({ channel: DiscordChannel.PullRequests, message: { embeds: [embed] } });
       return;
     }
 
@@ -82,7 +85,7 @@ export class WebhookService {
       });
       embed.setColor(this.getIssueEmbedColor({ action }));
 
-      await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
+      await this.discord.sendMessage({ channel: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
       return;
     }
 
@@ -96,28 +99,46 @@ export class WebhookService {
       });
       embed.setColor(this.getDiscussionEmbedColor({ action }));
 
-      await this.discord.sendMessage(DiscordChannel.IssuesAndDiscussions, { embeds: [embed] });
+      await this.discord.sendMessage({ channel: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
       return;
     }
 
     if ('release' in dto && action === 'released') {
-      const content = `${_.sample(ReleaseMessages)} ${dto.release.html_url}`;
+      const embedProps = {
+        repositoryName: dto.repository.full_name,
+        name: dto.release.name,
+        url: dto.release.html_url,
+        user: dto.sender,
+        description: isMainRepo(dto.repository.full_name) ? _.sample(ReleaseMessages) : undefined,
+      };
       const messages = [
-        (async () => {
-          const message = await this.discord.sendMessage(DiscordChannel.Releases, {
-            content: `[${dto.repository.full_name}] ${content}`,
-            flags: [MessageFlags.SuppressEmbeds],
-          });
-          await message?.crosspost();
-        })(),
+        this.discord.sendMessage({
+          channel: DiscordChannel.Releases,
+          message: {
+            embeds: [this.getReleaseEmbed(embedProps)],
+          },
+          crosspost: true,
+        }),
       ];
 
-      if (dto.repository.full_name === 'immich-app/immich') {
+      if (isMainRepo(dto.repository.full_name)) {
+        if (semver.patch(dto.release.tag_name) === 0) {
+          messages.push(
+            this.discord.sendMessage({
+              channel: DiscordChannel.Announcements,
+              message: {
+                embeds: [this.getReleaseEmbed(embedProps)],
+              },
+              crosspost: true,
+            }),
+          );
+        }
+
         messages.push(
           this.zulip.sendMessage({
             stream: Constants.Zulip.Streams.Immich,
             topic: Constants.Zulip.Topics.ImmichRelease,
-            content,
+            content: embedProps.description!,
           }),
         );
       }
@@ -157,7 +178,7 @@ export class WebhookService {
         }
       }
 
-      await this.discord.sendMessage(DiscordChannel.GithubStatus, { embeds: [embed] });
+      await this.discord.sendMessage({ channel: DiscordChannel.GithubStatus, message: { embeds: [embed] } });
     }
   }
 
@@ -207,17 +228,41 @@ export class WebhookService {
     });
 
     const licenseType = description.split('-')[1];
-    await this.discord.sendMessage(DiscordChannel.Stripe, {
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
-          .setURL(`https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`)
-          .setAuthor({ name: 'Stripe Payments', url: 'https://stripe.com' })
-          .setDescription(`Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`)
-          .setColor(livemode ? Colors.Green : Colors.Yellow)
-          .setFields(makeLicenseFields({ server, client })),
-      ],
-      flags: [MessageFlags.SuppressNotifications],
+    await this.discord.sendMessage({
+      channel: DiscordChannel.Stripe,
+      message: {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
+            .setURL(`https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`)
+            .setAuthor({ name: 'Stripe Payments', url: 'https://stripe.com' })
+            .setDescription(`Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`)
+            .setColor(livemode ? Colors.Green : Colors.Yellow)
+            .setFields(makeLicenseFields({ server, client })),
+        ],
+        flags: [MessageFlags.SuppressNotifications],
+      },
+    });
+  }
+
+  private getReleaseEmbed({
+    repositoryName,
+    name,
+    user,
+    url,
+    description,
+  }: {
+    repositoryName: string;
+    name: string;
+    user: User;
+    url: string;
+    description?: string;
+  }) {
+    return new EmbedBuilder({
+      title: `[${repositoryName}] New release: ${name}`,
+      author: { name: user.login, url: user.html_url, iconURL: user.avatar_url },
+      url,
+      description,
     });
   }
 
