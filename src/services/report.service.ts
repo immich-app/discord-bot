@@ -19,14 +19,17 @@ export class ReportService {
     const endOfYesterday = DateTime.now().minus({ days: 1 }).endOf('day');
     const { server, client } = await this.database.getTotalLicenseCount({ day: endOfYesterday });
 
-    await this.discord.sendMessage(DiscordChannel.Stripe, {
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`Daily report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`)
-          .setDescription(`Total: ${getTotal({ server, client })}`)
-          .setColor(Colors.Purple)
-          .setFields(makeLicenseFields({ server, client })),
-      ],
+    await this.discord.sendMessage({
+      channel: DiscordChannel.Stripe,
+      message: {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`Daily report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`)
+            .setDescription(`Total: ${getTotal({ server, client })}`)
+            .setColor(Colors.Purple)
+            .setFields(makeLicenseFields({ server, client })),
+        ],
+      },
     });
   }
 
@@ -36,14 +39,17 @@ export class ReportService {
     const lastWeek = endOfYesterday.minus({ weeks: 1 });
     const { server, client } = await this.database.getTotalLicenseCount({ week: endOfYesterday });
 
-    await this.discord.sendMessage(DiscordChannel.Stripe, {
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`Weekly report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`)
-          .setDescription(`Total: ${getTotal({ server, client })}`)
-          .setColor(Colors.Purple)
-          .setFields(makeLicenseFields({ server, client })),
-      ],
+    await this.discord.sendMessage({
+      channel: DiscordChannel.Stripe,
+      message: {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`Weekly report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`)
+            .setDescription(`Total: ${getTotal({ server, client })}`)
+            .setColor(Colors.Purple)
+            .setFields(makeLicenseFields({ server, client })),
+        ],
+      },
     });
   }
 
@@ -53,14 +59,17 @@ export class ReportService {
     const lastMonth = endOfYesterday.minus({ months: 1 });
     const { server, client } = await this.database.getTotalLicenseCount({ month: endOfYesterday });
 
-    await this.discord.sendMessage(DiscordChannel.Stripe, {
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`Monthly report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`)
-          .setDescription(`Total: ${getTotal({ server, client })}`)
-          .setColor(Colors.Purple)
-          .setFields(makeLicenseFields({ server, client })),
-      ],
+    await this.discord.sendMessage({
+      channel: DiscordChannel.Stripe,
+      message: {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`Monthly report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`)
+            .setDescription(`Total: ${getTotal({ server, client })}`)
+            .setColor(Colors.Purple)
+            .setFields(makeLicenseFields({ server, client })),
+        ],
+      },
     });
   }
 }

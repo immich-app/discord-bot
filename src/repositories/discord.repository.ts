@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { IntentsBitField, Message, MessageCreateOptions, Partials } from 'discord.js';
+import { IntentsBitField, MessageCreateOptions, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
@@ -65,10 +65,22 @@ export class DiscordRepository implements IDiscordInterface {
     await bot.login(token);
   }
 
-  async sendMessage(channel: DiscordChannel, message: MessageCreateOptions): Promise<Message | undefined> {
+  async sendMessage({
+    channel,
+    message,
+    crosspost = false,
+  }: {
+    channel: DiscordChannel;
+    message: MessageCreateOptions;
+    crosspost?: boolean;
+  }): Promise<void> {
     const textChannel = await bot.channels.fetch(channel);
     if (textChannel?.isSendable()) {
-      return textChannel.send(message);
+      const sentMessage = await textChannel.send(message);
+
+      if (crosspost) {
+        await sentMessage.crosspost();
+      }
     }
   }
 }

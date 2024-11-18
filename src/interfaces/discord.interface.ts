@@ -1,8 +1,9 @@
-import { Message, MessageCreateOptions } from 'discord.js';
+import { MessageCreateOptions } from 'discord.js';
 
 export const IDiscordInterface = 'IDiscordInterface';
 
 export enum DiscordChannel {
+  Announcements = '991930592843272342',
   HelpDesk = '1049703391762321418',
   General = '994044917355663450',
   BotSpam = '1159083520027787307',
@@ -24,5 +25,13 @@ export enum DiscordEvents {
 
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
-  sendMessage(channel: DiscordChannel, message: string | MessageCreateOptions): Promise<Message | undefined>;
+  sendMessage({
+    channel,
+    message,
+    crosspost,
+  }: {
+    channel: DiscordChannel;
+    message: string | MessageCreateOptions;
+    crosspost?: boolean;
+  }): Promise<void>;
 }

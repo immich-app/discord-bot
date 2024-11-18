@@ -43,7 +43,10 @@ export class DiscordService {
 
   @Cron(Constants.Cron.ImmichBirthday)
   async onBirthday() {
-    await this.discord.sendMessage(DiscordChannel.General, `"Happy birthday my other child" - Alex`);
+    await this.discord.sendMessage({
+      channel: DiscordChannel.General,
+      message: `"Happy birthday my other child" - Alex`,
+    });
   }
 
   private async getVersionMessage() {
@@ -66,7 +69,10 @@ export class DiscordService {
     this.logger.log(`Bot ${versionMessage} started`);
 
     if (versionMessage) {
-      await this.discord.sendMessage(DiscordChannel.BotSpam, `I'm alive, running ${versionMessage}!`);
+      await this.discord.sendMessage({
+        channel: DiscordChannel.BotSpam,
+        message: `I'm alive, running ${versionMessage}!`,
+      });
     }
   }
 
