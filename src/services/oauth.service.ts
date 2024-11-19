@@ -1,9 +1,8 @@
 import { BadRequestException, Inject, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
-import { Octokit } from '@octokit/rest';
-// @ts-expect-error f'ing ts does not let you import types from esm
-import type { Configuration, ServerMetadata } from 'openid-client';
 // @ts-expect-error we have the experimental flag enabled so we can import esm packages
-import client from 'openid-client';
+import { Octokit } from '@octokit/rest';
+// @ts-expect-error we have the experimental flag enabled so we can import esm packages
+import client, { type Configuration, type ServerMetadata } from 'openid-client';
 import { getConfig } from 'src/config';
 import { OAuthAuthorizeDto, OAuthCallbackDto } from 'src/dtos/oauth.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';

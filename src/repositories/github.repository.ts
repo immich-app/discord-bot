@@ -1,5 +1,7 @@
 import { Logger } from '@nestjs/common';
+// @ts-expect-error we have the experimental flag enabled so we can import esm packages
 import { RequestError } from '@octokit/request-error';
+// @ts-expect-error we have the experimental flag enabled so we can import esm packages
 import { Octokit } from '@octokit/rest';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 
