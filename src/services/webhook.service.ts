@@ -138,7 +138,7 @@ export class WebhookService {
           this.zulip.sendMessage({
             stream: Constants.Zulip.Streams.Immich,
             topic: Constants.Zulip.Topics.ImmichRelease,
-            content: embedProps.description!,
+            content: `${embedProps.description!} ${dto.release.html_url}`,
           }),
         );
       }
