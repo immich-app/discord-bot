@@ -342,7 +342,7 @@ In order to be able to effectively help you, we need you to provide clear inform
 - Any other information that you think might be relevant.
 
 Please paste files and logs with proper [code formatting](${Constants.Urls.Formatting}), and especially avoid blurry screenshots.
-We're not in your computer, so without the right information we can't work out what the problem is. Help us help you ;)
+Without the right information we can't work out what the problem is. Help us help you ;)
 
 If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`;
   }
