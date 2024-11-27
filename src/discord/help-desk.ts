@@ -336,6 +336,7 @@ In order to be able to effectively help you, we need you to provide clear inform
 - Your docker-compose.yml and .env files.
 - Logs from all the containers.
 - The status of the containers (\`docker ps -a\`).
+- All the troubleshooting steps you've tried so far.
 - Any recent changes you've made to Immich or your system.
 - Details about your system (both software/OS and hardware).
 - Details about your storage (filesystems, type of disks, output of commands like \`fdisk -l\` and \`df -h\`).
