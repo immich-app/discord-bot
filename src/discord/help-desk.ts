@@ -312,13 +312,13 @@ export class DiscordHelpDesk {
     const icon = (index: number) => (isChecked[index] ? Constants.Icons.Checked : Constants.Icons.Unchecked);
 
     const tasks = [
-      `I have verified I'm on the latest release(note that mobile app releases may take some time).`,
-      `I have read applicable [release notes](${Constants.Urls.Release}).`,
-      `I have reviewed the [FAQs](${Constants.Urls.Docs.FAQ}) for known issues.`,
-      `I have reviewed [Github](${Constants.Urls.Issues}) for known issues.`,
-      'I have tried accessing Immich via local ip (without a custom reverse proxy).',
-      'I have uploaded the relevant information (see below).',
-      'I have tried an incognito window, disabled extensions, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
+      `verified I'm on the latest release(note that mobile app releases may take some time).`,
+      `read applicable [release notes](${Constants.Urls.Release}).`,
+      `reviewed the [FAQs](${Constants.Urls.Docs.FAQ}) for known issues.`,
+      `reviewed [Github](${Constants.Urls.Issues}) for known issues.`,
+      'tried accessing Immich via local ip (without a custom reverse proxy).',
+      'uploaded the relevant information (see below).',
+      'tried an incognito window, disabled extensions, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
     ];
 
     return [
@@ -327,11 +327,13 @@ export class DiscordHelpDesk {
 Thanks for reaching out to us. Please carefully read this message and follow the recommended actions. This will help us be more effective in our support effort and leave more time for building Immich ${Constants.Icons.Immich}.
 ## References
 - __Container Logs:__ \`docker compose logs\` [docs](${Constants.Urls.Docs.Logs})
-- __Container Status__:  \`docker compose ps\` [docs](${Constants.Urls.Docs.Containers})
-- __Reverse Proxy:__ ${Constants.Urls.Docs.ReverseProxy}`,
+- __Container Status__:  \`docker ps -a\` [docs](${Constants.Urls.Docs.Containers})
+- __Reverse Proxy:__ ${Constants.Urls.Docs.ReverseProxy}
+- __Code Formatting__ ${Constants.Urls.Formatting}`,
       `
 
 ## Checklist
+I have...
 ${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
 
 (an item can be marked as "complete" by reacting with the appropriate number)
@@ -340,8 +342,7 @@ ${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
 
 In order to be able to effectively help you, we need you to provide clear information to show what the problem is. The exact details needed vary per case, but here is a list of things to consider:
 - Your docker-compose.yml and .env files.
-- Logs from all the containers.
-- The status of the containers (\`docker ps -a\`).
+- Logs from all the containers and their status (see above).
 - All the troubleshooting steps you've tried so far.
 - Any recent changes you've made to Immich or your system.
 - Details about your system (both software/OS and hardware).
@@ -349,7 +350,7 @@ In order to be able to effectively help you, we need you to provide clear inform
 - The version of the Immich server, mobile app, and other relevant pieces.
 - Any other information that you think might be relevant.
 
-Please paste files and logs with proper [code formatting](${Constants.Urls.Formatting}), and especially avoid blurry screenshots.
+Please paste files and logs with proper code formatting, and especially avoid blurry screenshots.
 Without the right information we can't work out what the problem is. Help us help you ;)
 
 If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`,
