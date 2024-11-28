@@ -210,7 +210,7 @@ export class DiscordHelpDesk {
     const message = this.buildWelcomeMessage(
       channel.ownerId ?? '',
       reaction.message.reactions.cache.map((reaction) => reaction.count > 1),
-    );
+    )[1];
 
     if (!message.includes(Constants.Icons.Unchecked)) {
       mainButtonRow.components.at(-1)?.setDisabled(false);
@@ -247,14 +247,18 @@ export class DiscordHelpDesk {
   }
 
   private async sendWelcomeMessage(user: string, thread: ThreadChannel) {
-    const welcomeMessage = this.buildWelcomeMessage(user, []);
-    const message = await thread.send({
+    const [welcomeMessage, tasks] = this.buildWelcomeMessage(user, []);
+    await thread.send({
       content: welcomeMessage,
+      flags: [MessageFlags.SuppressEmbeds],
+    });
+    const message = await thread.send({
+      content: tasks,
       components: [mainButtonRow],
       flags: [MessageFlags.SuppressEmbeds],
     });
 
-    const itemCount = welcomeMessage.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
+    const itemCount = tasks.match(new RegExp(Constants.Icons.Unchecked, 'g'))?.length ?? 0;
     for (let i = 1; i <= itemCount; i++) {
       await message.react(`${i}️⃣`);
     }
@@ -317,13 +321,15 @@ export class DiscordHelpDesk {
       'I have tried an incognito window, disabled extensions, cleared mobile app cache, logged out and back in, different browsers, etc. as applicable',
     ];
 
-    return `:wave: Hey <@${user}>,
+    return [
+      `:wave: Hey <@${user}>,
 
 Thanks for reaching out to us. Please carefully read this message and follow the recommended actions. This will help us be more effective in our support effort and leave more time for building Immich ${Constants.Icons.Immich}.
 ## References
 - __Container Logs:__ \`docker compose logs\` [docs](${Constants.Urls.Docs.Logs})
 - __Container Status__:  \`docker compose ps\` [docs](${Constants.Urls.Docs.Containers})
-- __Reverse Proxy:__ ${Constants.Urls.Docs.ReverseProxy}
+- __Reverse Proxy:__ ${Constants.Urls.Docs.ReverseProxy}`,
+      `
 
 ## Checklist
 ${tasks.map((task, index) => `${index + 1}. ${icon(index)} ${task}`).join('\n')}
@@ -346,6 +352,7 @@ In order to be able to effectively help you, we need you to provide clear inform
 Please paste files and logs with proper [code formatting](${Constants.Urls.Formatting}), and especially avoid blurry screenshots.
 Without the right information we can't work out what the problem is. Help us help you ;)
 
-If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`;
+If this ticket can be closed you can use the \`/close\` command, and re-open it later if needed.`,
+    ];
   }
 }
