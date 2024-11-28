@@ -340,6 +340,7 @@ In order to be able to effectively help you, we need you to provide clear inform
 - Any recent changes you've made to Immich or your system.
 - Details about your system (both software/OS and hardware).
 - Details about your storage (filesystems, type of disks, output of commands like \`fdisk -l\` and \`df -h\`).
+- The version of the Immich server, mobile app, and other relevant pieces.
 - Any other information that you think might be relevant.
 
 Please paste files and logs with proper [code formatting](${Constants.Urls.Formatting}), and especially avoid blurry screenshots.
