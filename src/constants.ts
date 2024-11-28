@@ -60,6 +60,8 @@ const urls = {
   MyImmich: 'https://my.immich.app',
   Release:
     'https://github.com/immich-app/immich/discussions?discussions_q=label%3Achangelog%3Abreaking-change+sort%3Adate_created',
+  Formatting:
+    'https://support.discord.com/hc/en-us/articles/210298617-Markdown-Text-101-Chat-Formatting-Bold-Italic-Underline#h_01GY0DAKGXDEHE263BCAYEGFJA',
 };
 
 const tags = {
