@@ -11,7 +11,7 @@ import {
   ThreadChannel,
   type CommandInteraction,
 } from 'discord.js';
-import { Discord, ModalComponent, Slash, SlashOption } from 'discordx';
+import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 import { DiscordService } from 'src/services/discord.service';
@@ -326,5 +326,48 @@ export class DiscordCommands {
     await this.service.addOrUpdateMessage({ name, content, author: interaction.user.id });
 
     await interaction.deferUpdate();
+  }
+
+  @Slash({ name: 'emote-add', description: 'Add new emotes to the server' })
+  async handleEmoteAdd(
+    @SlashChoice('7tv', 'bttv')
+    @SlashOption({
+      name: 'source',
+      description: 'Where the emote is from',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    source: '7tv' | 'bttv',
+    @SlashOption({
+      name: 'id',
+      description: 'ID of the emote',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    id: string,
+    @SlashOption({
+      name: 'name',
+      description: 'Name of the emote. If unspecified uses the one from 7TV/BTTV',
+      type: ApplicationCommandOptionType.String,
+      required: false,
+    })
+    name: string | null,
+    interaction: CommandInteraction,
+  ) {
+    let emote;
+    switch (source) {
+      case '7tv':
+        emote = await this.service.create7TvEmote(id, interaction.guildId, name);
+        break;
+      case 'bttv':
+        emote = await this.service.createBttvEmote(id, interaction.guildId, name);
+    }
+
+    if (!emote) {
+      await interaction.reply({ content: `Could not find ${source.toUpperCase()} emote with id ${id}` });
+      return;
+    }
+
+    await interaction.reply({ content: `Emote successfully added! ${emote.toString()}` });
   }
 }

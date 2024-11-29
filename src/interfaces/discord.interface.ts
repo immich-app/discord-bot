@@ -1,4 +1,4 @@
-import { MessageCreateOptions } from 'discord.js';
+import { GuildEmoji, MessageCreateOptions } from 'discord.js';
 
 export const IDiscordInterface = 'IDiscordInterface';
 
@@ -34,4 +34,5 @@ export interface IDiscordInterface {
     message: string | MessageCreateOptions;
     crosspost?: boolean;
   }): Promise<void>;
+  createEmote(name: string, emote: string | Buffer, guildId: string): Promise<GuildEmoji | undefined>;
 }
