@@ -207,6 +207,15 @@ export class DiscordHelpDesk {
       return;
     }
 
+    // TODO: make this less ugly by storing the id of our message in the DB
+    if (
+      !reaction.message.content?.includes(
+        `(an item can be marked as "complete" by reacting with the appropriate number)`,
+      )
+    ) {
+      return;
+    }
+
     const message = this.buildWelcomeMessage(
       channel.ownerId ?? '',
       reaction.message.reactions.cache.map((reaction) => reaction.count > 1),
