@@ -38,7 +38,7 @@
     "class-validator": "^0.14.1",
     "cors": "^2.8.5",
     "cron": "^3.0.0",
-    "discord.js": "^14.14.0",
+    "discord.js": "^14.17.3",
     "discordx": "^11.7.6",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
