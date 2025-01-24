@@ -1,6 +1,7 @@
 import { Body, Controller, Injectable, Param, Post } from '@nestjs/common';
 import { WebhookEvent } from '@octokit/webhooks-types';
 import { GithubStatusComponent, GithubStatusIncident, StripeBase } from 'src/dtos/webhook.dto';
+import { FourthwallOrderCreateWebhook, FourthwallOrderUpdateWebhook } from 'src/interfaces/fourthwall.interface';
 import { WebhookService } from 'src/services/webhook.service';
 
 @Injectable()
@@ -21,5 +22,13 @@ export class WebhookController {
   @Post('stripe-payments/:slug')
   async onStripePayment(@Body() dto: StripeBase, @Param('slug') slug: string) {
     await this.service.onStripePayment(dto, slug);
+  }
+
+  @Post('fourthwall-order/:slug')
+  async onFourthwallOrder(
+    @Body() dto: FourthwallOrderCreateWebhook | FourthwallOrderUpdateWebhook,
+    @Param('slug') slug: string,
+  ) {
+    await this.service.onFourthwallOrder(dto, slug);
   }
 }

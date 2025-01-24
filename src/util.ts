@@ -47,6 +47,13 @@ export const makeLicenseFields = ({ server, client }: { server: number; client: 
   ];
 };
 
+export const makeOrderFields = ({ revenue, profit }: { revenue: number; profit: number }) => {
+  return [
+    { name: 'Revenue', value: `${revenue.toLocaleString()} USD`, inline: true },
+    { name: 'Profit', value: `${profit.toLocaleString()} USD`, inline: true },
+  ];
+};
+
 export const shorten = (text: string, maxLength: number = 100) => {
   return text.length > maxLength ? `${text.substring(0, maxLength - 3)}...` : text;
 };

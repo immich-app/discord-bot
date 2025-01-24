@@ -10,12 +10,14 @@ import {
   DiscordLinkUpdate,
   DiscordMessage,
   IDatabaseRepository,
-  LicenseCountOptions,
   LicenseType,
   NewDiscordLink,
   NewDiscordMessage,
+  NewFourthwallOrder,
   NewPayment,
+  ReportOptions,
   UpdateDiscordMessage,
+  UpdateFourthwallOrder,
 } from 'src/interfaces/database.interface';
 
 export class DatabaseRepository implements IDatabaseRepository {
@@ -62,7 +64,7 @@ export class DatabaseRepository implements IDatabaseRepository {
     await this.db.insertInto('payment').values(entity).execute();
   }
 
-  async getTotalLicenseCount(options: LicenseCountOptions) {
+  async getTotalLicenseCount(options?: ReportOptions) {
     const { day, week, month } = options || {};
     let builder = this.db
       .selectFrom('payment')
@@ -157,5 +159,37 @@ export class DatabaseRepository implements IDatabaseRepository {
 
   async updateDiscordMessage({ id, ...message }: UpdateDiscordMessage): Promise<void> {
     await this.db.updateTable('discord_messages').set(message).where('id', '=', id).execute();
+  }
+
+  async createFourthwallOrder(entity: NewFourthwallOrder): Promise<void> {
+    await this.db
+      .insertInto('fourthwall_orders')
+      .onConflict((oc) => oc.doNothing())
+      .values(entity)
+      .execute();
+  }
+
+  async updateFourthwallOrder(entity: UpdateFourthwallOrder): Promise<void> {
+    await this.db.updateTable('fourthwall_orders').set(entity).where('id', '=', entity.id).execute();
+  }
+
+  async getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }> {
+    const { day, week, month } = options || {};
+    const { revenue, profit } = await this.db
+      .selectFrom('fourthwall_orders')
+      .select([(eb) => eb.fn.sum('revenue').as('revenue'), (eb) => eb.fn.sum('profit').as('profit')])
+      .where('testMode', '=', false)
+      .$if(!!day, (qb) =>
+        qb.where((eb) => eb.between('createdAt', day!.minus({ days: 1 }).toJSDate(), day!.toJSDate())),
+      )
+      .$if(!week, (qb) =>
+        qb.where((eb) => eb.between('createdAt', week!.minus({ weeks: 1 }).toJSDate(), week!.toJSDate())),
+      )
+      .$if(!month, (qb) =>
+        qb.where((eb) => eb.between('createdAt', month!.minus({ months: 1 }).toJSDate(), month!.toJSDate())),
+      )
+      .executeTakeFirstOrThrow();
+
+    return { revenue: Number(revenue) || 0, profit: Number(profit) || 0 };
   }
 }
