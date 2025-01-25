@@ -51,7 +51,7 @@
     "zulip-js": "^2.0.9"
   },
   "devDependencies": {
-    "@nestjs/cli": "^10.4.2",
+    "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
     "@swc/core": "^1.7.0",
