@@ -47,11 +47,23 @@ export const makeLicenseFields = ({ server, client }: { server: number; client: 
   ];
 };
 
-export const makeOrderFields = ({ revenue, profit }: { revenue: number; profit: number }) => {
-  return [
+export const makeOrderFields = ({
+  revenue,
+  profit,
+  message,
+}: {
+  revenue: number;
+  profit: number;
+  message?: string;
+}) => {
+  const fields = [
     { name: 'Revenue', value: `${revenue.toLocaleString()} USD`, inline: true },
     { name: 'Profit', value: `${profit.toLocaleString()} USD`, inline: true },
   ];
+  if (message) {
+    fields.push({ name: 'Message', value: message, inline: true });
+  }
+  return fields;
 };
 
 export const shorten = (text: string, maxLength: number = 100) => {

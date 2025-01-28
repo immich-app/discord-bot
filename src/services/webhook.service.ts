@@ -275,7 +275,7 @@ export class WebhookService {
               `Price: ${dto.data.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
             )
             .setColor(dto.testMode ? Colors.Yellow : dto.data.status === 'CANCELLED' ? Colors.Red : Colors.Green)
-            .setFields(makeOrderFields({ revenue, profit })),
+            .setFields(makeOrderFields({ revenue, profit, message: dto.data.message })),
         ],
         flags: [MessageFlags.SuppressNotifications],
       },
