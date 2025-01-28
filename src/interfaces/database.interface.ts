@@ -69,6 +69,11 @@ export type UpdateDiscordMessage = Updateable<DiscordMessagesTable> & { id: stri
 
 export interface FourthwallOrdersTable {
   id: string;
+  discount: number;
+  tax: number;
+  shipping: number;
+  subtotal: number;
+  total: number;
   revenue: number;
   profit: number;
   username?: string;

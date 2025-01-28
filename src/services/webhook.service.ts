@@ -225,12 +225,17 @@ export class WebhookService {
       case 'ORDER_PLACED': {
         await this.database.createFourthwallOrder({
           id: dto.data.id,
-          createdAt: new Date(dto.data.createdAt),
-          status: dto.data.status,
+          discount: dto.data.amounts.discount.value,
+          tax: dto.data.amounts.tax.value,
+          shipping: dto.data.amounts.shipping.value,
+          subtotal: dto.data.amounts.subtotal.value,
+          total: dto.data.amounts.total.value,
           revenue: dto.data.amounts.subtotal.value,
           profit: order.profit.value,
-          message: dto.data.message,
           username: dto.data.username,
+          message: dto.data.message,
+          status: dto.data.status,
+          createdAt: new Date(dto.data.createdAt),
           testMode: dto.testMode,
         });
         break;
@@ -238,12 +243,17 @@ export class WebhookService {
       case 'ORDER_UPDATED': {
         await this.database.updateFourthwallOrder({
           id: dto.data.id,
-          createdAt: new Date(dto.data.createdAt),
-          status: dto.data.status,
+          discount: dto.data.amounts.discount.value,
+          tax: dto.data.amounts.tax.value,
+          shipping: dto.data.amounts.shipping.value,
+          subtotal: dto.data.amounts.subtotal.value,
+          total: dto.data.amounts.total.value,
           revenue: dto.data.amounts.subtotal.value,
           profit: order.profit.value,
-          message: dto.data.message,
           username: dto.data.username,
+          message: dto.data.message,
+          status: dto.data.status,
+          createdAt: new Date(dto.data.createdAt),
         });
         break;
       }
