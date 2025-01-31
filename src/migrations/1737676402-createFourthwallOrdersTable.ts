@@ -14,7 +14,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn('username', 'varchar')
     .addColumn('message', 'varchar')
     .addColumn('status', 'varchar', (col) => col.notNull())
-    .addColumn('createdAt', 'datetime', (col) => col.notNull())
+    .addColumn('createdAt', 'varchar', (col) => col.notNull())
     .addColumn('testMode', 'boolean', (col) => col.notNull())
     .execute();
 }
