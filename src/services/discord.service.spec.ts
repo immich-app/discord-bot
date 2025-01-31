@@ -39,6 +39,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getDiscordMessages: vitest.fn(),
   removeDiscordMessage: vitest.fn(),
   updateDiscordMessage: vitest.fn(),
+  createFourthwallOrder: vitest.fn(),
+  getTotalFourthwallOrders: vitest.fn(),
+  updateFourthwallOrder: vitest.fn(),
 });
 
 describe('Bot test', () => {

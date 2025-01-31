@@ -8,8 +8,14 @@ import { Constants, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import {
+  FourthwallOrderCreateWebhook,
+  FourthwallOrderUpdateWebhook,
+  IFourthwallRepository,
+} from 'src/interfaces/fourthwall.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
-import { makeLicenseFields, shorten, withErrorLogging } from 'src/util';
+import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
+import { makeLicenseFields, makeOrderFields, shorten, withErrorLogging } from 'src/util';
 
 const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dto is GithubStatusIncident => {
   return !!(dto as GithubStatusIncident).incident;
@@ -38,6 +44,7 @@ export class WebhookService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
+    @Inject(IFourthwallRepository) private fourthwall: FourthwallRepository,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -191,6 +198,88 @@ export class WebhookService {
     if (isPaymentEvent(dto) && isImmichProduct(dto)) {
       void this.handleStripePayment(dto);
     }
+  }
+
+  async onFourthwallOrder(dto: FourthwallOrderCreateWebhook | FourthwallOrderUpdateWebhook, slug: string) {
+    const { slugs, fourthwall } = getConfig();
+    if (!slugs.fourthwallWebhook || slug !== slugs.fourthwallWebhook) {
+      throw new UnauthorizedException();
+    }
+
+    let order = await this.fourthwall.getOrder({
+      id: dto.data.id,
+      user: fourthwall.user,
+      password: fourthwall.password,
+    });
+
+    if (dto.testMode) {
+      order = {
+        profit: {
+          value: dto.data.amounts.subtotal.value - Math.random() * dto.data.amounts.subtotal.value,
+          currency: 'USD',
+        },
+      } as any;
+    }
+
+    switch (dto.type) {
+      case 'ORDER_PLACED': {
+        await this.database.createFourthwallOrder({
+          id: dto.data.id,
+          discount: dto.data.amounts.discount.value,
+          tax: dto.data.amounts.tax.value,
+          shipping: dto.data.amounts.shipping.value,
+          subtotal: dto.data.amounts.subtotal.value,
+          total: dto.data.amounts.total.value,
+          revenue: dto.data.amounts.subtotal.value,
+          profit: order.profit.value,
+          username: dto.data.username,
+          message: dto.data.message,
+          status: dto.data.status,
+          createdAt: new Date(dto.data.createdAt),
+          testMode: dto.testMode,
+        });
+        break;
+      }
+      case 'ORDER_UPDATED': {
+        await this.database.updateFourthwallOrder({
+          id: dto.data.id,
+          discount: dto.data.amounts.discount.value,
+          tax: dto.data.amounts.tax.value,
+          shipping: dto.data.amounts.shipping.value,
+          subtotal: dto.data.amounts.subtotal.value,
+          total: dto.data.amounts.total.value,
+          revenue: dto.data.amounts.subtotal.value,
+          profit: order.profit.value,
+          username: dto.data.username,
+          message: dto.data.message,
+          status: dto.data.status,
+          createdAt: new Date(dto.data.createdAt),
+        });
+        break;
+      }
+    }
+
+    const { revenue, profit } = await this.database.getTotalFourthwallOrders();
+
+    await this.discord.sendMessage({
+      channel: DiscordChannel.Stripe,
+      message: {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(
+              `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}`,
+            )
+            .setURL(`https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dto.data.id}`)
+            .setAuthor({ name: 'Fourthwall', url: 'https://fourthwall.com' })
+            .setDescription(
+              `Price: ${dto.data.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
+            )
+            .setColor(dto.testMode ? Colors.Yellow : dto.data.status === 'CANCELLED' ? Colors.Red : Colors.Green)
+            .setFields(makeOrderFields({ revenue, profit, message: dto.data.message })),
+        ],
+        flags: [MessageFlags.SuppressNotifications],
+      },
+    });
   }
 
   private async handleStripePayment(event: StripeBase<PaymentIntent>) {

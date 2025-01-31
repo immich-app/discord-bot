@@ -67,14 +67,35 @@ export type DiscordMessage = Selectable<DiscordMessagesTable>;
 export type NewDiscordMessage = Insertable<DiscordMessagesTable>;
 export type UpdateDiscordMessage = Updateable<DiscordMessagesTable> & { id: string };
 
+export interface FourthwallOrdersTable {
+  id: string;
+  discount: number;
+  tax: number;
+  shipping: number;
+  subtotal: number;
+  total: number;
+  revenue: number;
+  profit: number;
+  username?: string;
+  message?: string;
+  status: string;
+  createdAt: Date;
+  testMode: boolean;
+}
+
+export type FourthwallOrder = Selectable<FourthwallOrdersTable>;
+export type NewFourthwallOrder = Insertable<FourthwallOrdersTable>;
+export type UpdateFourthwallOrder = Updateable<FourthwallOrdersTable> & { id: string };
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
   discord_links: DiscordLinksTable;
   discord_messages: DiscordMessagesTable;
+  fourthwall_orders: FourthwallOrdersTable;
 }
 
-export type LicenseCountOptions = {
+export type ReportOptions = {
   day?: DateTime;
   week?: DateTime;
   month?: DateTime;
@@ -82,8 +103,8 @@ export type LicenseCountOptions = {
 
 export interface IDatabaseRepository {
   runMigrations(): Promise<void>;
-  createPayment(entitY: NewPayment): Promise<void>;
-  getTotalLicenseCount(options?: LicenseCountOptions): Promise<{ server: number; client: number }>;
+  createPayment(entity: NewPayment): Promise<void>;
+  getTotalLicenseCount(options?: ReportOptions): Promise<{ server: number; client: number }>;
   getSponsorLicenses(githubUsername: string): Promise<License[]>;
   getDiscordLinks(): Promise<DiscordLink[]>;
   getDiscordLink(name: string): Promise<DiscordLink | undefined>;
@@ -95,4 +116,7 @@ export interface IDatabaseRepository {
   addDiscordMessage(message: NewDiscordMessage): Promise<void>;
   updateDiscordMessage(message: UpdateDiscordMessage): Promise<void>;
   removeDiscordMessage(id: string): Promise<void>;
+  createFourthwallOrder(entity: NewFourthwallOrder): Promise<void>;
+  updateFourthwallOrder(entity: UpdateFourthwallOrder): Promise<void>;
+  getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }>;
 }
