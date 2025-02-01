@@ -182,10 +182,10 @@ export class DatabaseRepository implements IDatabaseRepository {
       .$if(!!day, (qb) =>
         qb.where((eb) => eb.between('createdAt', day!.minus({ days: 1 }).toJSDate(), day!.toJSDate())),
       )
-      .$if(!week, (qb) =>
+      .$if(!!week, (qb) =>
         qb.where((eb) => eb.between('createdAt', week!.minus({ weeks: 1 }).toJSDate(), week!.toJSDate())),
       )
-      .$if(!month, (qb) =>
+      .$if(!!month, (qb) =>
         qb.where((eb) => eb.between('createdAt', month!.minus({ months: 1 }).toJSDate(), month!.toJSDate())),
       )
       .executeTakeFirstOrThrow();
