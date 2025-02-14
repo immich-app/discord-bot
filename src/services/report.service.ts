@@ -40,7 +40,7 @@ export class ReportService {
           new EmbedBuilder()
             .setTitle(`Daily orders report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`)
             .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
-            .setColor(Colors.Purple)
+            .setColor(Colors.DarkPurple)
             .setFields(makeOrderFields({ revenue, profit })),
         ],
       },
@@ -78,7 +78,7 @@ export class ReportService {
               `Weekly orders report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
             )
             .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
-            .setColor(Colors.Purple)
+            .setColor(Colors.DarkPurple)
             .setFields(makeOrderFields({ revenue, profit })),
         ],
       },
@@ -116,7 +116,7 @@ export class ReportService {
               `Monthly orders report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
             )
             .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
-            .setColor(Colors.Purple)
+            .setColor(Colors.DarkPurple)
             .setFields(makeOrderFields({ revenue, profit })),
         ],
       },
