@@ -205,9 +205,10 @@ export class WebhookService {
     if (!slugs.fourthwallWebhook || slug !== slugs.fourthwallWebhook) {
       throw new UnauthorizedException();
     }
+    const dtoOrder = dto.type === 'ORDER_PLACED' ? dto.data : dto.data.order;
 
     let order = await this.fourthwall.getOrder({
-      id: dto.data.id,
+      id: dtoOrder.id,
       user: fourthwall.user,
       password: fourthwall.password,
     });
@@ -215,7 +216,7 @@ export class WebhookService {
     if (dto.testMode) {
       order = {
         profit: {
-          value: dto.data.amounts.subtotal.value - Math.random() * dto.data.amounts.subtotal.value,
+          value: dtoOrder.amounts.subtotal.value - Math.random() * dtoOrder.amounts.subtotal.value,
           currency: 'USD',
         },
       } as any;
@@ -224,36 +225,36 @@ export class WebhookService {
     switch (dto.type) {
       case 'ORDER_PLACED': {
         await this.database.createFourthwallOrder({
-          id: dto.data.id,
-          discount: dto.data.amounts.discount.value,
-          tax: dto.data.amounts.tax.value,
-          shipping: dto.data.amounts.shipping.value,
-          subtotal: dto.data.amounts.subtotal.value,
-          total: dto.data.amounts.total.value,
-          revenue: dto.data.amounts.subtotal.value,
+          id: dtoOrder.id,
+          discount: dtoOrder.amounts.discount.value,
+          tax: dtoOrder.amounts.tax.value,
+          shipping: dtoOrder.amounts.shipping.value,
+          subtotal: dtoOrder.amounts.subtotal.value,
+          total: dtoOrder.amounts.total.value,
+          revenue: dtoOrder.amounts.subtotal.value,
           profit: order.profit.value,
-          username: dto.data.username,
-          message: dto.data.message,
-          status: dto.data.status,
-          createdAt: new Date(dto.data.createdAt),
+          username: dtoOrder.username,
+          message: dtoOrder.message,
+          status: dtoOrder.status,
+          createdAt: new Date(dtoOrder.createdAt),
           testMode: dto.testMode,
         });
         break;
       }
       case 'ORDER_UPDATED': {
         await this.database.updateFourthwallOrder({
-          id: dto.data.id,
-          discount: dto.data.amounts.discount.value,
-          tax: dto.data.amounts.tax.value,
-          shipping: dto.data.amounts.shipping.value,
-          subtotal: dto.data.amounts.subtotal.value,
-          total: dto.data.amounts.total.value,
-          revenue: dto.data.amounts.subtotal.value,
+          id: dtoOrder.id,
+          discount: dtoOrder.amounts.discount.value,
+          tax: dtoOrder.amounts.tax.value,
+          shipping: dtoOrder.amounts.shipping.value,
+          subtotal: dtoOrder.amounts.subtotal.value,
+          total: dtoOrder.amounts.total.value,
+          revenue: dtoOrder.amounts.subtotal.value,
           profit: order.profit.value,
-          username: dto.data.username,
-          message: dto.data.message,
-          status: dto.data.status,
-          createdAt: new Date(dto.data.createdAt),
+          username: dtoOrder.username,
+          message: dtoOrder.message,
+          status: dtoOrder.status,
+          createdAt: new Date(dtoOrder.createdAt),
         });
         break;
       }
@@ -269,13 +270,13 @@ export class WebhookService {
             .setTitle(
               `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}`,
             )
-            .setURL(`https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dto.data.id}`)
+            .setURL(`https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id}`)
             .setAuthor({ name: 'Fourthwall', url: 'https://fourthwall.com' })
             .setDescription(
-              `Price: ${dto.data.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
+              `Price: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
             )
-            .setColor(dto.testMode ? Colors.Yellow : dto.data.status === 'CANCELLED' ? Colors.Red : Colors.DarkGreen)
-            .setFields(makeOrderFields({ revenue, profit, message: dto.data.message })),
+            .setColor(dto.testMode ? Colors.Yellow : dtoOrder.status === 'CANCELLED' ? Colors.Red : Colors.DarkGreen)
+            .setFields(makeOrderFields({ revenue, profit, message: dtoOrder.message })),
         ],
         flags: [MessageFlags.SuppressNotifications],
       },

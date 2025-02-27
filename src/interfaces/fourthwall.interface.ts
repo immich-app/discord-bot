@@ -251,7 +251,7 @@ export interface FourthwallOrderUpdateWebhook {
   type: 'ORDER_UPDATED';
   apiVersion: string;
   createdAt: string;
-  data: FourthwallOrderData & { update: { type: string } };
+  data: { order: FourthwallOrderData; update: { type: string } };
 }
 
 export interface IFourthwallRepository {
