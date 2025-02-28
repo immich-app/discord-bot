@@ -233,25 +233,6 @@ export class DiscordService {
 
     content = content.replaceAll(/```.*```/gs, '');
 
-    const shortMatches = content.matchAll(/(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g);
-    for (const match of shortMatches) {
-      if (!match || !match.groups) {
-        continue;
-      }
-
-      const { org, repo, num } = match.groups;
-      const id = Number(num);
-      if (Number.isNaN(id)) {
-        continue;
-      }
-
-      if (!org && !repo && id < 1000) {
-        continue;
-      }
-
-      links.push({ org: org || GithubOrg.ImmichApp, repo: repo || GithubRepo.Immich, id });
-    }
-
     const longMatches = content.matchAll(
       /https:\/\/github\.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/(?<category>(pull|issue|discussion))\/(?<num>\d+)/g,
     );
@@ -274,8 +255,44 @@ export class DiscordService {
       });
     }
 
+    const shortMatches = content.matchAll(/(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g);
+    for (const match of shortMatches) {
+      if (!match || !match.groups) {
+        continue;
+      }
+
+      const { org, repo, num } = match.groups;
+      const id = Number(num);
+      if (Number.isNaN(id)) {
+        continue;
+      }
+
+      if (!org && !repo && id < 1000) {
+        continue;
+      }
+
+      links.push({
+        org: org || GithubOrg.ImmichApp,
+        repo: repo || GithubRepo.Immich,
+        id,
+      });
+    }
+
+    const keys = new Set<string>();
+    const requests: GithubLink[] = [];
+
+    for (const { id, org, repo, type } of links) {
+      const key = id + org + repo;
+      if (keys.has(key)) {
+        continue;
+      }
+
+      requests.push({ id, org, repo, type });
+      keys.add(key);
+    }
+
     const results = await Promise.all(
-      links.map(async ({ org, repo, id, type }) => {
+      requests.map(async ({ org, repo, id, type }) => {
         switch (type) {
           case 'issue':
           case 'pull':
