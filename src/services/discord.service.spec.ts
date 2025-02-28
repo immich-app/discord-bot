@@ -250,6 +250,11 @@ describe('Bot test', () => {
         links: ['https://github.com/immich-app/immich/pull/4242'],
       },
       {
+        name: 'should deduplicate links',
+        message: 'https://github.com/immich-app/immich/pull/4242 #4242 immich-app/immich#4242 immich#4242',
+        links: ['https://github.com/immich-app/immich/pull/4242'],
+      },
+      {
         name: 'should return all the links',
         message: [
           '#1234',
@@ -262,14 +267,13 @@ describe('Bot test', () => {
           'https://github.com/immich-app/immich/discussion/3',
         ].join('\n'),
         links: [
-          'https://github.com/immich-app/immich/pull/1234',
-          'https://github.com/immich-app/immich/issue/123',
-          'https://github.com/immich-app/static-pages/issue/123',
-          'https://github.com/immich-app/static-pages/issue/123',
-          'https://github.com/octokit/rest.js/issue/123',
           'https://github.com/immich-app/immich/issue/1',
           'https://github.com/immich-app/immich/pull/2',
           'https://github.com/immich-app/immich/discussion/3',
+          'https://github.com/immich-app/immich/pull/1234',
+          'https://github.com/immich-app/immich/issue/123',
+          'https://github.com/immich-app/static-pages/issue/123',
+          'https://github.com/octokit/rest.js/issue/123',
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
