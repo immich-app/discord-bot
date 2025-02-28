@@ -256,6 +256,9 @@ export class WebhookService {
           status: dtoOrder.status,
           createdAt: new Date(dtoOrder.createdAt),
         });
+        if (dtoOrder.status !== 'CANCELLED') {
+          return;
+        }
         break;
       }
     }
