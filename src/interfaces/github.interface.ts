@@ -21,6 +21,7 @@ export interface SearchResult {
 }
 
 export interface IGithubInterface {
+  init(appId: string, privateKey: string, installationId: string): Promise<void>;
   getIssueOrPr(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
   getDiscussion(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
   getForkCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;

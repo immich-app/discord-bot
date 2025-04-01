@@ -12,6 +12,9 @@ export const getConfig = () => {
   const zulipDomain = process.env.ZULIP_DOMAIN;
   const githubWebhookSlug = process.env.GITHUB_SLUG;
   const githubStatusWebhookSlug = process.env.GITHUB_STATUS_SLUG;
+  const githubAppId = process.env.GITHUB_APP_ID;
+  const githubInstallationId = process.env.GITHUB_INSTALLATION_ID;
+  const githubPrivateKey = process.env.GITHUB_PRIVATE_KEY;
   const stripeWebhookSlug = process.env.STRIPE_PAYMENT_SLUG;
   const commitSha = process.env.COMMIT_SHA;
   const fourthwallUser = process.env.FOURTHWALL_USER;
@@ -27,7 +30,10 @@ export const getConfig = () => {
     !zulipApiKey ||
     !zulipDomain ||
     !fourthwallUser ||
-    !fourthwallPassword
+    !fourthwallPassword ||
+    !githubAppId ||
+    !githubInstallationId ||
+    !githubPrivateKey
   ) {
     console.log({
       clientId,
@@ -39,6 +45,9 @@ export const getConfig = () => {
       zulipDomain,
       fourthwallUser,
       fourthwallPassword,
+      githubAppId,
+      githubInstallationId,
+      githubPrivateKey,
     });
     throw new Error('Missing required environment variables');
   }
@@ -54,6 +63,9 @@ export const getConfig = () => {
     github: {
       clientId,
       clientSecret,
+      appId: githubAppId,
+      installationId: githubInstallationId,
+      privateKey: githubPrivateKey,
     },
     slugs: {
       githubWebhook: githubWebhookSlug,
