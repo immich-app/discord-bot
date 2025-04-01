@@ -61,9 +61,13 @@ export class DiscordService {
   ) {}
 
   async init() {
-    const { bot } = getConfig();
+    const { bot, github } = getConfig();
     if (bot.token !== 'dev') {
       await this.discord.login(bot.token);
+    }
+
+    if (github.appId !== 'dev') {
+      await this.github.init(github.appId, github.privateKey, github.installationId);
     }
   }
 
