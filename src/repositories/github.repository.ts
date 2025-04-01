@@ -1,48 +1,97 @@
 import { Logger } from '@nestjs/common';
 // @ts-expect-error we have the experimental flag enabled so we can import esm packages
-import { RequestError } from '@octokit/request-error';
-// @ts-expect-error we have the experimental flag enabled so we can import esm packages
-import { Octokit } from '@octokit/rest';
+import { App, Octokit } from 'octokit';
 import { IGithubInterface } from 'src/interfaces/github.interface';
-
-const octokit = new Octokit();
 
 const makeLink = (org: string, repo: string, id: number, url: string) => `[${org}/${repo}#${id}](${url})`;
 
 export class GithubRepository implements IGithubInterface {
   private logger = new Logger(GithubRepository.name);
+  private octokit: Octokit = new Octokit();
+
+  async init(appId: string, privateKey: string, installationId: string) {
+    const app = new App({ appId, privateKey });
+    this.octokit = await app.getInstallationOctokit(Number(installationId));
+  }
 
   async getIssueOrPr(org: string, repo: string, id: number) {
     try {
-      const response = await octokit.rest.issues.get({ owner: org, repo, issue_number: id });
-      const type = response.data.pull_request ? 'Pull Request' : 'Issue';
-      return `[${type}] ${response.data.title} (${makeLink(org, repo, id, response.data.html_url)})`;
-    } catch (error) {
-      if (error instanceof RequestError && error.status !== 404) {
-        this.logger.log(`Could not fetch #${id}`);
+      const { repository } = await this.octokit.graphql<{
+        repository: { issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string } };
+      }>(
+        `
+      query issueOrPr($org: String!, $repo: String!, $num: Int!) {
+        repository(owner: $org, name: $repo) {
+          issueOrPullRequest(number: $num) {
+            __typename
+            ...on Issue {
+              title
+              url
+            }
+            ...on PullRequest {
+              title
+              url
+            }
+          }
+        }
       }
+        `,
+        { org, repo, num: id },
+      );
+      return `[${repository.issueOrPullRequest.__typename === 'Issue' ? 'Issue' : 'Pull Request'}] ${repository.issueOrPullRequest.title} (${makeLink(org, repo, id, repository.issueOrPullRequest.url)})`;
+    } catch {
+      this.logger.log(`Could not fetch #${id}`);
     }
   }
 
   async getDiscussion(org: string, repo: string, id: number) {
-    const url = `https://github.com/${org}/${repo}/discussions/${id}`;
     try {
-      const { status } = await fetch(url);
-
-      if (status === 200) {
-        return `[Discussion] (${makeLink(org, repo, id, url)})`;
+      const { repository } = await this.octokit.graphql<{ repository: { discussion: { title: string; url: string } } }>(
+        `
+      query discussion($org: String!, $repo: String!, $num: Int!) {
+        repository(owner: $org, name: $repo) {
+          discussion(number: $num) {
+            title
+            url
+          }
+        }
       }
+      `,
+        { org, repo, num: id },
+      );
+
+      return `[Discussion] ${repository.discussion.title} (${makeLink(org, repo, id, repository.discussion.url)})`;
     } catch {
       this.logger.log(`Could not fetch #${id}`);
     }
   }
 
   async getStarCount(org: string, repo: string) {
-    return octokit.rest.repos.get({ owner: org, repo }).then((repo) => repo.data.stargazers_count);
+    const { repository } = await this.octokit.graphql<{ repository: { stargazerCount: number } }>(
+      `
+      query stars($org: String!, $repo: String!) {
+        repository(owner: $org, name: $repo) {
+          stargazerCount
+        }
+      }
+      `,
+      { org, repo },
+    );
+    return repository.stargazerCount;
   }
 
   async getForkCount(org: string, repo: string) {
-    return octokit.rest.repos.get({ owner: org, repo }).then((repo) => repo.data.forks_count);
+    const { repository } = await this.octokit.graphql<{ repository: { forkCount: number } }>(
+      `
+      query stars($org: String!, $repo: String!) {
+        repository(owner: $org, name: $repo) {
+          forkCount
+        }
+      }
+      `,
+      { org, repo },
+    );
+    return repository.forkCount;
   }
 
   async search({
@@ -58,7 +107,7 @@ export class GithubRepository implements IGithubInterface {
     sort?: 'updated';
     order?: 'desc' | 'asc';
   }) {
-    return octokit.rest.search
+    return this.octokit.rest.search
       .issuesAndPullRequests({ q: query, per_page, page, sort, order })
       .then((response) => response.data) as any;
   }
