@@ -330,14 +330,14 @@ export class DiscordCommands {
 
   @Slash({ name: 'emote-add', description: 'Add new emotes to the server' })
   async handleEmoteAdd(
-    @SlashChoice('7tv', 'bttv')
+    @SlashChoice('emote', '7tv', 'bttv')
     @SlashOption({
       name: 'source',
       description: 'Where the emote is from',
       type: ApplicationCommandOptionType.String,
       required: true,
     })
-    source: '7tv' | 'bttv',
+    source: '7tv' | 'bttv' | 'emote',
     @SlashOption({
       name: 'id',
       description: 'ID of the emote',
@@ -361,6 +361,9 @@ export class DiscordCommands {
         break;
       case 'bttv':
         emote = await this.service.createBttvEmote(id, interaction.guildId, name);
+        break;
+      case 'emote':
+        emote = await this.service.createEmoteFromExistingOne(id, interaction.guildId, name);
     }
 
     if (!emote) {
