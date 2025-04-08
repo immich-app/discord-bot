@@ -408,4 +408,18 @@ export class DiscordService {
 
     return this.discord.createEmote(name || response.code, `https://cdn.betterttv.net/emote/${id}/3x`, guildId);
   }
+
+  async createEmoteFromExistingOne(emote: string, guildId: string | null, name: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    const groups = emote.match(/<:(?<name>\w+):(?<id>\d+)>/)?.groups;
+
+    if (!groups?.id || !groups?.name) {
+      return;
+    }
+
+    return this.discord.createEmote(name || groups.name, `https://cdn.discordapp.com/emojis/${groups.id}.png`, guildId);
+  }
 }
