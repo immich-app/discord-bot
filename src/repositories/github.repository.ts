@@ -7,6 +7,16 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 
 const makeLink = (org: string, repo: string, id: number, url: string) => `[${org}/${repo}#${id}](${url})`;
 
+const handleGraphqlError = (error: unknown) => {
+  if (!(error instanceof GraphqlResponseError)) {
+    throw error;
+  }
+
+  if (error.errors?.[0].type !== 'NOT_FOUND') {
+    throw error;
+  }
+};
+
 export class GithubRepository implements IGithubInterface {
   private logger = new Logger(GithubRepository.name);
   private octokit: Octokit = new Octokit();
@@ -42,14 +52,7 @@ export class GithubRepository implements IGithubInterface {
       );
       return `[${repository.issueOrPullRequest.__typename === 'Issue' ? 'Issue' : 'Pull Request'}] ${repository.issueOrPullRequest.title} (${makeLink(org, repo, id, repository.issueOrPullRequest.url)})`;
     } catch (error) {
-      if (!(error instanceof GraphqlResponseError)) {
-        throw error;
-      }
-
-      if (error.errors?.[0].type !== 'NOT_FOUND') {
-        throw error;
-      }
-
+      handleGraphqlError(error);
       this.logger.log(`Could not fetch issue or PR #${id}`);
     }
   }
@@ -72,14 +75,7 @@ export class GithubRepository implements IGithubInterface {
 
       return `[Discussion] ${repository.discussion.title} (${makeLink(org, repo, id, repository.discussion.url)})`;
     } catch (error) {
-      if (!(error instanceof GraphqlResponseError)) {
-        throw error;
-      }
-
-      if (error.errors?.[0].type !== 'NOT_FOUND') {
-        throw error;
-      }
-
+      handleGraphqlError(error);
       this.logger.log(`Could not fetch discussion #${id}`);
     }
   }
