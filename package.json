@@ -43,8 +43,8 @@
     "kysely": "^0.27.4",
     "lodash": "^4.17.21",
     "luxon": "^3.4.3",
-    "openid-client": "6.4.1",
     "octokit": "^4.1.2",
+    "openid-client": "6.4.1",
     "pg": "^8.12.0",
     "semver": "^7.6.3",
     "zulip-js": "^2.0.9"
@@ -53,6 +53,7 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
+    "@octokit/graphql": "^8.2.2",
     "@swc/core": "^1.7.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
