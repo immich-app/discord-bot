@@ -75,21 +75,4 @@ export class DiscordEvents {
       `DiscordBot.onMessageDelete [${message.author?.username || 'Unknown'}] => ${shorten(message.content)}`,
     );
   }
-
-  @On({ event: 'threadCreate' })
-  async onThreadCreate([thread]: ArgsOf<'threadCreate'>) {
-    if (!thread.isTextBased()) {
-      return;
-    }
-
-    const link = await this.service.createOutlineDoc({
-      threadParentId: thread.parentId ?? undefined,
-      title: thread.name,
-      text: (await thread.fetchStarterMessage())?.content ?? undefined,
-    });
-
-    if (link) {
-      await thread.send({ content: link, flags: [MessageFlags.SuppressEmbeds] });
-    }
-  }
 }

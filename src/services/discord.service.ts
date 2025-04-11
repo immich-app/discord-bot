@@ -8,7 +8,6 @@ import { Constants, GithubOrg, GithubRepo } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
-import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { logError, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
@@ -58,7 +57,6 @@ export class DiscordService {
   constructor(
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IGithubInterface) private github: IGithubInterface,
-    @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
   ) {}
 
@@ -427,35 +425,5 @@ export class DiscordService {
     }
 
     return this.discord.createEmote(name || groups.name, `https://cdn.discordapp.com/emojis/${groups.id}.png`, guildId);
-  }
-
-  async createOutlineDoc({ threadParentId, title, text }: { threadParentId?: string; title: string; text?: string }) {
-    const { Urls, Discord, Outline } = Constants;
-    const {
-      outline: { apiKey },
-    } = getConfig();
-
-    switch (threadParentId) {
-      case Discord.Channels.DevFocusTopic: {
-        const { url } = await this.outline.createDocument({
-          title,
-          text,
-          collectionId: Outline.Collections.Dev,
-          parentDocumentId: Outline.Documents.DevFocusTopic,
-          apiKey,
-        });
-        return Urls.Outline + url;
-      }
-      case Discord.Channels.TeamFocusTopic: {
-        const { url } = await this.outline.createDocument({
-          title,
-          text,
-          collectionId: Outline.Collections.Team,
-          parentDocumentId: Outline.Documents.TeamFocusTopic,
-          apiKey,
-        });
-        return Urls.Outline + url;
-      }
-    }
   }
 }

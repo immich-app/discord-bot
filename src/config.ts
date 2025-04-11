@@ -20,7 +20,6 @@ export const getConfig = () => {
   const fourthwallUser = process.env.FOURTHWALL_USER;
   const fourthwallPassword = process.env.FOURTHWALL_PASSWORD;
   const fourthwallWebhookSlug = process.env.FOURTHWALL_SLUG;
-  const outlineApiKey = process.env.OUTLINE_API_KEY;
 
   if (
     !clientId ||
@@ -34,8 +33,7 @@ export const getConfig = () => {
     !fourthwallPassword ||
     !githubAppId ||
     !githubInstallationId ||
-    !githubPrivateKey ||
-    !outlineApiKey
+    !githubPrivateKey
   ) {
     console.log({
       clientId,
@@ -50,7 +48,6 @@ export const getConfig = () => {
       githubAppId,
       githubInstallationId,
       githubPrivateKey,
-      outlineApiKey,
     });
     throw new Error('Missing required environment variables');
   }
@@ -84,9 +81,6 @@ export const getConfig = () => {
     fourthwall: {
       user: fourthwallUser,
       password: fourthwallPassword,
-    },
-    outline: {
-      apiKey: outlineApiKey,
     },
   };
 };
