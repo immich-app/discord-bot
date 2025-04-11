@@ -62,34 +62,18 @@ const urls = {
     'https://github.com/immich-app/immich/discussions?discussions_q=label%3Achangelog%3Abreaking-change+sort%3Adate_created',
   Formatting:
     'https://support.discord.com/hc/en-us/articles/210298617-Markdown-Text-101-Chat-Formatting-Bold-Italic-Underline#h_01GY0DAKGXDEHE263BCAYEGFJA',
-  Outline: 'https://outline.immich.cloud',
 };
 
-const discordTags = {
+const tags = {
   Question: '1049704189686730823',
   Ready: '1166852154292699207',
   Setup: '1049704231692677120',
   Usage: '1049704247517794315',
 };
 
-const discordRoles = {
+const roles = {
   Contributor: '980972470964215870',
   SupportCrew: '1184258769312551053',
-};
-
-const discordChannels = {
-  DevFocusTopic: '1045707766754451486',
-  TeamFocusTopic: '1330248543721754746',
-};
-
-const outlineCollections = {
-  Dev: '0b0dee90-b10e-416a-9059-ad0a061326b6',
-  Team: '943c8f09-b8e7-4891-beb0-e3346ac22609',
-};
-
-const outlineDocuments = {
-  DevFocusTopic: 'dbe1d7d2-ca67-42a2-adb2-43496cb048b7',
-  TeamFocusTopic: '7fbd54e9-7f6f-44e5-9ed0-05a12e35937e',
 };
 
 export const Constants = {
@@ -98,20 +82,13 @@ export const Constants = {
     ...urls,
   },
   Icons: icons,
-  Discord: {
-    Roles: discordRoles,
-    Channels: discordChannels,
-    Tags: discordTags,
-  },
+  Roles: roles,
+  Tags: tags,
   Cron: {
     ImmichBirthday: '36 4 3 2 *',
     DailyReport: '0 12 * * *',
     WeeklyReport: '0 12 * * 4',
     MonthlyReport: '0 12 19 * *',
-  },
-  Outline: {
-    Collections: outlineCollections,
-    Documents: outlineDocuments,
   },
   Zulip: {
     Streams: { Immich: 54 },

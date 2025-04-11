@@ -60,7 +60,6 @@ export class DiscordHelpDesk {
 
   @Slash({ name: 'close', description: 'Closes the ticket. Can be re-opened if need be' })
   async handleClose(interaction: CommandInteraction) {
-    const { Roles } = Constants.Discord;
     const channel = interaction.channel;
     if (!(channel instanceof ThreadChannel) || channel.parentId !== DiscordChannel.HelpDesk) {
       return interaction.reply({
@@ -71,8 +70,8 @@ export class DiscordHelpDesk {
 
     const members = interaction.guild?.members.cache;
     const userRoles = members?.get(interaction.user.id)?.roles.cache;
-    const isContributor = userRoles?.has(Roles.Contributor);
-    const isSupportCrew = userRoles?.has(Roles.SupportCrew);
+    const isContributor = userRoles?.has(Constants.Roles.Contributor);
+    const isSupportCrew = userRoles?.has(Constants.Roles.SupportCrew);
 
     if (!(isContributor || isSupportCrew || channel.ownerId === interaction.user.id)) {
       return interaction.reply({ ephemeral: true, content: 'Only the OP and team members can close a thread.' });
@@ -104,7 +103,7 @@ export class DiscordHelpDesk {
       });
     }
     const members = interaction.guild?.members.cache;
-    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Constants.Discord.Roles.Contributor);
+    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor);
 
     if (channel.ownerId !== interaction.user.id && !isContributor) {
       return interaction.reply({ ephemeral: true, content: 'Only the OP can add files to this thread.' });
@@ -134,14 +133,13 @@ export class DiscordHelpDesk {
 
   @ButtonComponent({ id: DiscordButton.Submit })
   async handleSubmit(interaction: ButtonInteraction): Promise<void> {
-    const { Tags } = Constants.Discord;
     const thread = interaction.message.channel as ThreadChannel;
-    if (thread.appliedTags.find((tag) => tag === Tags.Ready)) {
+    if (thread.appliedTags.find((tag) => tag === Constants.Tags.Ready)) {
       return;
     }
 
     await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
-    await thread.setAppliedTags([...thread.appliedTags, Tags.Ready]);
+    await thread.setAppliedTags([...thread.appliedTags, Constants.Tags.Ready]);
   }
 
   @ModalComponent({ id: DiscordModal.Logs })
@@ -228,7 +226,7 @@ export class DiscordHelpDesk {
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     } else {
       mainButtonRow.components.at(-1)?.setDisabled(true);
-      await channel.setAppliedTags(channel.appliedTags.filter((tag) => tag !== Constants.Discord.Tags.Ready));
+      await channel.setAppliedTags(channel.appliedTags.filter((tag) => tag !== Constants.Tags.Ready));
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
   }
