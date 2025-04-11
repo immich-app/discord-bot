@@ -1,6 +1,7 @@
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { DiscordService } from 'src/services/discord.service';
 import { Mocked, describe, expect, it, vitest } from 'vitest';
 
@@ -23,6 +24,11 @@ const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
+});
+
+const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
+  addToDocument: vitest.fn(),
+  createDocument: vitest.fn(),
 });
 
 const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
@@ -50,14 +56,16 @@ describe('Bot test', () => {
 
   let discordMock: Mocked<IDiscordInterface>;
   let githubMock: Mocked<IGithubInterface>;
+  let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
 
   beforeEach(() => {
     discordMock = newDiscordMockRepository();
     githubMock = newGithubMockRepository();
+    outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
 
-    sut = new DiscordService(discordMock, githubMock, databaseMock);
+    sut = new DiscordService(discordMock, githubMock, outlineMock, databaseMock);
   });
 
   it('should work', () => {

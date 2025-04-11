@@ -153,7 +153,7 @@ export class DiscordCommands {
   @Slash({ name: 'tags', description: 'Returns the currently set tags' })
   async handleGetTags(interaction: CommandInteraction) {
     const members = interaction.guild?.members.cache;
-    if (!members?.get(interaction.user.id)?.roles.cache.has(Constants.Roles.Contributor)) {
+    if (!members?.get(interaction.user.id)?.roles.cache.has(Constants.Discord.Roles.Contributor)) {
       return;
     }
 
