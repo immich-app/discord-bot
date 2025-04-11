@@ -1,5 +1,7 @@
 import { Logger } from '@nestjs/common';
 // @ts-expect-error we have the experimental flag enabled so we can import esm packages
+import { GraphqlResponseError } from '@octokit/graphql';
+// @ts-expect-error we have the experimental flag enabled so we can import esm packages
 import { App, Octokit } from 'octokit';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 
@@ -39,8 +41,16 @@ export class GithubRepository implements IGithubInterface {
         { org, repo, num: id },
       );
       return `[${repository.issueOrPullRequest.__typename === 'Issue' ? 'Issue' : 'Pull Request'}] ${repository.issueOrPullRequest.title} (${makeLink(org, repo, id, repository.issueOrPullRequest.url)})`;
-    } catch {
-      this.logger.log(`Could not fetch #${id}`);
+    } catch (error) {
+      if (!(error instanceof GraphqlResponseError)) {
+        throw error;
+      }
+
+      if (error.errors?.[0].type !== 'NOT_FOUND') {
+        throw error;
+      }
+
+      this.logger.log(`Could not fetch issue or PR #${id}`);
     }
   }
 
@@ -61,8 +71,16 @@ export class GithubRepository implements IGithubInterface {
       );
 
       return `[Discussion] ${repository.discussion.title} (${makeLink(org, repo, id, repository.discussion.url)})`;
-    } catch {
-      this.logger.log(`Could not fetch #${id}`);
+    } catch (error) {
+      if (!(error instanceof GraphqlResponseError)) {
+        throw error;
+      }
+
+      if (error.errors?.[0].type !== 'NOT_FOUND') {
+        throw error;
+      }
+
+      this.logger.log(`Could not fetch discussion #${id}`);
     }
   }
 
