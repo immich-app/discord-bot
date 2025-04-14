@@ -56,10 +56,10 @@ export class DiscordService {
   private logger = new Logger(DiscordService.name);
 
   constructor(
+    @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
-    @Inject(IDatabaseRepository) private database: IDatabaseRepository,
   ) {}
 
   async init() {
@@ -76,7 +76,7 @@ export class DiscordService {
   @Cron(Constants.Cron.ImmichBirthday)
   async onBirthday() {
     await this.discord.sendMessage({
-      channel: DiscordChannel.General,
+      channelId: DiscordChannel.General,
       message: `"Happy birthday my other child" - Alex`,
     });
   }
@@ -102,7 +102,7 @@ export class DiscordService {
 
     if (versionMessage) {
       await this.discord.sendMessage({
-        channel: DiscordChannel.BotSpam,
+        channelId: DiscordChannel.BotSpam,
         message: `I'm alive, running ${versionMessage}!`,
       });
     }

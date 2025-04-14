@@ -87,12 +87,25 @@ export type FourthwallOrder = Selectable<FourthwallOrdersTable>;
 export type NewFourthwallOrder = Insertable<FourthwallOrdersTable>;
 export type UpdateFourthwallOrder = Updateable<FourthwallOrdersTable> & { id: string };
 
+export interface RSSFeedsTable {
+  url: string;
+  channelId: string;
+  lastId: string | null;
+  title: string | null;
+  profileImageUrl: string | null;
+}
+
+export type RSSFeed = Selectable<RSSFeedsTable>;
+export type NewRSSFeed = Insertable<RSSFeedsTable>;
+export type UpdateRSSFeed = Updateable<RSSFeedsTable> & { url: string; channelId: string };
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
   discord_links: DiscordLinksTable;
   discord_messages: DiscordMessagesTable;
   fourthwall_orders: FourthwallOrdersTable;
+  rss_feeds: RSSFeedsTable;
 }
 
 export type ReportOptions = {
@@ -119,4 +132,8 @@ export interface IDatabaseRepository {
   createFourthwallOrder(entity: NewFourthwallOrder): Promise<void>;
   updateFourthwallOrder(entity: UpdateFourthwallOrder): Promise<void>;
   getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }>;
+  createRSSFeed(entity: NewRSSFeed): Promise<void>;
+  getRSSFeeds(channelId?: string): Promise<RSSFeed[]>;
+  removeRSSFeed(url: string, channelId: string): Promise<void>;
+  updateRSSFeed(entity: UpdateRSSFeed): Promise<void>;
 }

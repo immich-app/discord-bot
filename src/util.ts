@@ -5,7 +5,7 @@ type Repos = { discord: IDiscordInterface; logger: Logger };
 export const logError = async (message: string, error: unknown, { discord, logger }: Repos) => {
   logger.error(message, error);
   try {
-    await discord.sendMessage({ channel: DiscordChannel.BotSpam, message: `${message}: ${error}` });
+    await discord.sendMessage({ channelId: DiscordChannel.BotSpam, message: `${message}: ${error}` });
   } catch (error) {
     logger.error('Failed to send error message to bot spam channel', error);
   }

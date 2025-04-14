@@ -26,11 +26,11 @@ export enum DiscordEvents {
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
   sendMessage({
-    channel,
+    channelId,
     message,
     crosspost,
   }: {
-    channel: DiscordChannel;
+    channelId: DiscordChannel | string;
     message: string | MessageCreateOptions;
     crosspost?: boolean;
   }): Promise<void>;

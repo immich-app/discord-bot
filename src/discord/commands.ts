@@ -15,6 +15,7 @@ import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discor
 import { Constants, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 import { DiscordService } from 'src/services/discord.service';
+import { RSSService } from 'src/services/rss.service';
 
 const authGuard = async (interaction: CommandInteraction) => {
   const isValid = [
@@ -37,7 +38,10 @@ const authGuard = async (interaction: CommandInteraction) => {
 @Discord()
 @Injectable()
 export class DiscordCommands {
-  constructor(private service: DiscordService) {}
+  constructor(
+    private service: DiscordService,
+    private rssService: RSSService,
+  ) {}
 
   @Slash({ name: 'link-add', description: 'Add a new link' })
   async addLink(
@@ -372,5 +376,50 @@ export class DiscordCommands {
     }
 
     await interaction.reply({ content: `Emote successfully added! ${emote.toString()}` });
+  }
+
+  @Slash({ name: 'rss-subscribe', description: 'Subscribe to an RSS feed' })
+  async handleSubscribeRSSFeed(
+    @SlashOption({
+      name: 'url',
+      description: 'URL pointing to an RSS feed',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    url: string,
+    interaction: CommandInteraction,
+  ) {
+    try {
+      await this.rssService.createRSSFeed(url, interaction.channelId);
+      await interaction.reply({ content: `Successfully added ${url}.`, flags: [MessageFlags.SuppressEmbeds] });
+    } catch (error) {
+      await interaction.reply({
+        content: `Could not add ${url}: ${error}`,
+        flags: [MessageFlags.Ephemeral, MessageFlags.SuppressEmbeds],
+      });
+    }
+  }
+
+  @Slash({ name: 'rss-unsubscribe', description: 'Unsubscribe from an existing RSS feed' })
+  async handleUnsubscribeRSSFeed(
+    @SlashOption({
+      description: 'URL of the RSS feed to be removed',
+      name: 'url',
+      required: true,
+      autocomplete: true,
+      type: ApplicationCommandOptionType.String,
+    })
+    url: string,
+    interaction: CommandInteraction | AutocompleteInteraction,
+  ) {
+    if (interaction.isAutocomplete()) {
+      const value = interaction.options.getFocused(true).value;
+      const message = await this.rssService.searchRSSFeeds(value, interaction.channelId);
+      return interaction.respond(message);
+    }
+
+    await this.rssService.removeRSSFeed(url, interaction.channelId);
+
+    return interaction.reply({ content: `Successfully removed ${url}.`, flags: [MessageFlags.SuppressEmbeds] });
   }
 }

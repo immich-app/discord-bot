@@ -49,6 +49,10 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   createFourthwallOrder: vitest.fn(),
   getTotalFourthwallOrders: vitest.fn(),
   updateFourthwallOrder: vitest.fn(),
+  createRSSFeed: vitest.fn(),
+  getRSSFeeds: vitest.fn(),
+  updateRSSFeed: vitest.fn(),
+  removeRSSFeed: vitest.fn(),
 });
 
 describe('Bot test', () => {
@@ -65,7 +69,7 @@ describe('Bot test', () => {
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
 
-    sut = new DiscordService(discordMock, githubMock, outlineMock, databaseMock);
+    sut = new DiscordService(databaseMock, discordMock, githubMock, outlineMock);
   });
 
   it('should work', () => {

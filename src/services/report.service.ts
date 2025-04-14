@@ -21,7 +21,7 @@ export class ReportService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ day: endOfYesterday });
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -34,7 +34,7 @@ export class ReportService {
     });
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -55,7 +55,7 @@ export class ReportService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ week: endOfYesterday });
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -70,7 +70,7 @@ export class ReportService {
     });
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -93,7 +93,7 @@ export class ReportService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ month: endOfYesterday });
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -108,7 +108,7 @@ export class ReportService {
     });
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()

@@ -78,7 +78,7 @@ export class WebhookService {
       });
       embed.setColor(color);
 
-      await this.discord.sendMessage({ channel: DiscordChannel.PullRequests, message: { embeds: [embed] } });
+      await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
       return;
     }
 
@@ -92,7 +92,7 @@ export class WebhookService {
       });
       embed.setColor(this.getIssueEmbedColor({ action }));
 
-      await this.discord.sendMessage({ channel: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
       return;
     }
 
@@ -106,7 +106,7 @@ export class WebhookService {
       });
       embed.setColor(this.getDiscussionEmbedColor({ action }));
 
-      await this.discord.sendMessage({ channel: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
       return;
     }
 
@@ -120,7 +120,7 @@ export class WebhookService {
       };
       const messages = [
         this.discord.sendMessage({
-          channel: DiscordChannel.Releases,
+          channelId: DiscordChannel.Releases,
           message: {
             embeds: [this.getReleaseEmbed(embedProps)],
           },
@@ -132,7 +132,7 @@ export class WebhookService {
         if (semver.patch(dto.release.tag_name) === 0) {
           messages.push(
             this.discord.sendMessage({
-              channel: DiscordChannel.Announcements,
+              channelId: DiscordChannel.Announcements,
               message: {
                 embeds: [this.getReleaseEmbed(embedProps)],
               },
@@ -185,7 +185,7 @@ export class WebhookService {
         }
       }
 
-      await this.discord.sendMessage({ channel: DiscordChannel.GithubStatus, message: { embeds: [embed] } });
+      await this.discord.sendMessage({ channelId: DiscordChannel.GithubStatus, message: { embeds: [embed] } });
     }
   }
 
@@ -266,7 +266,7 @@ export class WebhookService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders();
 
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -322,7 +322,7 @@ export class WebhookService {
 
     const licenseType = description.split('-')[1];
     await this.discord.sendMessage({
-      channel: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Stripe,
       message: {
         embeds: [
           new EmbedBuilder()
