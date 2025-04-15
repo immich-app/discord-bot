@@ -66,15 +66,15 @@ export class DiscordRepository implements IDiscordInterface {
   }
 
   async sendMessage({
-    channel,
+    channelId,
     message,
     crosspost = false,
   }: {
-    channel: DiscordChannel;
+    channelId: DiscordChannel | string;
     message: MessageCreateOptions;
     crosspost?: boolean;
   }): Promise<void> {
-    const textChannel = await bot.channels.fetch(channel);
+    const textChannel = await bot.channels.fetch(channelId);
     if (textChannel?.isSendable()) {
       const sentMessage = await textChannel.send(message);
 

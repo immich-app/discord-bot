@@ -15,9 +15,12 @@ import {
   NewDiscordMessage,
   NewFourthwallOrder,
   NewPayment,
+  NewRSSFeed,
   ReportOptions,
+  RSSFeed,
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
+  UpdateRSSFeed,
 } from 'src/interfaces/database.interface';
 
 export class DatabaseRepository implements IDatabaseRepository {
@@ -191,5 +194,34 @@ export class DatabaseRepository implements IDatabaseRepository {
       .executeTakeFirstOrThrow();
 
     return { revenue: Number(revenue) || 0, profit: Number(profit) || 0 };
+  }
+
+  async createRSSFeed(entity: NewRSSFeed): Promise<void> {
+    await this.db.insertInto('rss_feeds').values(entity).execute();
+  }
+
+  async getRSSFeeds(channelId?: string): Promise<RSSFeed[]> {
+    return this.db
+      .selectFrom('rss_feeds')
+      .selectAll()
+      .$if(!!channelId, (qb) => qb.where('rss_feeds.channelId', '=', channelId!))
+      .execute();
+  }
+
+  async removeRSSFeed(url: string, channelId: string): Promise<void> {
+    await this.db
+      .deleteFrom('rss_feeds')
+      .where('rss_feeds.url', '=', url)
+      .where('rss_feeds.channelId', '=', channelId)
+      .execute();
+  }
+
+  async updateRSSFeed(entity: UpdateRSSFeed): Promise<void> {
+    await this.db
+      .updateTable('rss_feeds')
+      .set(entity)
+      .where('rss_feeds.url', '=', entity.url)
+      .where('rss_feeds.channelId', '=', entity.channelId)
+      .execute();
   }
 }
