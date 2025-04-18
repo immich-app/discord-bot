@@ -89,7 +89,8 @@ export class DiscordEvents {
     });
 
     if (link) {
-      await thread.send({ content: link, flags: [MessageFlags.SuppressEmbeds] });
+      const message = await thread.send({ content: link, flags: [MessageFlags.SuppressEmbeds] });
+      await message.pin();
     }
   }
 }
