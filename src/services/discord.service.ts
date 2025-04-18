@@ -443,6 +443,8 @@ export class DiscordService {
           collectionId: Outline.Collections.Dev,
           parentDocumentId: Outline.Documents.DevFocusTopic,
           apiKey,
+          icon: 'hammer',
+          iconColor: '#FF5C80',
         });
         return Urls.Outline + url;
       }
@@ -453,6 +455,8 @@ export class DiscordService {
           collectionId: Outline.Collections.Team,
           parentDocumentId: Outline.Documents.TeamFocusTopic,
           apiKey,
+          icon: 'hammer',
+          iconColor: '#FF5C80',
         });
         return Urls.Outline + url;
       }

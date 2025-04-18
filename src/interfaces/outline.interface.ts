@@ -11,6 +11,8 @@ export interface IOutlineInterface {
     collectionId: string;
     parentDocumentId?: string;
     apiKey: string;
+    icon?: string;
+    iconColor?: string;
   }): Promise<DocumentCreateResponse>;
   addToDocument(options: { id: string; text: string; apiKey: string }): Promise<void>;
 }

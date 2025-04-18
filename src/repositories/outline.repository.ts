@@ -8,16 +8,20 @@ export class OutlineRepository implements IOutlineInterface {
     collectionId,
     parentDocumentId,
     apiKey,
+    icon,
+    iconColor: color,
   }: {
     title: string;
     text?: string;
     collectionId: string;
     parentDocumentId?: string;
     apiKey: string;
+    icon?: string;
+    iconColor?: string;
   }): Promise<DocumentCreateResponse> {
     const response = await fetch(`${Constants.Urls.Outline}/api/documents.create`, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, collectionId, parentDocumentId, text, publish: true }),
+      body: JSON.stringify({ title, collectionId, parentDocumentId, text, publish: true, icon, color }),
       method: 'POST',
     });
     const json = await response.json();
