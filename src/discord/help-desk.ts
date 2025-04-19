@@ -240,12 +240,11 @@ export class DiscordHelpDesk {
     }
 
     const user = thread.ownerId ?? '';
-    const t = await thread.fetch();
     try {
-      await this.sendWelcomeMessage(user, t);
+      await this.sendWelcomeMessage(user, thread);
     } catch (e) {
       this.logger.error('Retrying helpdesk welcome message:', e);
-      setTimeout(async () => await this.sendWelcomeMessage(user, t), 5000);
+      setTimeout(async () => await this.sendWelcomeMessage(user, thread), 5000);
     }
   }
 
