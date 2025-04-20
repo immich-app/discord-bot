@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { MessageFlags } from 'discord.js';
 import { ArgsOf, Discord, On, Once, RestArgsOf } from 'discordx';
 import _ from 'lodash';
+import { Constants } from 'src/constants';
 import { DiscordService } from 'src/services/discord.service';
 
 const shorten = (message: string | null) => {
@@ -89,7 +90,10 @@ export class DiscordEvents {
     });
 
     if (link) {
-      const message = await thread.send({ content: link, flags: [MessageFlags.SuppressEmbeds] });
+      const message = await thread.send({
+        content: `<@&${Constants.Discord.Roles.Team}> ${link}`,
+        flags: [MessageFlags.SuppressEmbeds],
+      });
       await message.pin();
     }
   }
