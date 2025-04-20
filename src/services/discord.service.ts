@@ -9,7 +9,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
-import { logError, shorten } from 'src/util';
+import { formatCommand, logError, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
@@ -144,7 +144,7 @@ export class DiscordService {
 
   async addLink({ name, link, author }: { name: string; link: string; author: string }) {
     await this.database.addDiscordLink({ name, link, author });
-    return `Added ${link}`;
+    return `Successfully added ${link}: ${formatCommand('link', link, '[message]')}`;
   }
 
   async removeLink({ name }: { name: string }) {
@@ -364,15 +364,17 @@ export class DiscordService {
 
     await this.database.removeDiscordMessage(message.id);
 
-    return { message: shorten(`Removed ${message.name} - ${message.content}`), isPrivate: false };
+    return { message: shorten(`Successfully deleted ${message.name} - ${message.content}`), isPrivate: false };
   }
 
   async addOrUpdateMessage({ name, content, author }: { name: string; content: string; author: string }) {
     const message = await this.database.getDiscordMessage(name);
     if (message) {
-      return this.database.updateDiscordMessage({ id: message.id, name, content, lastEditedBy: author });
+      await this.database.updateDiscordMessage({ id: message.id, name, content, lastEditedBy: author });
+      return `Successfully updated ${name}: ${formatCommand('messages', name)}`;
     }
-    return this.database.addDiscordMessage({ name, content, lastEditedBy: author });
+    await this.database.addDiscordMessage({ name, content, lastEditedBy: author });
+    return `Successfully added ${name}: ${formatCommand('messages', name)}`;
   }
 
   async createEmote(name: string, emote: string | Buffer, guildId: string | null) {
