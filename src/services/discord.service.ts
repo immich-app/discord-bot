@@ -444,7 +444,7 @@ export class DiscordService {
           parentDocumentId: Outline.Documents.DevFocusTopic,
           apiKey,
           icon: 'hammer',
-          iconColor: '#FF5C80',
+          iconColor: '#0366D6',
         });
         return Urls.Outline + url;
       }
