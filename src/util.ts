@@ -69,3 +69,7 @@ export const makeOrderFields = ({
 export const shorten = (text: string, maxLength: number = 100) => {
   return text.length > maxLength ? `${text.substring(0, maxLength - 3)}...` : text;
 };
+
+export const formatCommand = (name: string, ...args: string[]) => {
+  return `\n\`\`\`\n/${name} ${args.join(' ')}\n\`\`\``;
+};

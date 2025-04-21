@@ -327,9 +327,9 @@ export class DiscordCommands {
     const name = interaction.fields.getTextInputValue(DiscordField.Name);
     const content = interaction.fields.getTextInputValue(DiscordField.Message);
 
-    await this.service.addOrUpdateMessage({ name, content, author: interaction.user.id });
+    const message = await this.service.addOrUpdateMessage({ name, content, author: interaction.user.id });
 
-    await interaction.deferUpdate();
+    await interaction.reply(message);
   }
 
   @Slash({ name: 'emote-add', description: 'Add new emotes to the server' })
@@ -375,7 +375,7 @@ export class DiscordCommands {
       return;
     }
 
-    await interaction.reply({ content: `Emote successfully added! ${emote.toString()}` });
+    await interaction.reply({ content: `Emote \`${emote.toString()}\` successfully added! ${emote.toString()}` });
   }
 
   @Slash({ name: 'rss-subscribe', description: 'Subscribe to an RSS feed' })
