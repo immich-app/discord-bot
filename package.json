@@ -26,7 +26,7 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
-    "@nestjs/schedule": "^5.0.0",
+    "@nestjs/schedule": "^6.0.0",
     "@nestjs/swagger": "^11.0.0",
     "@octokit/rest": "^21.0.0",
     "@octokit/webhooks-types": "^7.5.1",
