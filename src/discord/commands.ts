@@ -422,4 +422,34 @@ export class DiscordCommands {
 
     return interaction.reply({ content: `Successfully removed ${url}.`, flags: [MessageFlags.SuppressEmbeds] });
   }
+
+  @Slash({ name: 'fourthwall', description: 'Fourthwall related commmands' })
+  async handleFourthwall(
+    @SlashChoice('update')
+    @SlashOption({
+      name: 'action',
+      description: 'update: Updates Fourthwall orders',
+      required: true,
+      type: ApplicationCommandOptionType.String,
+    })
+    action: 'update',
+    @SlashOption({
+      name: 'id',
+      description: 'Id of a specific order to update',
+      type: ApplicationCommandOptionType.String,
+      required: false,
+    })
+    id: string | null,
+    interaction: CommandInteraction,
+  ) {
+    switch (action) {
+      case 'update': {
+        await this.service.updateFourthwallOrders(id);
+        return interaction.reply({
+          content: 'Successfully updated Fourthwall orders',
+          flags: [MessageFlags.Ephemeral],
+        });
+      }
+    }
+  }
 }
