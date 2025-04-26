@@ -7,9 +7,9 @@ import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
-import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { formatCommand, logError, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
@@ -59,7 +59,7 @@ export class DiscordService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
-    @Inject(FourthwallRepository) private fourthwall: FourthwallRepository,
+    @Inject(IFourthwallRepository) private fourthwall: IFourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
   ) {}
