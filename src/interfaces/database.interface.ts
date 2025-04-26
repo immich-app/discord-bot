@@ -132,6 +132,7 @@ export interface IDatabaseRepository {
   createFourthwallOrder(entity: NewFourthwallOrder): Promise<void>;
   updateFourthwallOrder(entity: UpdateFourthwallOrder): Promise<void>;
   getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }>;
+  streamFourthwallOrders(): AsyncIterableIterator<{ id: string }>;
   createRSSFeed(entity: NewRSSFeed): Promise<void>;
   getRSSFeeds(channelId?: string): Promise<RSSFeed[]>;
   removeRSSFeed(url: string, channelId: string): Promise<void>;

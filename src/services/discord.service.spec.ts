@@ -1,5 +1,6 @@
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { DiscordService } from 'src/services/discord.service';
@@ -48,6 +49,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updateDiscordMessage: vitest.fn(),
   createFourthwallOrder: vitest.fn(),
   getTotalFourthwallOrders: vitest.fn(),
+  streamFourthwallOrders: vitest.fn(),
   updateFourthwallOrder: vitest.fn(),
   createRSSFeed: vitest.fn(),
   getRSSFeeds: vitest.fn(),
@@ -55,21 +57,27 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   removeRSSFeed: vitest.fn(),
 });
 
+const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
+  getOrder: vitest.fn(),
+});
+
 describe('Bot test', () => {
   let sut: DiscordService;
 
   let discordMock: Mocked<IDiscordInterface>;
+  let fourthwallMock: Mocked<IFourthwallRepository>;
   let githubMock: Mocked<IGithubInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
 
   beforeEach(() => {
     discordMock = newDiscordMockRepository();
+    fourthwallMock = newFourthwallMockRepository();
     githubMock = newGithubMockRepository();
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
 
-    sut = new DiscordService(databaseMock, discordMock, githubMock, outlineMock);
+    sut = new DiscordService(databaseMock, discordMock, fourthwallMock, githubMock, outlineMock);
   });
 
   it('should work', () => {

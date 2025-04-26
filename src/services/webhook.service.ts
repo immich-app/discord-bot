@@ -201,11 +201,20 @@ export class WebhookService {
   }
 
   async onFourthwallOrder(dto: FourthwallOrderCreateWebhook | FourthwallOrderUpdateWebhook, slug: string) {
-    const { slugs, fourthwall } = getConfig();
+    const { slugs } = getConfig();
     if (!slugs.fourthwallWebhook || slug !== slugs.fourthwallWebhook) {
       throw new UnauthorizedException();
     }
+
+    void this.handleFourthwallOrder(dto);
+  }
+
+  private async handleFourthwallOrder(dto: FourthwallOrderCreateWebhook | FourthwallOrderUpdateWebhook) {
+    const { fourthwall } = getConfig();
+
     const dtoOrder = dto.type === 'ORDER_PLACED' ? dto.data : dto.data.order;
+
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
 
     let order = await this.fourthwall.getOrder({
       id: dtoOrder.id,

@@ -9,6 +9,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
+import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { formatCommand, logError, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
@@ -58,6 +59,7 @@ export class DiscordService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
+    @Inject(FourthwallRepository) private fourthwall: FourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
   ) {}
@@ -463,5 +465,34 @@ export class DiscordService {
         return Urls.Outline + url;
       }
     }
+  }
+
+  async updateFourthwallOrders(id?: string | null) {
+    const {
+      fourthwall: { user, password },
+    } = getConfig();
+
+    if (id) {
+      await this.updateOrder({ id, user, password });
+      return;
+    }
+
+    for await (const { id } of this.database.streamFourthwallOrders()) {
+      await this.updateOrder({ id, user, password });
+    }
+  }
+
+  private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {
+    const order = await this.fourthwall.getOrder({ id, user, password });
+
+    await this.database.updateFourthwallOrder({
+      id,
+      discount: order.discount,
+      status: order.status,
+      total: order.totalPrice.value,
+      profit: order.profit.value,
+      shipping: order.currentAmounts.shipping.value,
+      tax: order.currentAmounts.tax.value,
+    });
   }
 }

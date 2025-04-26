@@ -196,6 +196,10 @@ export class DatabaseRepository implements IDatabaseRepository {
     return { revenue: Number(revenue) || 0, profit: Number(profit) || 0 };
   }
 
+  streamFourthwallOrders() {
+    return this.db.selectFrom('fourthwall_orders').select('id').stream();
+  }
+
   async createRSSFeed(entity: NewRSSFeed): Promise<void> {
     await this.db.insertInto('rss_feeds').values(entity).execute();
   }
