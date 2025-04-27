@@ -3,6 +3,7 @@ import { FileMigrationProvider, Kysely, Migrator, PostgresDialect } from 'kysely
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
+import Cursor from 'pg-cursor';
 import { getConfig } from 'src/config';
 import {
   Database,
@@ -34,6 +35,7 @@ export class DatabaseRepository implements IDatabaseRepository {
         pool: new pg.Pool({
           connectionString: database.uri,
         }),
+        cursor: Cursor,
       }),
     });
   }
