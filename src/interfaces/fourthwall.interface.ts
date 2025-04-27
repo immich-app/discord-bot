@@ -70,7 +70,7 @@ export interface FourthwallOrder {
   };
   merchandiseTotal: Price;
   donation: any;
-  discount: any;
+  discount: number | null;
   creatorBudget: any;
   billing: { address: Address };
   shipping: {

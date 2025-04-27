@@ -487,7 +487,7 @@ export class DiscordService {
 
     await this.database.updateFourthwallOrder({
       id,
-      discount: order.discount,
+      discount: order.discount ?? undefined,
       status: order.status,
       total: order.totalPrice.value,
       profit: order.profit.value,
