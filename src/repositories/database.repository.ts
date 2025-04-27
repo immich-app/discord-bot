@@ -174,8 +174,8 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
-  async updateFourthwallOrder(entity: UpdateFourthwallOrder): Promise<void> {
-    await this.db.updateTable('fourthwall_orders').set(entity).where('id', '=', entity.id).execute();
+  async updateFourthwallOrder({ id, ...entity }: UpdateFourthwallOrder): Promise<void> {
+    await this.db.updateTable('fourthwall_orders').set(entity).where('id', '=', id).execute();
   }
 
   async getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }> {
