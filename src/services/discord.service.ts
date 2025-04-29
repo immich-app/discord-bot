@@ -146,7 +146,7 @@ export class DiscordService {
 
   async addLink({ name, link, author }: { name: string; link: string; author: string }) {
     await this.database.addDiscordLink({ name, link, author });
-    return `Successfully added ${link}: ${formatCommand('link', link, '[message]')}`;
+    return `Successfully added ${link}: ${formatCommand('link', name, '[message]')}`;
   }
 
   async removeLink({ name }: { name: string }) {
