@@ -7,8 +7,10 @@ export const getConfig = () => {
   const clientSecret = process.env.IMMICH_GITHUB_CLIENT_SECRET;
   const databaseUri = process.env.uri;
   const botToken = process.env.BOT_TOKEN;
-  const zulipUsername = process.env.ZULIP_USERNAME;
-  const zulipApiKey = process.env.ZULIP_API_KEY;
+  const zulipBotUsername = process.env.ZULIP_BOT_USERNAME;
+  const zulipBotApiKey = process.env.ZULIP_BOT_API_KEY;
+  const zulipUserUsername = process.env.ZULIP_USER_USERNAME;
+  const zulipUserApiKey = process.env.ZULIP_USER_API_KEY;
   const zulipDomain = process.env.ZULIP_DOMAIN;
   const githubWebhookSlug = process.env.GITHUB_SLUG;
   const githubStatusWebhookSlug = process.env.GITHUB_STATUS_SLUG;
@@ -27,8 +29,10 @@ export const getConfig = () => {
     !clientSecret ||
     !databaseUri ||
     !botToken ||
-    !zulipUsername ||
-    !zulipApiKey ||
+    !zulipBotUsername ||
+    !zulipBotApiKey ||
+    !zulipUserUsername ||
+    !zulipUserApiKey ||
     !zulipDomain ||
     !fourthwallUser ||
     !fourthwallPassword ||
@@ -42,8 +46,10 @@ export const getConfig = () => {
       clientSecret,
       databaseUri,
       botToken,
-      zulipUsername,
-      zulipApiKey,
+      zulipBotUsername,
+      zulipBotApiKey,
+      zulipUserUsername,
+      zulipUserApiKey,
       zulipDomain,
       fourthwallUser,
       fourthwallPassword,
@@ -77,8 +83,14 @@ export const getConfig = () => {
       fourthwallWebhook: fourthwallWebhookSlug,
     },
     zulip: {
-      username: zulipUsername,
-      apiKey: zulipApiKey,
+      bot: {
+        username: zulipBotUsername,
+        apiKey: zulipBotApiKey,
+      },
+      user: {
+        username: zulipUserUsername,
+        apiKey: zulipUserApiKey,
+      },
       realm: zulipDomain,
     },
     fourthwall: {
