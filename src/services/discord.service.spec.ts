@@ -3,6 +3,7 @@ import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
+import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { DiscordService } from 'src/services/discord.service';
 import { Mocked, describe, expect, it, vitest } from 'vitest';
 
@@ -25,6 +26,7 @@ const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
+  getEmotes: vitest.fn(),
 });
 
 const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
@@ -61,6 +63,12 @@ const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
   getOrder: vitest.fn(),
 });
 
+const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
+  init: vitest.fn(),
+  createEmote: vitest.fn(),
+  sendMessage: vitest.fn(),
+});
+
 describe('Bot test', () => {
   let sut: DiscordService;
 
@@ -69,6 +77,7 @@ describe('Bot test', () => {
   let githubMock: Mocked<IGithubInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
+  let zulipMock: Mocked<IZulipInterface>;
 
   beforeEach(() => {
     discordMock = newDiscordMockRepository();
@@ -76,8 +85,9 @@ describe('Bot test', () => {
     githubMock = newGithubMockRepository();
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
+    zulipMock = newZulipMockRepository();
 
-    sut = new DiscordService(databaseMock, discordMock, fourthwallMock, githubMock, outlineMock);
+    sut = new DiscordService(databaseMock, discordMock, fourthwallMock, githubMock, outlineMock, zulipMock);
   });
 
   it('should work', () => {

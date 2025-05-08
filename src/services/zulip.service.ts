@@ -8,7 +8,7 @@ export class ZulipService {
 
   async init() {
     const { zulip } = getConfig();
-    if (zulip.apiKey !== 'dev') {
+    if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {
       await this.zulip.init(zulip);
     }
   }

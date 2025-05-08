@@ -10,6 +10,7 @@ import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interf
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
+import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { formatCommand, logError, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
@@ -62,16 +63,21 @@ export class DiscordService {
     @Inject(IFourthwallRepository) private fourthwall: IFourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
+    @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
   async init() {
-    const { bot, github } = getConfig();
+    const { bot, github, zulip } = getConfig();
     if (bot.token !== 'dev') {
       await this.discord.login(bot.token);
     }
 
     if (github.appId !== 'dev') {
       await this.github.init(github.appId, github.privateKey, github.installationId);
+    }
+
+    if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {
+      await this.zulip.init(zulip);
     }
   }
 
@@ -379,11 +385,16 @@ export class DiscordService {
     return `Successfully added ${name}: ${formatCommand('messages', name)}`;
   }
 
-  async createEmote(name: string, emote: string | Buffer, guildId: string | null) {
+  async createEmote(name: string, emote: string, guildId: string | null) {
     if (!guildId) {
       return;
     }
 
+    try {
+      await this.zulip.createEmote(name, emote);
+    } catch {
+      this.logger.error(`Could not create emote ${name} - ${emote} on Zulip`);
+    }
     return this.discord.createEmote(name, emote, guildId);
   }
 
@@ -401,7 +412,7 @@ export class DiscordService {
     const gif = response.host.files.findLast((file) => file.format === 'GIF' && file.size < 256_000);
     const file = gif || response.host.files.findLast((file) => file.format === 'WEBP' && file.size < 256_000)!;
 
-    return this.discord.createEmote(name || response.name, `https:${response.host.url}/${file.name}`, guildId);
+    return this.createEmote(name || response.name, `https:${response.host.url}/${file.name}`, guildId);
   }
 
   async createBttvEmote(id: string, guildId: string | null, name: string | null) {
@@ -416,7 +427,7 @@ export class DiscordService {
 
     const response = (await rawResponse.json()) as BetterTTVResponse;
 
-    return this.discord.createEmote(name || response.code, `https://cdn.betterttv.net/emote/${id}/3x`, guildId);
+    return this.createEmote(name || response.code, `https://cdn.betterttv.net/emote/${id}/3x`, guildId);
   }
 
   async createEmoteFromExistingOne(emote: string, guildId: string | null, name: string | null) {
@@ -430,7 +441,7 @@ export class DiscordService {
       return;
     }
 
-    return this.discord.createEmote(name || groups.name, `https://cdn.discordapp.com/emojis/${groups.id}.png`, guildId);
+    return this.createEmote(name || groups.name, `https://cdn.discordapp.com/emojis/${groups.id}.png`, guildId);
   }
 
   async createOutlineDoc({ threadParentId, title, text }: { threadParentId?: string; title: string; text?: string }) {
@@ -479,6 +490,16 @@ export class DiscordService {
 
     for await (const { id } of this.database.streamFourthwallOrders()) {
       await this.updateOrder({ id, user, password });
+    }
+  }
+
+  async syncEmotes(guildId: string | null) {
+    if (!guildId) {
+      return;
+    }
+
+    for (const emote of await this.discord.getEmotes(guildId)) {
+      await this.zulip.createEmote(emote.name ?? emote.identifier, emote.url);
     }
   }
 
