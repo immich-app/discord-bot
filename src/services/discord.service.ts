@@ -27,6 +27,11 @@ type GithubLink = {
 };
 type LinkType = 'issue' | 'pull' | 'discussion';
 
+type GithubCodeSnippet = {
+  lines: string[];
+  extension: string;
+};
+
 type SevenTVResponse = {
   id: string;
   name: string;
@@ -52,6 +57,11 @@ type BetterTTVResponse = {
   imageType: string;
   animated: string;
 };
+
+const GITHUB_THREAD_REGEX =
+  /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issue|discussion))\/)?#?(?<num>\d+)/g;
+const GITHUB_FILE_REGEX =
+  /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
 @Injectable()
 export class DiscordService {
@@ -242,14 +252,19 @@ export class DiscordService {
     }
   }
 
+  async handleGithubReferences(content: string) {
+    const codeSnippets = await this.handleGithubFileReferences(content);
+    const links = await this.handleGithubThreadReferences(content);
+
+    return [...codeSnippets, ...links].filter((e) => e !== undefined);
+  }
+
   async handleGithubThreadReferences(content: string) {
     const links: GithubLink[] = [];
 
     content = content.replaceAll(/```.*```/gs, '');
 
-    const matches = content.matchAll(
-      /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issue|discussion))\/)?#?(?<num>\d+)/g,
-    );
+    const matches = content.matchAll(GITHUB_THREAD_REGEX);
 
     for (const match of matches) {
       if (!match || !match.groups) {
@@ -303,7 +318,52 @@ export class DiscordService {
       }),
     );
 
-    return results.filter((link): link is string => link !== undefined);
+    return results;
+  }
+
+  async handleGithubFileReferences(content: string) {
+    const snippets: GithubCodeSnippet[] = [];
+
+    const matches = content.matchAll(GITHUB_FILE_REGEX);
+
+    for (const match of matches) {
+      if (!match || !match.groups) {
+        continue;
+      }
+
+      const { org, repo, ref, path, lineFrom, lineTo } = match.groups;
+
+      const extension = path.split('.').pop();
+      if (!extension) {
+        continue;
+      }
+
+      const file = await this.github.getRepositoryFileContent(org, repo, ref, path);
+      if (!file || file.length === 0) {
+        continue;
+      }
+
+      const from = lineFrom ? Number(lineFrom) - 1 : 0;
+      const to = lineTo ? Number(lineTo) : file.length;
+
+      if (to - from > 10) {
+        continue;
+      }
+
+      const lines = file.slice(from, to);
+
+      snippets.push({ lines, extension });
+    }
+
+    return snippets.map(({ lines, extension }) => {
+      const code = lines.join('\n');
+      const formattedCode = code.replaceAll(/`/g, '\\`');
+      return `
+        \`\`\`${extension}
+        ${formattedCode}
+        \`\`\`
+      `;
+    });
   }
 
   hasBlacklistUrl(urls: string[]) {

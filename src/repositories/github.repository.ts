@@ -125,4 +125,27 @@ export class GithubRepository implements IGithubInterface {
       .issuesAndPullRequests({ q: query, per_page, page, sort, order })
       .then((response) => response.data) as any;
   }
+
+  async getRepositoryFileContent(org: string, repo: string, ref: string, path: string) {
+    const { repository } = await this.octokit.graphql<{ repository: { object: { text: string | undefined } } }>(
+      `
+      query getFile($org: String!, $repo: String!, $expression: String!) {
+        repository(owner: $org, name: $repo) {
+          object(expression: $expression) {
+            ... on Blob {
+              text
+            }
+          }
+        }
+      }
+      `,
+      {
+        org,
+        repo,
+        expression: `${ref}:${path}`,
+      },
+    );
+
+    return repository.object.text?.split("\n");
+  }
 }
