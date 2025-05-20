@@ -242,15 +242,16 @@ export class DiscordService {
     }
   }
 
-  async handleGithubReferences(content: string) {
+  async handleGithubThreadReferences(content: string) {
     const links: GithubLink[] = [];
 
     content = content.replaceAll(/```.*```/gs, '');
 
-    const longMatches = content.matchAll(
-      /https:\/\/github\.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/(?<category>(pull|issue|discussion))\/(?<num>\d+)/g,
+    const matches = content.matchAll(
+      /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issue|discussion))\/)?#?(?<num>\d+)/g,
     );
-    for (const match of longMatches) {
+
+    for (const match of matches) {
       if (!match || !match.groups) {
         continue;
       }
@@ -261,34 +262,15 @@ export class DiscordService {
         continue;
       }
 
-      links.push({
-        id,
-        org: org || GithubOrg.ImmichApp,
-        repo: repo || GithubRepo.Immich,
-        type: category as LinkType,
-      });
-    }
-
-    const shortMatches = content.matchAll(/(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g);
-    for (const match of shortMatches) {
-      if (!match || !match.groups) {
-        continue;
-      }
-
-      const { org, repo, num } = match.groups;
-      const id = Number(num);
-      if (Number.isNaN(id)) {
-        continue;
-      }
-
       if (!org && !repo && id < 1000) {
         continue;
       }
 
       links.push({
+        id,
         org: org || GithubOrg.ImmichApp,
         repo: repo || GithubRepo.Immich,
-        id,
+        type: category as LinkType,
       });
     }
 

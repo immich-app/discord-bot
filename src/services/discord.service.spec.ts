@@ -308,7 +308,7 @@ describe('Bot test', () => {
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
-      await expect(sut.handleGithubReferences(message)).resolves.toEqual(links);
+      await expect(sut.handleGithubThreadReferences(message)).resolves.toEqual(links);
     });
   });
 });

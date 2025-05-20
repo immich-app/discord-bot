@@ -41,7 +41,7 @@ export class DiscordEvents {
       return;
     }
 
-    const links = await this.service.handleGithubReferences(message.content);
+    const links = await this.service.handleGithubThreadReferences(message.content);
     if (links.length !== 0) {
       await message.reply({
         content: links.join('\n'),
