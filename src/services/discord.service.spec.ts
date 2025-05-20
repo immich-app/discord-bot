@@ -375,6 +375,6 @@ describe('Bot test', () => {
       expect(result[0]).toContain('line 3');
       expect(result[1]).toContain('```txt\n');
       expect(result[1]).toContain('function test() { return "immich-app/immich @ anotherref: file.txt"; }');
-    })
+    });
   });
 });

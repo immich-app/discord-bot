@@ -146,6 +146,6 @@ export class GithubRepository implements IGithubInterface {
       },
     );
 
-    return repository.object.text?.split('\n');
+    return repository.object?.text?.split('\n');
   }
 }

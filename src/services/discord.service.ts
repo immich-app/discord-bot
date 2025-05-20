@@ -61,7 +61,7 @@ type BetterTTVResponse = {
 const GITHUB_THREAD_REGEX =
   /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issue|discussion))\/)?#?(?<num>\d+)/g;
 const GITHUB_FILE_REGEX =
-  /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
+  /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
 @Injectable()
 export class DiscordService {
@@ -338,19 +338,23 @@ export class DiscordService {
         continue;
       }
 
-      const file = await this.github.getRepositoryFileContent(org, repo, ref, path);
+      const file = await this.github.getRepositoryFileContent(org, repo, ref, decodeURIComponent(path));
       if (!file || file.length === 0) {
         continue;
       }
 
       const from = lineFrom ? Number(lineFrom) - 1 : 0;
-      const to = lineTo ? Number(lineTo) : file.length;
+      const to = lineTo ? Number(lineTo) : from + 1;
 
       if (to - from > 10) {
         continue;
       }
 
       const lines = file.slice(from, to);
+
+      if (lines.length === 0) {
+        continue;
+      }
 
       snippets.push({ lines, extension });
     }
@@ -359,9 +363,9 @@ export class DiscordService {
       const code = lines.join('\n');
       const formattedCode = code.replaceAll(/`/g, '\\`');
       return `
-        \`\`\`${extension}
-        ${formattedCode}
-        \`\`\`
+\`\`\`${extension}
+${formattedCode}
+\`\`\`
       `;
     });
   }
