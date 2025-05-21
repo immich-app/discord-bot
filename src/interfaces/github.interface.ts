@@ -27,4 +27,10 @@ export interface IGithubInterface {
   getForkCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   getStarCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   search(options: SearchOptions): Promise<SearchResult>;
+  getRepositoryFileContent(
+    org: GithubOrg | string,
+    repo: GithubRepo | string,
+    ref: string,
+    path: string,
+  ): Promise<string[] | undefined>;
 }

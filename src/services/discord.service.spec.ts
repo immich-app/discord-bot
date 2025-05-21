@@ -20,6 +20,11 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
     ),
   getStarCount: vitest.fn(),
   init: vitest.fn(),
+  getRepositoryFileContent: vitest
+    .fn()
+    .mockImplementation((org, repo, ref, path) =>
+      Promise.resolve([`function test() { return "${org}/${repo} @ ${ref}: ${path}"; }`]),
+    ),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -238,7 +243,7 @@ describe('Bot test', () => {
     });
   });
 
-  describe('handleGithubReferences', () => {
+  describe('handleGithubThreadReferences', () => {
     it.each([
       {
         name: 'should handle a number',
@@ -298,17 +303,78 @@ describe('Bot test', () => {
           'https://github.com/immich-app/immich/discussion/3',
         ].join('\n'),
         links: [
-          'https://github.com/immich-app/immich/issue/1',
-          'https://github.com/immich-app/immich/pull/2',
-          'https://github.com/immich-app/immich/discussion/3',
           'https://github.com/immich-app/immich/pull/1234',
           'https://github.com/immich-app/immich/issue/123',
           'https://github.com/immich-app/static-pages/issue/123',
           'https://github.com/octokit/rest.js/issue/123',
+          'https://github.com/immich-app/immich/issue/1',
+          'https://github.com/immich-app/immich/pull/2',
+          'https://github.com/immich-app/immich/discussion/3',
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
-      await expect(sut.handleGithubReferences(message)).resolves.toEqual(links);
+      await expect(sut.handleGithubThreadReferences(message)).resolves.toEqual(links);
+    });
+  });
+
+  describe('handleGithubFileReferences', () => {
+    it('should return nothing if the message is empty', async () => {
+      const result = await sut.handleGithubFileReferences('');
+
+      expect(result).toEqual([]);
+    });
+
+    it('should return nothing if the message does not contain a file reference', async () => {
+      const result = await sut.handleGithubFileReferences('This is a test message');
+
+      expect(result).toEqual([]);
+    });
+
+    it('should return the full file in a snippet', async () => {
+      const result = await sut.handleGithubFileReferences('https://github.com/immich-app/immich/blob/main/src/test.js');
+      expect(result).toHaveLength(1);
+      expect(result[0]).toContain('```js\n');
+      expect(result[0]).toContain('function test() { return "immich-app/immich @ main: src/test.js"; }');
+    });
+
+    it('should return a line reference range', async () => {
+      githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
+      const result = await sut.handleGithubFileReferences(
+        'https://github.com/immich-app/immich/blob/main/src/test.js#L1-L2',
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]).toContain('```js\n');
+      expect(result[0]).toContain('line 1');
+      expect(result[0]).toContain('line 2');
+      expect(result[0]).not.toContain('line 3');
+    });
+
+    it('should return a single line reference', async () => {
+      githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
+      const result = await sut.handleGithubFileReferences(
+        'https://github.com/immich-app/immich/blob/main/src/test.js#L3',
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]).toContain('```js\n');
+      expect(result[0]).not.toContain('line 1');
+      expect(result[0]).not.toContain('line 2');
+      expect(result[0]).toContain('line 3');
+    });
+
+    it('should support multiple file references', async () => {
+      githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
+      const result = await sut.handleGithubFileReferences(`
+        https://github.com/immich-app/immich/blob/main/src/test.js#L3
+        Test message inbetween
+        https://github.com/immich-app/immich/blob/anotherref/file.txt
+      `);
+      expect(result).toHaveLength(2);
+      expect(result[0]).toContain('```js\n');
+      expect(result[0]).not.toContain('line 1');
+      expect(result[0]).not.toContain('line 2');
+      expect(result[0]).toContain('line 3');
+      expect(result[1]).toContain('```txt\n');
+      expect(result[1]).toContain('function test() { return "immich-app/immich @ anotherref: file.txt"; }');
     });
   });
 });
