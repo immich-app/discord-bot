@@ -344,7 +344,14 @@ export class DiscordService {
       }
 
       const from = lineFrom ? Number(lineFrom) - 1 : 0;
-      const to = lineTo ? Number(lineTo) : from + 1;
+      let to;
+      if (lineTo) {
+        to = Number(lineTo);
+      } else if (lineFrom) {
+        to = from + 1;
+      } else {
+        to = file.length;
+      }
 
       if (to - from > 10) {
         continue;
