@@ -333,7 +333,7 @@ export class DiscordService {
 
       const { org, repo, ref, path, lineFrom, lineTo } = match.groups;
 
-      const extension = path.split('.').pop();
+      const extension = path.split('/').pop()?.split('.').pop();
       if (!extension) {
         continue;
       }
