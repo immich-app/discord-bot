@@ -353,7 +353,7 @@ export class DiscordService {
         to = file.length;
       }
 
-      if (to - from > 10) {
+      if (to - from > 20) {
         continue;
       }
 
@@ -369,11 +369,9 @@ export class DiscordService {
     return snippets.map(({ lines, extension }) => {
       const code = lines.join('\n');
       const formattedCode = code.replaceAll(/`/g, '\\`');
-      return `
-\`\`\`${extension}
+      return `\`\`\`${extension === 'svelte' ? 'tsx' : extension}
 ${formattedCode}
-\`\`\`
-      `;
+\`\`\``;
     });
   }
 
