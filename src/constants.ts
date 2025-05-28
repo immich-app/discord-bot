@@ -66,10 +66,12 @@ const urls = {
 };
 
 const discordTags = {
-  Question: '1049704189686730823',
-  Ready: '1166852154292699207',
-  Setup: '1049704231692677120',
-  Usage: '1049704247517794315',
+  HelpDeskQuestion: '1049704189686730823',
+  HelpDeskReady: '1166852154292699207',
+  HelpDeskSetup: '1049704231692677120',
+  HelpDeskUsage: '1049704247517794315',
+  DevOutline: '1377250701637455985',
+  TeamOutline: '1377250780523925505',
 };
 
 const discordRoles = {
