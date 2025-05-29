@@ -136,12 +136,12 @@ export class DiscordHelpDesk {
   async handleSubmit(interaction: ButtonInteraction): Promise<void> {
     const { Tags } = Constants.Discord;
     const thread = interaction.message.channel as ThreadChannel;
-    if (thread.appliedTags.find((tag) => tag === Tags.Ready)) {
+    if (thread.appliedTags.find((tag) => tag === Tags.HelpDeskReady)) {
       return;
     }
 
     await interaction.reply(`Successfully submitted, a tag has been added to inform contributors. :white_check_mark:`);
-    await thread.setAppliedTags([...thread.appliedTags, Tags.Ready]);
+    await thread.setAppliedTags([...thread.appliedTags, Tags.HelpDeskReady]);
   }
 
   @ModalComponent({ id: DiscordModal.Logs })
@@ -228,7 +228,7 @@ export class DiscordHelpDesk {
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     } else {
       mainButtonRow.components.at(-1)?.setDisabled(true);
-      await channel.setAppliedTags(channel.appliedTags.filter((tag) => tag !== Constants.Discord.Tags.Ready));
+      await channel.setAppliedTags(channel.appliedTags.filter((tag) => tag !== Constants.Discord.Tags.HelpDeskReady));
       await reaction.message.edit({ content: message, components: [mainButtonRow] });
     }
   }

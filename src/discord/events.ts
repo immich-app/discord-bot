@@ -85,12 +85,37 @@ export class DiscordEvents {
 
     const link = await this.service.createOutlineDoc({
       threadParentId: thread.parentId ?? undefined,
+      threadTags: thread.appliedTags,
       title: thread.name,
       text: (await thread.fetchStarterMessage())?.content ?? undefined,
     });
 
     if (link) {
       const message = await thread.send({
+        content: `<@&${Constants.Discord.Roles.Team}> ${link}`,
+        flags: [MessageFlags.SuppressEmbeds],
+      });
+      await message.pin();
+    }
+  }
+
+  @On({ event: 'threadUpdate' })
+  async onThreadUpdate([oldThread, newThread]: ArgsOf<'threadUpdate'>) {
+    const tagDiff = _.difference(newThread.appliedTags, oldThread.appliedTags);
+
+    if (tagDiff.length === 0) {
+      return;
+    }
+
+    const link = await this.service.createOutlineDoc({
+      threadParentId: newThread.parentId ?? undefined,
+      threadTags: tagDiff,
+      title: newThread.name,
+      text: (await newThread.fetchStarterMessage())?.content ?? undefined,
+    });
+
+    if (link) {
+      const message = await newThread.send({
         content: `<@&${Constants.Discord.Roles.Team}> ${link}`,
         flags: [MessageFlags.SuppressEmbeds],
       });

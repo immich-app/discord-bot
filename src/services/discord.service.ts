@@ -495,7 +495,17 @@ ${formattedCode}
     return this.createEmote(name || groups.name, `https://cdn.discordapp.com/emojis/${groups.id}.png`, guildId);
   }
 
-  async createOutlineDoc({ threadParentId, title, text }: { threadParentId?: string; title: string; text?: string }) {
+  async createOutlineDoc({
+    threadParentId,
+    threadTags,
+    title,
+    text,
+  }: {
+    threadParentId?: string;
+    threadTags: string[];
+    title: string;
+    text?: string;
+  }) {
     const { Urls, Discord, Outline } = Constants;
     const {
       outline: { apiKey },
@@ -503,6 +513,10 @@ ${formattedCode}
 
     switch (threadParentId) {
       case Discord.Channels.DevFocusTopic: {
+        if (!threadTags.includes(Discord.Tags.DevOutline)) {
+          return;
+        }
+
         const { url } = await this.outline.createDocument({
           title,
           text,
@@ -515,6 +529,10 @@ ${formattedCode}
         return Urls.Outline + url;
       }
       case Discord.Channels.TeamFocusTopic: {
+        if (!threadTags.includes(Discord.Tags.TeamOutline)) {
+          return;
+        }
+
         const { url } = await this.outline.createDocument({
           title,
           text,
