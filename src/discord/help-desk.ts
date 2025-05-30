@@ -239,6 +239,9 @@ export class DiscordHelpDesk {
       return;
     }
 
+    // Attempt to fix not being able to send messages to a not yet fully created thread
+    await thread.fetchStarterMessage();
+
     const user = thread.ownerId ?? '';
     try {
       await this.sendWelcomeMessage(user, thread);
