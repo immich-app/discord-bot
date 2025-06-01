@@ -127,6 +127,11 @@ export class DiscordService {
   }
 
   async onError(error: Error) {
+    // thrown when trying to send a message to a not-yet-fully-initialized thread
+    if (error.name === 'DiscordAPIError[10008]') {
+      return;
+    }
+
     this.logger.verbose(`DiscordBot.onError - ${error}`);
     await logError('Discord bot error', error, { discord: this.discord, logger: this.logger });
   }
