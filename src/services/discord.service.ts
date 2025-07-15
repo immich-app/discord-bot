@@ -25,7 +25,7 @@ type GithubLink = {
   id: number;
   type?: LinkType;
 };
-type LinkType = 'issue' | 'pull' | 'discussion';
+type LinkType = 'issues' | 'pull' | 'discussions';
 
 type GithubCodeSnippet = {
   lines: string[];
@@ -59,7 +59,7 @@ type BetterTTVResponse = {
 };
 
 const GITHUB_THREAD_REGEX =
-  /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issue|discussion))\/)?#?(?<num>\d+)/g;
+  /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issues|discussions))\/)?#?(?<num>\d+)/g;
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
@@ -310,11 +310,11 @@ export class DiscordService {
     const results = await Promise.all(
       requests.map(async ({ org, repo, id, type }) => {
         switch (type) {
-          case 'issue':
+          case 'issues':
           case 'pull':
             return this.github.getIssueOrPr(org, repo, id);
 
-          case 'discussion':
+          case 'discussions':
             return this.github.getDiscussion(org, repo, id);
 
           default:
