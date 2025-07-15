@@ -11,12 +11,12 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   search: vitest.fn(),
   getDiscussion: vitest
     .fn()
-    .mockImplementation((org, repo, id) => Promise.resolve(`https://github.com/${org}/${repo}/discussion/${id}`)),
+    .mockImplementation((org, repo, id) => Promise.resolve(`https://github.com/${org}/${repo}/discussions/${id}`)),
   getForkCount: vitest.fn(),
   getIssueOrPr: vitest
     .fn()
     .mockImplementation((org, repo, id) =>
-      Promise.resolve(`https://github.com/${org}/${repo}/${id % 2 === 0 ? 'pull' : 'issue'}/${id}`),
+      Promise.resolve(`https://github.com/${org}/${repo}/${id % 2 === 0 ? 'pull' : 'issues'}/${id}`),
     ),
   getStarCount: vitest.fn(),
   init: vitest.fn(),
@@ -253,7 +253,7 @@ describe('Bot test', () => {
       {
         name: 'should handle multiple numbers',
         message: '#4242 #6969',
-        links: ['https://github.com/immich-app/immich/pull/4242', 'https://github.com/immich-app/immich/issue/6969'],
+        links: ['https://github.com/immich-app/immich/pull/4242', 'https://github.com/immich-app/immich/issues/6969'],
       },
       {
         name: 'should ignore a reference under 1000',
@@ -268,7 +268,7 @@ describe('Bot test', () => {
       {
         name: 'should ignore references in code blocks',
         message: '```#4242 #1234``` #6969',
-        links: ['https://github.com/immich-app/immich/issue/6969'],
+        links: ['https://github.com/immich-app/immich/issues/6969'],
       },
       {
         name: 'should support a reference to another immich repo',
@@ -299,17 +299,17 @@ describe('Bot test', () => {
           'immich-app/static-pages#123',
           'octokit/rest.js#123',
           'https://github.com/immich-app/immich/pull/1',
-          'https://github.com/immich-app/immich/issue/2',
-          'https://github.com/immich-app/immich/discussion/3',
+          'https://github.com/immich-app/immich/issues/2',
+          'https://github.com/immich-app/immich/discussions/3',
         ].join('\n'),
         links: [
           'https://github.com/immich-app/immich/pull/1234',
-          'https://github.com/immich-app/immich/issue/123',
-          'https://github.com/immich-app/static-pages/issue/123',
-          'https://github.com/octokit/rest.js/issue/123',
-          'https://github.com/immich-app/immich/issue/1',
+          'https://github.com/immich-app/immich/issues/123',
+          'https://github.com/immich-app/static-pages/issues/123',
+          'https://github.com/octokit/rest.js/issues/123',
+          'https://github.com/immich-app/immich/issues/1',
           'https://github.com/immich-app/immich/pull/2',
-          'https://github.com/immich-app/immich/discussion/3',
+          'https://github.com/immich-app/immich/discussions/3',
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
