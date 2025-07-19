@@ -41,10 +41,21 @@ export class DiscordEvents {
       return;
     }
 
-    const messageParts = await this.service.handleGithubReferences(message.content);
+    const [messageParts, twitterLinks] = await Promise.all([
+      this.service.handleGithubReferences(message.content),
+      this.service.handleTwitterReferences(message.content),
+    ]);
+
     if (messageParts.length !== 0) {
       await message.reply({
         content: messageParts.join('\n'),
+        flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
+      });
+    }
+
+    if (twitterLinks.length !== 0) {
+      await message.reply({
+        content: twitterLinks.join('\n'),
         flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
       });
     }
