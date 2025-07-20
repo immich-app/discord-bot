@@ -159,10 +159,12 @@ export class DiscordService {
       );
     }
 
-    return links.map(({ name, link }) => ({
-      name: shorten(`${name} — ${link}`),
-      value: name,
-    }));
+    return links
+      .map(({ name, link }) => ({
+        name: shorten(`${name} — ${link}`),
+        value: name,
+      }))
+      .slice(0, 25);
   }
 
   async addLink({ name, link, author }: { name: string; link: string; author: string }) {
@@ -419,10 +421,12 @@ ${formattedCode}
       messages = messages.filter(({ name }) => name.toLowerCase().includes(query));
     }
 
-    return messages.map(({ name, content }) => ({
-      name: shorten(`${name} — ${content}`, 40),
-      value: name,
-    }));
+    return messages
+      .map(({ name, content }) => ({
+        name: shorten(`${name} — ${content}`, 40),
+        value: name,
+      }))
+      .slice(0, 25);
   }
 
   async getMessage(name: string, increaseUsageCount: boolean = true) {
