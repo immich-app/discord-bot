@@ -257,6 +257,24 @@ export class DiscordService {
     }
   }
 
+  async handleTwitterReferences(content: string) {
+    const links: string[] = [];
+    content = content.replaceAll(/```.*```/gs, '');
+
+    const matches = content.matchAll(/https:\/\/x\.com\/(?<path>[^ ]+)/g);
+
+    for (const match of matches) {
+      if (!match || !match.groups) {
+        continue;
+      }
+
+      const { path } = match.groups;
+      links.push(`https://nitter.net/${path}`);
+    }
+
+    return links;
+  }
+
   async handleGithubReferences(content: string) {
     const codeSnippets = await this.handleGithubFileReferences(content);
     const links = await this.handleGithubThreadReferences(content);
