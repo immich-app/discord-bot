@@ -176,6 +176,13 @@ export class DiscordCommands {
       type: ApplicationCommandOptionType.String,
     })
     name: string,
+    @SlashOption({
+      description: 'Text that will be prepended before the message',
+      name: 'text',
+      required: false,
+      type: ApplicationCommandOptionType.String,
+    })
+    preface: string | null,
     interaction: CommandInteraction | AutocompleteInteraction,
   ) {
     if (interaction.isAutocomplete()) {
@@ -190,7 +197,10 @@ export class DiscordCommands {
       return interaction.reply({ content: 'Message could not be found', ephemeral: true });
     }
 
-    return interaction.reply({ content: message.content, flags: [MessageFlags.SuppressEmbeds] });
+    return interaction.reply({
+      content: preface ? `${preface} - ${message.content}` : message.content,
+      flags: [MessageFlags.SuppressEmbeds],
+    });
   }
 
   @Slash({ name: 'search', description: 'Search for PRs and Issues by title' })
