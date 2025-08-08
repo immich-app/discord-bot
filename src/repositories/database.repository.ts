@@ -11,7 +11,6 @@ import {
   DiscordLinkUpdate,
   DiscordMessage,
   IDatabaseRepository,
-  LicenseType,
   NewDiscordLink,
   NewDiscordMessage,
   NewFourthwallOrder,
@@ -104,26 +103,6 @@ export class DatabaseRepository implements IDatabaseRepository {
       server: result.find((r) => r.description === 'immich-server')?.product_count || 0,
       client: result.find((r) => r.description === 'immich-client')?.product_count || 0,
     };
-  }
-
-  async getSponsorLicenses(githubUsername: string) {
-    const sponsor = await this.db
-      .selectFrom('sponsor')
-      .selectAll()
-      .where('username', '=', githubUsername)
-      .executeTakeFirst();
-
-    if (!sponsor) {
-      return [];
-    }
-
-    await this.db.updateTable('sponsor').set('claimed', true).where('username', '=', githubUsername).execute();
-
-    return sponsor.licenses.map(({ activation, license }) => ({
-      type: sponsor.license_type === 'client' ? LicenseType.Client : LicenseType.Server,
-      licenseKey: license,
-      activationKey: activation,
-    }));
   }
 
   getDiscordLinks(): Promise<DiscordLink[]> {

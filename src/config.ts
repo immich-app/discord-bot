@@ -3,8 +3,6 @@ import dotenv from 'dotenv';
 export const getConfig = () => {
   dotenv.config();
 
-  const clientId = process.env.IMMICH_GITHUB_CLIENT_ID;
-  const clientSecret = process.env.IMMICH_GITHUB_CLIENT_SECRET;
   const databaseUri = process.env.uri;
   const botToken = process.env.BOT_TOKEN;
   const zulipBotUsername = process.env.ZULIP_BOT_USERNAME;
@@ -25,8 +23,6 @@ export const getConfig = () => {
   const outlineApiKey = process.env.OUTLINE_API_KEY;
 
   if (
-    !clientId ||
-    !clientSecret ||
     !databaseUri ||
     !botToken ||
     !zulipBotUsername ||
@@ -42,8 +38,6 @@ export const getConfig = () => {
     !outlineApiKey
   ) {
     console.log({
-      clientId,
-      clientSecret,
       databaseUri,
       botToken,
       zulipBotUsername,
@@ -70,8 +64,6 @@ export const getConfig = () => {
       uri: databaseUri,
     },
     github: {
-      clientId,
-      clientSecret,
       appId: githubAppId,
       installationId: githubInstallationId,
       privateKey: githubPrivateKey,

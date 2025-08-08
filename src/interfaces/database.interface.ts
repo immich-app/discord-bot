@@ -18,11 +18,6 @@ export interface PaymentTable {
 export type Payment = Selectable<PaymentTable>;
 export type NewPayment = Insertable<PaymentTable>;
 
-export enum LicenseType {
-  Server = 'immich-server',
-  Client = 'immich-client',
-}
-
 export interface SponsorTable {
   username: string;
   email: string;
@@ -30,12 +25,6 @@ export interface SponsorTable {
   claimed: boolean;
   license_type: 'client' | 'server';
   licenses: { license: string; activation: string }[];
-}
-
-export interface License {
-  type: LicenseType;
-  licenseKey: string;
-  activationKey: string;
 }
 
 export type Sponsor = Selectable<SponsorTable>;
@@ -118,7 +107,6 @@ export interface IDatabaseRepository {
   runMigrations(): Promise<void>;
   createPayment(entity: NewPayment): Promise<void>;
   getTotalLicenseCount(options?: ReportOptions): Promise<{ server: number; client: number }>;
-  getSponsorLicenses(githubUsername: string): Promise<License[]>;
   getDiscordLinks(): Promise<DiscordLink[]>;
   getDiscordLink(name: string): Promise<DiscordLink | undefined>;
   addDiscordLink(link: NewDiscordLink): Promise<void>;
