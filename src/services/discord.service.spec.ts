@@ -45,7 +45,6 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getDiscordLinks: vitest.fn(),
   getDiscordLink: vitest.fn(),
   removeDiscordLink: vitest.fn(),
-  getSponsorLicenses: vitest.fn(),
   getTotalLicenseCount: vitest.fn(),
   runMigrations: vitest.fn(),
   updateDiscordLink: vitest.fn(),
