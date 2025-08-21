@@ -60,6 +60,10 @@ export class WebhookService {
 
     const { action } = dto;
 
+    if ('repository' in dto && !dto.repository?.public) {
+      return;
+    }
+
     if (
       'pull_request' in dto &&
       (action === 'opened' || action === 'closed' || action === 'converted_to_draft' || action === 'ready_for_review')
