@@ -314,6 +314,49 @@ describe('Bot test', () => {
     ])('should $name', async ({ message: message, links }) => {
       await expect(sut.handleGithubThreadReferences(message)).resolves.toEqual(links);
     });
+
+    it('should filter out references from private repositories', async () => {
+      // Mock both getIssueOrPr and getDiscussion to return undefined for private repositories
+      githubMock.getIssueOrPr.mockImplementation((org, repo, id) => {
+        if (repo === 'private-repo') {
+          return Promise.resolve(undefined);
+        }
+        return Promise.resolve(`https://github.com/${org}/${repo}/${id % 2 === 0 ? 'pull' : 'issues'}/${id}`);
+      });
+      
+      githubMock.getDiscussion.mockImplementation((org, repo, id) => {
+        if (repo === 'private-repo') {
+          return Promise.resolve(undefined);
+        }
+        return Promise.resolve(`https://github.com/${org}/${repo}/discussions/${id}`);
+      });
+
+      const message = 'public-repo#1234 private-repo#5678';
+      const result = await sut.handleGithubReferences(message);
+      
+      // Should only contain the public repository reference
+      expect(result).toEqual(['https://github.com/immich-app/public-repo/pull/1234']);
+      expect(githubMock.getIssueOrPr).toHaveBeenCalledWith('immich-app', 'public-repo', 1234);
+      expect(githubMock.getIssueOrPr).toHaveBeenCalledWith('immich-app', 'private-repo', 5678);
+    });
+
+    it('should filter out discussion references from private repositories', async () => {
+      // Mock getDiscussion to return undefined for private repositories
+      githubMock.getDiscussion.mockImplementation((org, repo, id) => {
+        if (repo === 'private-repo') {
+          return Promise.resolve(undefined);
+        }
+        return Promise.resolve(`https://github.com/${org}/${repo}/discussions/${id}`);
+      });
+
+      const message = 'https://github.com/immich-app/public-repo/discussions/1 https://github.com/immich-app/private-repo/discussions/2';
+      const result = await sut.handleGithubReferences(message);
+      
+      // Should only contain the public repository reference
+      expect(result).toEqual(['https://github.com/immich-app/public-repo/discussions/1']);
+      expect(githubMock.getDiscussion).toHaveBeenCalledWith('immich-app', 'public-repo', 1);
+      expect(githubMock.getDiscussion).toHaveBeenCalledWith('immich-app', 'private-repo', 2);
+    });
   });
 
   describe('handleGithubFileReferences', () => {
