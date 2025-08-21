@@ -60,7 +60,7 @@ export class WebhookService {
 
     const { action } = dto;
 
-    if ('repository' in dto && !dto.repository?.public) {
+    if ('repository' in dto && dto.repository?.private) {
       return;
     }
 
