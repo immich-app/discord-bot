@@ -162,23 +162,23 @@ export class GithubRepository implements IGithubInterface {
         }
       }
       `,
-      { 
-        checkSuiteNodeId 
+      {
+        checkSuiteNodeId,
       },
     );
     return { head_sha: node.commit.oid };
   }
 
   async getLatestRelease(org: string, repo: string) {
-    const { repository } = await this.octokit.graphql<{ 
-      repository: { 
-        latestRelease: { 
+    const { repository } = await this.octokit.graphql<{
+      repository: {
+        latestRelease: {
           tagName: string;
           tagCommit: {
             oid: string;
-          }
-        } 
-      } 
+          };
+        };
+      };
     }>(
       `
       query getLatestRelease($org: String!, $repo: String!) {
@@ -194,9 +194,9 @@ export class GithubRepository implements IGithubInterface {
       `,
       { org, repo },
     );
-    return { 
+    return {
       tag_name: repository.latestRelease.tagName,
-      target_commitish: repository.latestRelease.tagCommit.oid 
+      target_commitish: repository.latestRelease.tagCommit.oid,
     };
   }
 }
