@@ -33,4 +33,6 @@ export interface IGithubInterface {
     ref: string,
     path: string,
   ): Promise<string[] | undefined>;
+  getCheckSuite(org: GithubOrg | string, repo: GithubRepo | string, checkSuiteId: number): Promise<any>;
+  getLatestRelease(org: GithubOrg | string, repo: GithubRepo | string): Promise<any>;
 }

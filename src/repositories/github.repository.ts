@@ -148,4 +148,21 @@ export class GithubRepository implements IGithubInterface {
 
     return repository.object?.text?.split('\n');
   }
+
+  async getCheckSuite(org: string, repo: string, checkSuiteId: number) {
+    const { data } = await this.octokit.rest.checks.getSuite({
+      owner: org,
+      repo,
+      check_suite_id: checkSuiteId,
+    });
+    return data;
+  }
+
+  async getLatestRelease(org: string, repo: string) {
+    const { data } = await this.octokit.rest.repos.getLatestRelease({
+      owner: org,
+      repo,
+    });
+    return data;
+  }
 }
