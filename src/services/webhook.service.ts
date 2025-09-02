@@ -463,28 +463,25 @@ export class WebhookService {
   private async handleWorkflowRunFailure(event: WorkflowRunEvent) {
     try {
       const { workflow_run, repository } = event;
-      
+
       const checkSuite = await this.github.getCheckSuite(
         repository.owner.login,
         repository.name,
         workflow_run.check_suite_id,
       );
-      
-      const latestRelease = await this.github.getLatestRelease(
-        repository.owner.login,
-        repository.name,
-      );
-      
+
+      const latestRelease = await this.github.getLatestRelease(repository.owner.login, repository.name);
+
       if (checkSuite.head_sha === latestRelease.target_commitish) {
         const embed = new EmbedBuilder({
           title: 'Release Workflow Failed',
           description: `[${workflow_run.display_title}](${workflow_run.html_url})`,
           color: Colors.Red,
         });
-        
-        await this.discord.sendMessage({ 
-          channelId: Constants.Discord.Channels.TeamAlerts, 
-          message: { embeds: [embed] } 
+
+        await this.discord.sendMessage({
+          channelId: Constants.Discord.Channels.TeamAlerts,
+          message: { embeds: [embed] },
         });
       }
     } catch (error) {
