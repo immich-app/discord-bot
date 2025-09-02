@@ -162,7 +162,7 @@ export class WebhookService {
     if ('workflow_run' in dto && dto.action === 'completed') {
       const conclusion = dto.workflow_run.conclusion;
       if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
-        await this.handleWorkflowRunFailure(dto as WorkflowRunEvent);
+        await this.handleWorkflowRunFailure(dto);
       }
     }
   }
