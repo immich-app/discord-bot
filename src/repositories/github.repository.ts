@@ -149,20 +149,54 @@ export class GithubRepository implements IGithubInterface {
     return repository.object?.text?.split('\n');
   }
 
-  async getCheckSuite(org: string, repo: string, checkSuiteId: number) {
-    const { data } = await this.octokit.rest.checks.getSuite({
-      owner: org,
-      repo,
-      check_suite_id: checkSuiteId,
-    });
-    return data;
+  async getCheckSuite(org: string, repo: string, checkSuiteNodeId: string) {
+    const { node } = await this.octokit.graphql<{ node: { commit: { oid: string } } }>(
+      `
+      query getCheckSuite($checkSuiteNodeId: ID!) {
+        node(id: $checkSuiteNodeId) {
+          ... on CheckSuite {
+            commit {
+              oid
+            }
+          }
+        }
+      }
+      `,
+      { 
+        checkSuiteNodeId 
+      },
+    );
+    return { head_sha: node.commit.oid };
   }
 
   async getLatestRelease(org: string, repo: string) {
-    const { data } = await this.octokit.rest.repos.getLatestRelease({
-      owner: org,
-      repo,
-    });
-    return data;
+    const { repository } = await this.octokit.graphql<{ 
+      repository: { 
+        latestRelease: { 
+          tagName: string;
+          tagCommit: {
+            oid: string;
+          }
+        } 
+      } 
+    }>(
+      `
+      query getLatestRelease($org: String!, $repo: String!) {
+        repository(owner: $org, name: $repo) {
+          latestRelease {
+            tagName
+            tagCommit {
+              oid
+            }
+          }
+        }
+      }
+      `,
+      { org, repo },
+    );
+    return { 
+      tag_name: repository.latestRelease.tagName,
+      target_commitish: repository.latestRelease.tagCommit.oid 
+    };
   }
 }

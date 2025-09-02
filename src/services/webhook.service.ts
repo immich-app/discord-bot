@@ -467,7 +467,7 @@ export class WebhookService {
       const checkSuite = await this.github.getCheckSuite(
         repository.owner.login,
         repository.name,
-        workflow_run.check_suite_id,
+        workflow_run.check_suite_node_id,
       );
 
       const latestRelease = await this.github.getLatestRelease(repository.owner.login, repository.name);
