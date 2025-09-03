@@ -464,15 +464,15 @@ export class WebhookService {
     try {
       const { workflow_run, repository } = event;
 
-      const checkSuite = await this.github.getCheckSuite(
+      const checkSuiteTrigger = await this.github.getCheckSuiteTriggerCommit(
         repository.owner.login,
         repository.name,
         workflow_run.check_suite_node_id,
       );
 
-      const latestRelease = await this.github.getLatestRelease(repository.owner.login, repository.name);
+      const latestRelease = await this.github.getLatestReleaseTag(repository.owner.login, repository.name);
 
-      if (checkSuite.head_sha === latestRelease.target_commitish) {
+      if (checkSuiteTrigger === latestRelease) {
         const embed = new EmbedBuilder({
           title: 'Release Workflow Failed <a:peepoAlert:1367804942638776423>',
           description: `[${workflow_run.display_title}](${workflow_run.html_url})`,

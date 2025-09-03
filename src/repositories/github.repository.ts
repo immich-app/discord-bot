@@ -149,7 +149,7 @@ export class GithubRepository implements IGithubInterface {
     return repository.object?.text?.split('\n');
   }
 
-  async getCheckSuite(org: string, repo: string, checkSuiteNodeId: string) {
+  async getCheckSuiteTriggerCommit(org: string, repo: string, checkSuiteNodeId: string) {
     const { node } = await this.octokit.graphql<{ node: { commit: { oid: string } } }>(
       `
       query getCheckSuite($checkSuiteNodeId: ID!) {
@@ -166,14 +166,13 @@ export class GithubRepository implements IGithubInterface {
         checkSuiteNodeId,
       },
     );
-    return { head_sha: node.commit.oid };
+    return node.commit.oid;
   }
 
-  async getLatestRelease(org: string, repo: string) {
+  async getLatestReleaseTag(org: string, repo: string) {
     const { repository } = await this.octokit.graphql<{
       repository: {
         latestRelease: {
-          tagName: string;
           tagCommit: {
             oid: string;
           };
@@ -184,7 +183,6 @@ export class GithubRepository implements IGithubInterface {
       query getLatestRelease($org: String!, $repo: String!) {
         repository(owner: $org, name: $repo) {
           latestRelease {
-            tagName
             tagCommit {
               oid
             }
@@ -194,9 +192,6 @@ export class GithubRepository implements IGithubInterface {
       `,
       { org, repo },
     );
-    return {
-      tag_name: repository.latestRelease.tagName,
-      target_commitish: repository.latestRelease.tagCommit.oid,
-    };
+    return repository.latestRelease.tagCommit.oid;
   }
 }
