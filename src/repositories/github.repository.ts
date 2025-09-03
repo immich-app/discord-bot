@@ -148,4 +148,50 @@ export class GithubRepository implements IGithubInterface {
 
     return repository.object?.text?.split('\n');
   }
+
+  async getCheckSuiteTriggerCommit(org: string, repo: string, checkSuiteNodeId: string) {
+    const { node } = await this.octokit.graphql<{ node: { commit: { oid: string } } }>(
+      `
+      query getCheckSuite($checkSuiteNodeId: ID!) {
+        node(id: $checkSuiteNodeId) {
+          ... on CheckSuite {
+            commit {
+              oid
+            }
+          }
+        }
+      }
+      `,
+      {
+        checkSuiteNodeId,
+      },
+    );
+    return node.commit.oid;
+  }
+
+  async getLatestReleaseTag(org: string, repo: string) {
+    const { repository } = await this.octokit.graphql<{
+      repository: {
+        latestRelease: {
+          tagCommit: {
+            oid: string;
+          };
+        };
+      };
+    }>(
+      `
+      query getLatestRelease($org: String!, $repo: String!) {
+        repository(owner: $org, name: $repo) {
+          latestRelease {
+            tagCommit {
+              oid
+            }
+          }
+        }
+      }
+      `,
+      { org, repo },
+    );
+    return repository.latestRelease.tagCommit.oid;
+  }
 }

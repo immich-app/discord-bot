@@ -33,4 +33,10 @@ export interface IGithubInterface {
     ref: string,
     path: string,
   ): Promise<string[] | undefined>;
+  getCheckSuiteTriggerCommit(
+    org: GithubOrg | string,
+    repo: GithubRepo | string,
+    checkSuiteNodeId: string,
+  ): Promise<string>;
+  getLatestReleaseTag(org: GithubOrg | string, repo: GithubRepo | string): Promise<string>;
 }

@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { User, WebhookEvent } from '@octokit/webhooks-types';
+import { User, WebhookEvent, WorkflowRunEvent } from '@octokit/webhooks-types';
 import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
 import _ from 'lodash';
 import semver from 'semver';
@@ -13,6 +13,7 @@ import {
   FourthwallOrderUpdateWebhook,
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
+import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { makeLicenseFields, makeOrderFields, shorten, withErrorLogging } from 'src/util';
@@ -45,6 +46,7 @@ export class WebhookService {
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IFourthwallRepository) private fourthwall: FourthwallRepository,
+    @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -155,6 +157,13 @@ export class WebhookService {
       }
 
       await Promise.all(messages);
+    }
+
+    if ('workflow_run' in dto && dto.action === 'completed') {
+      const conclusion = dto.workflow_run.conclusion;
+      if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
+        await this.handleWorkflowRunFailure(dto);
+      }
     }
   }
 
@@ -448,6 +457,35 @@ export class WebhookService {
       case 'answered': {
         return 'Green';
       }
+    }
+  }
+
+  private async handleWorkflowRunFailure(event: WorkflowRunEvent) {
+    try {
+      const { workflow_run, repository } = event;
+
+      const checkSuiteTrigger = await this.github.getCheckSuiteTriggerCommit(
+        repository.owner.login,
+        repository.name,
+        workflow_run.check_suite_node_id,
+      );
+
+      const latestRelease = await this.github.getLatestReleaseTag(repository.owner.login, repository.name);
+
+      if (checkSuiteTrigger === latestRelease) {
+        const embed = new EmbedBuilder({
+          title: 'Release Workflow Failed <a:peepoAlert:1367804942638776423>',
+          description: `[${workflow_run.display_title}](${workflow_run.html_url})`,
+          color: Colors.Red,
+        });
+
+        await this.discord.sendMessage({
+          channelId: Constants.Discord.Channels.TeamAlerts,
+          message: { embeds: [embed] },
+        });
+      }
+    } catch (error) {
+      this.logger.error('Failed to handle workflow run failure', error);
     }
   }
 }

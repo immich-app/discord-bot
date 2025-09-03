@@ -25,6 +25,8 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
     .mockImplementation((org, repo, ref, path) =>
       Promise.resolve([`function test() { return "${org}/${repo} @ ${ref}: ${path}"; }`]),
     ),
+  getCheckSuiteTriggerCommit: vitest.fn(),
+  getLatestReleaseTag: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({

@@ -83,6 +83,7 @@ const discordRoles = {
 const discordChannels = {
   DevFocusTopic: '1045707766754451486',
   TeamFocusTopic: '1330248543721754746',
+  TeamAlerts: '1360190417643110460',
 };
 
 const outlineCollections = {
