@@ -474,7 +474,7 @@ export class WebhookService {
 
       if (checkSuite.head_sha === latestRelease.target_commitish) {
         const embed = new EmbedBuilder({
-          title: 'Release Workflow Failed',
+          title: 'Release Workflow Failed <a:peepoAlert:1367804942638776423>',
           description: `[${workflow_run.display_title}](${workflow_run.html_url})`,
           color: Colors.Red,
         });
