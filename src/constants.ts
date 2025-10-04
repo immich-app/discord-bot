@@ -55,6 +55,7 @@ const urls = {
   GitHubRepoApi: 'https://api.github.com/repos/immich-app/immich',
   GoogleTakeOut: 'https://github.com/immich-app/immich/discussions/1340',
   Immich: 'https://immich.app',
+  ImmichDocs: 'https://docs.immich.app',
   ImmichRepo: 'https://github.com/immich-app/immich',
   Issues: 'https://github.com/immich-app/immich/issues',
   MyImmich: 'https://my.immich.app',

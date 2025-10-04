@@ -13,7 +13,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { formatCommand, logError, shorten } from 'src/util';
 
-const PREVIEW_BLACKLIST = [Constants.Urls.Immich, Constants.Urls.GitHub, Constants.Urls.MyImmich];
+const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
 
 const _star_history: Record<string, number | undefined> = {};
