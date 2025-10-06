@@ -29,11 +29,15 @@ export class GithubRepository implements IGithubInterface {
   async getIssueOrPr(org: string, repo: string, id: number) {
     try {
       const { repository } = await this.octokit.graphql<{
-        repository: { issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string } };
+        repository: { 
+          isPrivate: boolean;
+          issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string } 
+        };
       }>(
         `
       query issueOrPr($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
+          isPrivate
           issueOrPullRequest(number: $num) {
             __typename
             ...on Issue {
@@ -50,6 +54,12 @@ export class GithubRepository implements IGithubInterface {
         `,
         { org, repo, num: id },
       );
+      
+      // Filter out private repositories
+      if (repository.isPrivate) {
+        return undefined;
+      }
+      
       return `[${repository.issueOrPullRequest.__typename === 'Issue' ? 'Issue' : 'Pull Request'}] ${repository.issueOrPullRequest.title} (${makeLink(org, repo, id, repository.issueOrPullRequest.url)})`;
     } catch (error) {
       handleGraphqlError(error);
@@ -59,10 +69,16 @@ export class GithubRepository implements IGithubInterface {
 
   async getDiscussion(org: string, repo: string, id: number) {
     try {
-      const { repository } = await this.octokit.graphql<{ repository: { discussion: { title: string; url: string } } }>(
+      const { repository } = await this.octokit.graphql<{ 
+        repository: { 
+          isPrivate: boolean; 
+          discussion: { title: string; url: string } 
+        } 
+      }>(
         `
       query discussion($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
+          isPrivate
           discussion(number: $num) {
             title
             url
@@ -72,6 +88,11 @@ export class GithubRepository implements IGithubInterface {
       `,
         { org, repo, num: id },
       );
+
+      // Filter out private repositories
+      if (repository.isPrivate) {
+        return undefined;
+      }
 
       return `[Discussion] ${repository.discussion.title} (${makeLink(org, repo, id, repository.discussion.url)})`;
     } catch (error) {
