@@ -1,4 +1,4 @@
-FROM node:22.20.0-alpine@sha256:cb3143549582cc5f74f26f0992cdef4a422b22128cb517f94173a5f910fa4ee7 AS build-runner
+FROM node:22.20.0-alpine@sha256:dbcedd8aeab47fbc0f4dd4bffa55b7c3c729a707875968d467aaaea42d6225af AS build-runner
 
 WORKDIR /app
 COPY package*.json .
@@ -8,7 +8,7 @@ COPY tsconfig.json .
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM node:22.20.0-alpine@sha256:cb3143549582cc5f74f26f0992cdef4a422b22128cb517f94173a5f910fa4ee7
+FROM node:22.20.0-alpine@sha256:dbcedd8aeab47fbc0f4dd4bffa55b7c3c729a707875968d467aaaea42d6225af
 
 RUN apk add --no-cache tini
 WORKDIR /app
