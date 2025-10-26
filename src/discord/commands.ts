@@ -465,7 +465,7 @@ export class DiscordCommands {
 
   @Slash({ name: 'emote-sync', description: 'Syncs Discord emotes to Zulip' })
   async handleEmoteSync(interaction: CommandInteraction) {
-    await this.service.syncEmotes(interaction.guildId);
-    return interaction.reply('Successfully synced.');
+    void this.service.syncEmotes(interaction.guildId, interaction.channelId);
+    return interaction.reply('Syncing');
   }
 }
