@@ -18,6 +18,12 @@ type Zulip = {
     }) => Promise<string>;
   };
   callEndpoint: (path: string, method: 'GET' | 'POST', params: object) => Promise<void>;
+  config: {
+    realm: string;
+    apiURL: string;
+    username: string;
+    apiKey: string;
+  };
 };
 
 export class ZulipRepository implements IZulipInterface {
@@ -35,7 +41,17 @@ export class ZulipRepository implements IZulipInterface {
     this.logger.debug(response);
   }
 
-  async createEmote(name: string, emote: string) {
-    await this.zulipUser.callEndpoint(`/realm/emoji/${name.toLowerCase()}`, 'POST', { files: [emote] });
+  async createEmote(name: string, emoteUrl: string) {
+    const authentication = `Basic ${Buffer.from(`${this.zulipUser.config.username}:${this.zulipUser.config.apiKey}`).toString('base64')}`;
+    const emote = await fetch(emoteUrl).then((response) => response.blob());
+
+    const form = new FormData();
+    form.append('filename', emote);
+
+    await fetch(`${this.zulipUser.config.apiURL}/realm/emoji/${name.toLowerCase()}`, {
+      method: 'POST',
+      headers: { Authorization: authentication },
+      body: form,
+    });
   }
 }

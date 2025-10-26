@@ -10,5 +10,5 @@ export type MessagePayload = { stream: string | number; topic?: string; content:
 export interface IZulipInterface {
   init(config: ZulipConfig): Promise<void>;
   sendMessage(payload: MessagePayload): Promise<void>;
-  createEmote(name: string, emote: string): Promise<void>;
+  createEmote(name: string, emoteUrl: string): Promise<void>;
 }

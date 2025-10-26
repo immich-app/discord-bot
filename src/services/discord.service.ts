@@ -589,7 +589,7 @@ ${formattedCode}
     }
   }
 
-  async syncEmotes(guildId: string | null) {
+  async syncEmotes(guildId: string | null, channelId: string) {
     if (!guildId) {
       return;
     }
@@ -597,6 +597,8 @@ ${formattedCode}
     for (const emote of await this.discord.getEmotes(guildId)) {
       await this.zulip.createEmote(emote.name ?? emote.identifier, emote.url);
     }
+
+    await this.discord.sendMessage({ channelId, message: 'Done syncing' });
   }
 
   private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {

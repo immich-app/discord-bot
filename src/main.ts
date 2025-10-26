@@ -5,6 +5,9 @@ import { DIService, IDependencyRegistryEngine, InstanceOf } from 'discordx';
 import { AppModule } from 'src/app.module';
 import { DiscordService } from 'src/services/discord.service';
 import { ZulipService } from 'src/services/zulip.service';
+import { install } from 'undici';
+
+install();
 
 export class NoopRegistryEngine implements IDependencyRegistryEngine {
   addService(): void {}
