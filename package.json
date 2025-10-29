@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "license": "MIT",
+  "type": "commonjs",
   "main": "dist/main.js",
   "scripts": {
     "build": "nest build",
@@ -48,6 +49,7 @@
     "rss-parser": "^3.13.0",
     "semver": "^7.6.3",
     "undici": "^7.16.0",
+    "vite-tsconfig-paths": "^5.1.4",
     "zulip-js": "^2.0.9"
   },
   "devDependencies": {
