@@ -93,7 +93,7 @@ export class DiscordRepository implements IDiscordInterface {
     const result = [];
 
     for (const emote of emotes?.values() ?? []) {
-      result.push({ identifier: emote.identifier, name: emote.name, url: emote.imageURL() });
+      result.push({ identifier: emote.identifier, name: emote.name, url: emote.imageURL(), animated: emote.animated });
     }
     return result;
   }
