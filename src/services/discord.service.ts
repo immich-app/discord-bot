@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { ChannelType, CommandInteraction, GuildMember, TextChannel } from 'discord.js';
 import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -599,6 +600,30 @@ ${formattedCode}
     }
 
     await this.discord.sendMessage({ channelId, message: 'Done syncing' });
+  }
+
+  async pruneMessagesInChannel(channel: TextChannel, userId: string, deleteAfter: DateTime) {
+    const messages = await channel.messages.fetch();
+
+    for (const [, message] of messages.filter(({ author }) => author.id === userId)) {
+      if (deleteAfter < DateTime.fromJSDate(message.createdAt)) {
+        await message.delete();
+      }
+    }
+  }
+
+  async pruneMessages(interaction: CommandInteraction, member: GuildMember, minutes: number) {
+    const deleteAfter = DateTime.now().minus({ minutes });
+    const channels = interaction
+      .guild!.channels.cache.filter((channel) => channel.type === ChannelType.GuildText)
+      .filter((channel) => channel.permissionsFor(member).has('SendMessages'));
+
+    const promises: Promise<void>[] = [];
+    for (const [, channel] of channels) {
+      promises.push(this.pruneMessagesInChannel(channel, member.id, deleteAfter));
+    }
+
+    await Promise.all(promises);
   }
 
   private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {
