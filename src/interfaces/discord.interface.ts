@@ -35,5 +35,5 @@ export interface IDiscordInterface {
     crosspost?: boolean;
   }): Promise<void>;
   createEmote(name: string, emote: string | Buffer, guildId: string): Promise<GuildEmoji | undefined>;
-  getEmotes(guildId: string): Promise<{ identifier: string; name: string | null; url: string }[]>;
+  getEmotes(guildId: string): Promise<{ identifier: string; name: string | null; url: string; animated: boolean }[]>;
 }
