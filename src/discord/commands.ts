@@ -3,6 +3,7 @@ import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
   AutocompleteInteraction,
+  GuildMember,
   MessageFlags,
   ModalBuilder,
   ModalSubmitInteraction,
@@ -467,5 +468,37 @@ export class DiscordCommands {
   async handleEmoteSync(interaction: CommandInteraction) {
     void this.service.syncEmotes(interaction.guildId, interaction.channelId);
     return interaction.reply('Syncing');
+  }
+
+  @Slash({ name: 'prune', description: 'Deletes all recent messages of a timed out user' })
+  async handleCleanUp(
+    @SlashOption({
+      name: 'user',
+      description: 'The timed out user to delete recent messages of',
+      type: ApplicationCommandOptionType.User,
+      required: true,
+    })
+    member: GuildMember,
+    @SlashOption({
+      name: 'timespan',
+      description: 'Delete all messages in the past x minutes',
+      type: ApplicationCommandOptionType.Number,
+      required: false,
+    })
+    minutes: number = 5,
+    interaction: CommandInteraction,
+  ) {
+    if (!member.isCommunicationDisabled()) {
+      await interaction.reply({
+        content: `${member.user.toString()} must be timeouted first`,
+        flags: [MessageFlags.Ephemeral],
+      });
+    }
+
+    const deferredInteraction = await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+
+    await this.service.pruneMessages(interaction, member, minutes);
+
+    await deferredInteraction.edit(`Successfully cleaned up ${member.user.toString()}`);
   }
 }
