@@ -590,16 +590,19 @@ ${formattedCode}
     }
   }
 
-  async syncEmotes(guildId: string | null, channelId: string) {
-    if (!guildId) {
+  async syncEmotes(interaction: CommandInteraction) {
+    if (!interaction.guildId) {
       return;
     }
 
-    for (const emote of await this.discord.getEmotes(guildId)) {
-      await this.zulip.createEmote(emote.name ?? emote.identifier, emote.url);
+    const deferredInteraction = await interaction.deferReply();
+
+    for (const emote of await this.discord.getEmotes(interaction.guildId)) {
+      const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
+      await this.zulip.createEmote(emote.name ?? emote.identifier, url);
     }
 
-    await this.discord.sendMessage({ channelId, message: 'Done syncing' });
+    await deferredInteraction.edit('Done syncing');
   }
 
   async pruneMessagesInChannel(channel: TextChannel, userId: string, deleteAfter: DateTime) {

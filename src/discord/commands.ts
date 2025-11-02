@@ -466,8 +466,7 @@ export class DiscordCommands {
 
   @Slash({ name: 'emote-sync', description: 'Syncs Discord emotes to Zulip' })
   async handleEmoteSync(interaction: CommandInteraction) {
-    void this.service.syncEmotes(interaction.guildId, interaction.channelId);
-    return interaction.reply('Syncing');
+    await this.service.syncEmotes(interaction);
   }
 
   @Slash({ name: 'prune', description: 'Deletes all recent messages of a timed out user' })
