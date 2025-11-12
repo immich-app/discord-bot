@@ -102,8 +102,13 @@ export class DiscordEvents {
     });
 
     if (link) {
+      const role =
+        thread.parentId === Constants.Discord.Channels.YuccaFocusTopic
+          ? Constants.Discord.Roles.Yucca
+          : Constants.Discord.Roles.Team;
+
       const message = await thread.send({
-        content: `<@&${Constants.Discord.Roles.Team}> ${link}`,
+        content: `<@&${role}> ${link}`,
         flags: [MessageFlags.SuppressEmbeds],
       });
       await message.pin();

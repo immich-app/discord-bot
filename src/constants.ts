@@ -73,28 +73,33 @@ const discordTags = {
   HelpDeskUsage: '1049704247517794315',
   DevOutline: '1377250701637455985',
   TeamOutline: '1377250780523925505',
+  YuccaOutline: '1438185967155417230',
 };
 
 const discordRoles = {
   Contributor: '980972470964215870',
   SupportCrew: '1184258769312551053',
   Team: '1330248951613358101',
+  Yucca: '1437440371587158140',
 };
 
 const discordChannels = {
   DevFocusTopic: '1045707766754451486',
   TeamFocusTopic: '1330248543721754746',
   TeamAlerts: '1360190417643110460',
+  YuccaFocusTopic: '1413525610700996739',
 };
 
 const outlineCollections = {
   Dev: '0b0dee90-b10e-416a-9059-ad0a061326b6',
   Team: '943c8f09-b8e7-4891-beb0-e3346ac22609',
+  Yucca: 'a2ce7b2a-cc3a-48bb-8d4d-6712c4917dcb',
 };
 
 const outlineDocuments = {
   DevFocusTopic: 'dbe1d7d2-ca67-42a2-adb2-43496cb048b7',
   TeamFocusTopic: '7fbd54e9-7f6f-44e5-9ed0-05a12e35937e',
+  YuccaFocusTopic: 'ad2e16ee-094e-4f29-bfd4-cbf6b2f20f66',
 };
 
 export const Constants = {

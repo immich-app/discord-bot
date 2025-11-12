@@ -572,6 +572,22 @@ ${formattedCode}
         });
         return Urls.Outline + url;
       }
+      case Discord.Channels.YuccaFocusTopic: {
+        if (!threadTags.includes(Discord.Tags.YuccaOutline)) {
+          return;
+        }
+
+        const { url } = await this.outline.createDocument({
+          title,
+          text,
+          collectionId: Outline.Collections.Yucca,
+          parentDocumentId: Outline.Documents.YuccaFocusTopic,
+          apiKey,
+          icon: 'hammer',
+          iconColor: '#FF825C',
+        });
+        return Urls.Outline + url;
+      }
     }
   }
 
