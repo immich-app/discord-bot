@@ -118,13 +118,14 @@ export const Constants = {
     DailyReport: '0 12 * * *',
     WeeklyReport: '0 12 * * 4',
     MonthlyReport: '0 12 19 * *',
+    HolidayInfo: '0 22 * * *',
   },
   Outline: {
     Collections: outlineCollections,
     Documents: outlineDocuments,
   },
   Zulip: {
-    Streams: { Immich: 54 },
+    Streams: { Immich: 54, FUTOStaff: 2 },
     Topics: { ImmichRelease: 'release' },
   },
 };
