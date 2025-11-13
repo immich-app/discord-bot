@@ -31,15 +31,9 @@ export class ZulipService {
       return;
     }
 
-    let content: string | undefined;
-
     if (holiday.global) {
-      content = `Tomorrow is a federal holiday: ${holiday.name}. Most likely there won't be any meetings tomorrow, otherwise Steve will correct me :kekw:`;
-    } else if (holiday.counties?.includes('US-TX')) {
-      content = `Tomorrow is a holiday in Texas: ${holiday.name}. It's possible that there won't be any meetings tomorrow. If there are, @**Steve** can let you know.`;
-    }
+      const content = `Tomorrow is a federal holiday: ${holiday.name}. Most likely there won't be any meetings tomorrow, otherwise Steve will correct me :kekw:`;
 
-    if (content) {
       await this.zulip.sendMessage({
         stream: Constants.Zulip.Streams.FUTOStaff,
         topic: 'Holidays',
