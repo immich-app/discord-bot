@@ -292,6 +292,12 @@ describe('Bot test', () => {
         links: ['https://github.com/immich-app/immich/pull/4242'],
       },
       {
+        name: 'should properly parse numbers in repo names',
+        message:
+          'https://github.com/fluxcd/flux2-kustomize-helm-example https://github.com/fluxcd/flux2-kustomize-helm-example/pull/42',
+        links: ['https://github.com/fluxcd/flux2-kustomize-helm-example/pull/42'],
+      },
+      {
         name: 'should return all the links',
         message: [
           '#1234',
