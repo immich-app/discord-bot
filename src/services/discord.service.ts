@@ -59,8 +59,10 @@ type BetterTTVResponse = {
   animated: string;
 };
 
-const GITHUB_THREAD_REGEX =
-  /(https:\/\/github\.com\/)?(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(\/(?<category>(pull|issues|discussions))\/)?#?(?<num>\d+)/g;
+const GITHUB_PAGE_REGEX =
+  /https:\/\/github\.com\/(?<orgPage>[\w\-.,_]*)\/(?<repoPage>[\w\-.,_]+)\/(?<category>(pull|issues|discussions))\/(?<numPage>\d+)/g;
+const GITHUB_QUICK_REF_REGEX = /(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g;
+const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_QUICK_REF_REGEX.source})`, 'g');
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
@@ -297,20 +299,20 @@ export class DiscordService {
         continue;
       }
 
-      const { org, repo, category, num } = match.groups;
-      const id = Number(num);
+      const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups;
+      const id = Number(num ?? numPage);
       if (Number.isNaN(id)) {
         continue;
       }
 
-      if (!org && !repo && id < 1000) {
+      if (!org && !orgPage && !repo && !repoPage && id < 1000) {
         continue;
       }
 
       links.push({
         id,
-        org: org || GithubOrg.ImmichApp,
-        repo: repo || GithubRepo.Immich,
+        org: org || orgPage || GithubOrg.ImmichApp,
+        repo: repo || repoPage || GithubRepo.Immich,
         type: category as LinkType,
       });
     }
