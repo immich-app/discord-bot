@@ -36,7 +36,7 @@ export class ZulipService {
     await this.zulip.sendMessage({
       stream: Constants.Zulip.Streams.FUTOStaff,
       topic: 'Holidays',
-      content: `Tomorrow is a federal holiday: ${holiday.name}. Most likely there won't be any meetings tomorrow, otherwise Steve will correct me :kekw:`,
+      content: `Tomorrow is a federal holiday: ${holiday.name}. There won't be any meetings tomorrow.`,
     });
   }
 }
