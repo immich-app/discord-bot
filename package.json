@@ -64,7 +64,6 @@
     "@types/pg": "^8.11.6",
     "@types/pg-cursor": "^2.7.2",
     "@types/semver": "^7.5.8",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitest/coverage-v8": "^4.0.0",
     "eslint": "^9.0.0",
@@ -72,6 +71,7 @@
     "prettier": "^3.0.3",
     "prettier-plugin-organize-imports": "^4.0.0",
     "typescript": "^5.2.2",
+    "typescript-eslint": "^8.56.0",
     "unplugin-swc": "^1.5.1",
     "vitest": "^4.0.0"
   },
