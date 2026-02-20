@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { MessageFlags } from 'discord.js';
+import { MessageFlags, ThreadChannel } from 'discord.js';
 import { ArgsOf, Discord, On, Once, RestArgsOf } from 'discordx';
 import _ from 'lodash';
 import { Constants } from 'src/constants';
@@ -102,16 +102,7 @@ export class DiscordEvents {
     });
 
     if (link) {
-      const role =
-        thread.parentId === Constants.Discord.Channels.YuccaFocusTopic
-          ? Constants.Discord.Roles.Yucca
-          : Constants.Discord.Roles.Team;
-
-      const message = await thread.send({
-        content: `<@&${role}> ${link}`,
-        flags: [MessageFlags.SuppressEmbeds],
-      });
-      await message.pin();
+      await this.sendAndPinOutlineLink(thread, link);
     }
   }
 
@@ -131,11 +122,20 @@ export class DiscordEvents {
     });
 
     if (link) {
-      const message = await newThread.send({
-        content: `<@&${Constants.Discord.Roles.Team}> ${link}`,
-        flags: [MessageFlags.SuppressEmbeds],
-      });
-      await message.pin();
+      await this.sendAndPinOutlineLink(newThread, link);
     }
+  }
+
+  private async sendAndPinOutlineLink(thread: ThreadChannel, link: string) {
+    const role =
+      thread.parentId === Constants.Discord.Channels.YuccaFocusTopic
+        ? Constants.Discord.Roles.Yucca
+        : Constants.Discord.Roles.Team;
+
+    const message = await thread.send({
+      content: `<@&${role}> ${link}`,
+      flags: [MessageFlags.SuppressEmbeds],
+    });
+    await message.pin();
   }
 }
