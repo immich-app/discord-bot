@@ -17,6 +17,7 @@ import { Constants, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 import { DiscordService } from 'src/services/discord.service';
 import { RSSService } from 'src/services/rss.service';
+import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 
 const authGuard = async (interaction: CommandInteraction) => {
   const isValid = [
@@ -42,6 +43,7 @@ export class DiscordCommands {
   constructor(
     private service: DiscordService,
     private rssService: RSSService,
+    private scheduledMessageService: ScheduledMessageService,
   ) {}
 
   @Slash({ name: 'link-add', description: 'Add a new link' })
@@ -499,5 +501,105 @@ export class DiscordCommands {
     await this.service.pruneMessages(interaction, member, minutes);
 
     await deferredInteraction.edit(`Successfully cleaned up ${member.user.toString()}`);
+  }
+
+  @Slash({ name: 'schedule-add', description: 'Create a recurring scheduled message' })
+  async handleScheduleAdd(
+    @SlashOption({
+      name: 'name',
+      description: 'A unique name for this scheduled message',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    name: string,
+    @SlashOption({
+      name: 'cron',
+      description: 'Cron expression (e.g. "0 9 * * 1" for every Monday at 9am UTC)',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    cronExpression: string,
+    @SlashOption({
+      name: 'message',
+      description: 'The message to send (supports role pings like <@&roleId>)',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+    })
+    message: string,
+    @SlashOption({
+      name: 'channel',
+      description: 'The channel to send to (defaults to current channel)',
+      type: ApplicationCommandOptionType.Channel,
+      required: false,
+    })
+    channel: { id: string } | null,
+    interaction: CommandInteraction,
+  ) {
+    if (!(await authGuard(interaction))) {
+      return;
+    }
+
+    const channelId = channel?.id ?? interaction.channelId;
+
+    try {
+      await this.scheduledMessageService.createScheduledMessage({
+        name,
+        cronExpression,
+        message,
+        channelId,
+        createdBy: interaction.user.id,
+      });
+
+      return interaction.reply({
+        content: `Scheduled message \`${name}\` created with cron \`${cronExpression}\` in <#${channelId}>`,
+        flags: [MessageFlags.Ephemeral],
+      });
+    } catch (error) {
+      return interaction.reply({
+        content: `Failed to create scheduled message: ${error}`,
+        flags: [MessageFlags.Ephemeral],
+      });
+    }
+  }
+
+  @Slash({ name: 'schedule-remove', description: 'Remove a scheduled message' })
+  async handleScheduleRemove(
+    @SlashOption({
+      name: 'name',
+      description: 'The name of the scheduled message to remove',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+      autocomplete: true,
+    })
+    name: string,
+    interaction: CommandInteraction | AutocompleteInteraction,
+  ) {
+    if (interaction.isAutocomplete()) {
+      const value = interaction.options.getFocused(true).value;
+      const results = await this.scheduledMessageService.getScheduledMessages(value);
+      return interaction.respond(results);
+    }
+
+    if (!(await authGuard(interaction))) {
+      return;
+    }
+
+    const { message, isPrivate } = await this.scheduledMessageService.removeScheduledMessage(name);
+    return interaction.reply({ content: message, ephemeral: isPrivate });
+  }
+
+  @Slash({ name: 'schedule-list', description: 'List all scheduled messages' })
+  async handleScheduleList(interaction: CommandInteraction) {
+    const messages = await this.scheduledMessageService.listScheduledMessages();
+
+    if (messages.length === 0) {
+      return interaction.reply({ content: 'No scheduled messages found.', flags: [MessageFlags.Ephemeral] });
+    }
+
+    const list = messages
+      .map((m) => `- **${m.name}** — \`${m.cronExpression}\` in <#${m.channelId}>\n  ${m.message}`)
+      .join('\n');
+
+    return interaction.reply({ content: `**Scheduled Messages:**\n${list}`, flags: [MessageFlags.Ephemeral] });
   }
 }
