@@ -42,6 +42,9 @@ export class ScheduledMessageService implements OnModuleInit {
   }
 
   async createScheduledMessage(entity: NewScheduledMessage) {
+    // Validate the cron expression before persisting
+    new CronJob(entity.cronExpression, () => {});
+
     await this.database.createScheduledMessage(entity);
     const created = await this.database.getScheduledMessage(entity.name);
     if (created) {
