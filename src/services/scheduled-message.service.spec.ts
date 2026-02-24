@@ -3,7 +3,12 @@ import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { Mocked, beforeEach, describe, expect, it, vitest } from 'vitest';
 
-const newDatabaseMock = (): Mocked<Pick<IDatabaseRepository, 'getScheduledMessages' | 'getScheduledMessage' | 'createScheduledMessage' | 'removeScheduledMessage'>> => ({
+const newDatabaseMock = (): Mocked<
+  Pick<
+    IDatabaseRepository,
+    'getScheduledMessages' | 'getScheduledMessage' | 'createScheduledMessage' | 'removeScheduledMessage'
+  >
+> => ({
   getScheduledMessages: vitest.fn().mockResolvedValue([]),
   getScheduledMessage: vitest.fn(),
   createScheduledMessage: vitest.fn(),
@@ -142,9 +147,7 @@ describe('ScheduledMessageService', () => {
     });
 
     it('should filter case-insensitively', async () => {
-      databaseMock.getScheduledMessages.mockResolvedValue([
-        makeScheduledMessage({ name: 'Daily-Standup' }),
-      ]);
+      databaseMock.getScheduledMessages.mockResolvedValue([makeScheduledMessage({ name: 'Daily-Standup' })]);
 
       const result = await sut.getScheduledMessages('daily');
 
@@ -152,9 +155,7 @@ describe('ScheduledMessageService', () => {
     });
 
     it('should limit results to 25 entries', async () => {
-      const messages = Array.from({ length: 30 }, (_, i) =>
-        makeScheduledMessage({ name: `msg-${i}` }),
-      );
+      const messages = Array.from({ length: 30 }, (_, i) => makeScheduledMessage({ name: `msg-${i}` }));
       databaseMock.getScheduledMessages.mockResolvedValue(messages);
 
       const result = await sut.getScheduledMessages();
@@ -165,10 +166,7 @@ describe('ScheduledMessageService', () => {
 
   describe('listScheduledMessages', () => {
     it('should return all messages when no channel filter is provided', async () => {
-      const messages = [
-        makeScheduledMessage({ channelId: 'ch-1' }),
-        makeScheduledMessage({ channelId: 'ch-2' }),
-      ];
+      const messages = [makeScheduledMessage({ channelId: 'ch-1' }), makeScheduledMessage({ channelId: 'ch-2' })];
       databaseMock.getScheduledMessages.mockResolvedValue(messages);
 
       const result = await sut.listScheduledMessages();
