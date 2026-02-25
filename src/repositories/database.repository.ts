@@ -220,8 +220,8 @@ export class DatabaseRepository implements IDatabaseRepository {
     return this.db.selectFrom('scheduled_messages').where('name', '=', name).selectAll().executeTakeFirst();
   }
 
-  async createScheduledMessage(entity: NewScheduledMessage): Promise<void> {
-    await this.db.insertInto('scheduled_messages').values(entity).execute();
+  createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage> {
+    return this.db.insertInto('scheduled_messages').values(entity).returningAll().executeTakeFirstOrThrow();
   }
 
   async removeScheduledMessage(id: string): Promise<void> {

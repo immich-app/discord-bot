@@ -81,12 +81,11 @@ describe('ScheduledMessageService', () => {
         createdBy: 'user-1',
       };
       const created = makeScheduledMessage({ id: 'new-1', ...entity });
-      databaseMock.getScheduledMessage.mockResolvedValue(created);
+      databaseMock.createScheduledMessage.mockResolvedValue(created);
 
       await sut.createScheduledMessage(entity);
 
       expect(databaseMock.createScheduledMessage).toHaveBeenCalledWith(entity);
-      expect(databaseMock.getScheduledMessage).toHaveBeenCalledWith('valid-message');
     });
   });
 
@@ -96,7 +95,7 @@ describe('ScheduledMessageService', () => {
 
       const result = await sut.removeScheduledMessage('nonexistent');
 
-      expect(result).toEqual({ message: 'Scheduled message not found', isPrivate: true });
+      expect(result).toEqual('Scheduled message not found');
       expect(databaseMock.removeScheduledMessage).not.toHaveBeenCalled();
     });
 
@@ -107,10 +106,7 @@ describe('ScheduledMessageService', () => {
       const result = await sut.removeScheduledMessage('to-remove');
 
       expect(databaseMock.removeScheduledMessage).toHaveBeenCalledWith('rm-1');
-      expect(result).toEqual({
-        message: 'Removed scheduled message `to-remove`',
-        isPrivate: false,
-      });
+      expect(result).toEqual('Removed scheduled message `to-remove`');
     });
   });
 
@@ -172,20 +168,6 @@ describe('ScheduledMessageService', () => {
       const result = await sut.listScheduledMessages();
 
       expect(result).toHaveLength(2);
-    });
-
-    it('should filter messages by channelId', async () => {
-      const messages = [
-        makeScheduledMessage({ channelId: 'ch-1' }),
-        makeScheduledMessage({ channelId: 'ch-2' }),
-        makeScheduledMessage({ channelId: 'ch-1' }),
-      ];
-      databaseMock.getScheduledMessages.mockResolvedValue(messages);
-
-      const result = await sut.listScheduledMessages('ch-1');
-
-      expect(result).toHaveLength(2);
-      expect(result.every((m) => m.channelId === 'ch-1')).toBe(true);
     });
   });
 });

@@ -141,6 +141,6 @@ export interface IDatabaseRepository {
   updateRSSFeed(entity: UpdateRSSFeed): Promise<void>;
   getScheduledMessages(): Promise<ScheduledMessage[]>;
   getScheduledMessage(name: string): Promise<ScheduledMessage | undefined>;
-  createScheduledMessage(entity: NewScheduledMessage): Promise<void>;
+  createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
   removeScheduledMessage(id: string): Promise<void>;
 }

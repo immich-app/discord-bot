@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { CronJob } from 'cron';
+import { inlineCode } from 'discord.js';
 import { IDatabaseRepository, NewScheduledMessage } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { shorten } from 'src/util';
@@ -21,12 +22,21 @@ export class ScheduledMessageService implements OnModuleInit {
   private async loadScheduledMessages() {
     const messages = await this.database.getScheduledMessages();
     for (const message of messages) {
-      this.registerJob(message.id, message.cronExpression, message.channelId, message.message);
+      this.registerJob(message);
     }
-    this.logger.log(`Loaded ${messages.length} scheduled message(s)`);
   }
 
-  private registerJob(id: string, cronExpression: string, channelId: string, message: string) {
+  private registerJob({
+    id,
+    cronExpression,
+    channelId,
+    message,
+  }: {
+    id: string;
+    cronExpression: string;
+    channelId: string;
+    message: string;
+  }) {
     const job = CronJob.from({
       cronTime: cronExpression,
       onTick: async () => {
@@ -42,30 +52,26 @@ export class ScheduledMessageService implements OnModuleInit {
   }
 
   async createScheduledMessage(entity: NewScheduledMessage) {
-    // Validate the cron expression before persisting
     new CronJob(entity.cronExpression, () => {});
 
-    await this.database.createScheduledMessage(entity);
-    const created = await this.database.getScheduledMessage(entity.name);
-    if (created) {
-      this.registerJob(created.id, created.cronExpression, created.channelId, created.message);
-    }
+    const message = await this.database.createScheduledMessage(entity);
+    this.registerJob(message);
   }
 
   async removeScheduledMessage(name: string) {
     const message = await this.database.getScheduledMessage(name);
     if (!message) {
-      return { message: 'Scheduled message not found', isPrivate: true };
+      return 'Scheduled message not found';
     }
 
     const job = this.jobs.get(message.id);
     if (job) {
-      void job.stop();
+      await job.stop();
       this.jobs.delete(message.id);
     }
 
     await this.database.removeScheduledMessage(message.id);
-    return { message: `Removed scheduled message \`${message.name}\``, isPrivate: false };
+    return `Removed scheduled message ${inlineCode(message.name)}`;
   }
 
   async getScheduledMessages(value?: string) {
@@ -83,11 +89,7 @@ export class ScheduledMessageService implements OnModuleInit {
       .slice(0, 25);
   }
 
-  async listScheduledMessages(channelId?: string) {
-    let messages = await this.database.getScheduledMessages();
-    if (channelId) {
-      messages = messages.filter((m) => m.channelId === channelId);
-    }
-    return messages;
+  async listScheduledMessages() {
+    return this.database.getScheduledMessages();
   }
 }

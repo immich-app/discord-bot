@@ -3,7 +3,11 @@ import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
   AutocompleteInteraction,
+  bold,
+  Channel,
+  channelMention,
   GuildMember,
+  inlineCode,
   MessageFlags,
   ModalBuilder,
   ModalSubmitInteraction,
@@ -532,7 +536,7 @@ export class DiscordCommands {
       type: ApplicationCommandOptionType.Channel,
       required: false,
     })
-    channel: { id: string } | null,
+    channel: Channel | null,
     interaction: CommandInteraction,
   ) {
     const channelId = channel?.id ?? interaction.channelId;
@@ -547,7 +551,7 @@ export class DiscordCommands {
       });
 
       return interaction.reply({
-        content: `Scheduled message \`${name}\` created with cron \`${cronExpression}\` in <#${channelId}>`,
+        content: `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ${channel}`,
         flags: [MessageFlags.Ephemeral],
       });
     } catch (error) {
@@ -576,8 +580,8 @@ export class DiscordCommands {
       return interaction.respond(results);
     }
 
-    const { message, isPrivate } = await this.scheduledMessageService.removeScheduledMessage(name);
-    return interaction.reply({ content: message, ephemeral: isPrivate });
+    const message = await this.scheduledMessageService.removeScheduledMessage(name);
+    return interaction.reply({ content: message });
   }
 
   @Slash({ name: 'schedule-list', description: 'List all scheduled messages' })
@@ -588,10 +592,13 @@ export class DiscordCommands {
       return interaction.reply({ content: 'No scheduled messages found.', flags: [MessageFlags.Ephemeral] });
     }
 
-    const list = messages
-      .map((m) => `- **${m.name}** — \`${m.cronExpression}\` in <#${m.channelId}>\n  ${m.message}`)
+    const content = messages
+      .map(
+        (message) =>
+          `- ${bold(message.name)}:  ${inlineCode(message.cronExpression)} in ${channelMention(message.channelId)}\n  ${message.message}`,
+      )
       .join('\n');
 
-    return interaction.reply({ content: `**Scheduled Messages:**\n${list}`, flags: [MessageFlags.Ephemeral] });
+    return interaction.reply({ content, flags: [MessageFlags.Ephemeral] });
   }
 }
