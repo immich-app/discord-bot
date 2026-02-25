@@ -535,10 +535,6 @@ export class DiscordCommands {
     channel: { id: string } | null,
     interaction: CommandInteraction,
   ) {
-    if (!(await authGuard(interaction))) {
-      return;
-    }
-
     const channelId = channel?.id ?? interaction.channelId;
 
     try {
@@ -578,10 +574,6 @@ export class DiscordCommands {
       const value = interaction.options.getFocused(true).value;
       const results = await this.scheduledMessageService.getScheduledMessages(value);
       return interaction.respond(results);
-    }
-
-    if (!(await authGuard(interaction))) {
-      return;
     }
 
     const { message, isPrivate } = await this.scheduledMessageService.removeScheduledMessage(name);

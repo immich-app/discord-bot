@@ -56,7 +56,7 @@ Commands live in `src/discord/commands.ts`. Use discordx decorators:
 
 ### Auth Guard
 
-Commands use `authGuard()` to restrict to allowed channels (BotSpam, SupportCrew, QQ).
+Legacy commands use `authGuard()` to restrict to allowed channels (BotSpam, SupportCrew, QQ). **New commands should NOT use `authGuard`** — permissions will be configured via Discord's built-in command permissions UI instead.
 
 ### Cron Jobs
 
