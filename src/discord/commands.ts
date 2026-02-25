@@ -551,7 +551,7 @@ export class DiscordCommands {
       });
 
       return interaction.reply({
-        content: `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ${channel}`,
+        content: `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ${channelMention(channelId)}`,
         flags: [MessageFlags.Ephemeral],
       });
     } catch (error) {
