@@ -52,7 +52,7 @@ describe('ScheduledMessageService', () => {
       ];
       databaseMock.getScheduledMessages.mockResolvedValue(messages);
 
-      await sut.onModuleInit();
+      await sut.init();
 
       expect(databaseMock.getScheduledMessages).toHaveBeenCalledOnce();
     });

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { inlineCode } from 'discord.js';
 import { IDatabaseRepository, NewScheduledMessage } from 'src/interfaces/database.interface';
@@ -6,7 +6,7 @@ import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { shorten } from 'src/util';
 
 @Injectable()
-export class ScheduledMessageService implements OnModuleInit {
+export class ScheduledMessageService {
   private logger = new Logger(ScheduledMessageService.name);
   private jobs = new Map<string, CronJob>();
 
@@ -15,11 +15,7 @@ export class ScheduledMessageService implements OnModuleInit {
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
   ) {}
 
-  async onModuleInit() {
-    await this.loadScheduledMessages();
-  }
-
-  private async loadScheduledMessages() {
+  async init() {
     const messages = await this.database.getScheduledMessages();
     for (const message of messages) {
       this.registerJob(message);

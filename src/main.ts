@@ -3,8 +3,6 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DIService, IDependencyRegistryEngine, InstanceOf } from 'discordx';
 import { AppModule } from 'src/app.module';
-import { DiscordService } from 'src/services/discord.service';
-import { ZulipService } from 'src/services/zulip.service';
 import { install } from 'undici';
 
 install();
@@ -43,8 +41,6 @@ async function bootstrap() {
   });
   DIService.engine = new NestjsRegistryEngine(app);
 
-  await app.get(DiscordService).init();
-  await app.get(ZulipService).init();
   await app.listen(port);
   logger.log(`Immich Api is running on: ${await app.getUrl()}`);
 }
