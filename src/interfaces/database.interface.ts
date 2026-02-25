@@ -88,6 +88,19 @@ export type RSSFeed = Selectable<RSSFeedsTable>;
 export type NewRSSFeed = Insertable<RSSFeedsTable>;
 export type UpdateRSSFeed = Updateable<RSSFeedsTable> & { url: string; channelId: string };
 
+export interface ScheduledMessagesTable {
+  id: Generated<string>;
+  channelId: string;
+  message: string;
+  cronExpression: string;
+  createdBy: string;
+  name: string;
+  createdAt: Generated<Date>;
+}
+
+export type ScheduledMessage = Selectable<ScheduledMessagesTable>;
+export type NewScheduledMessage = Insertable<ScheduledMessagesTable>;
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
@@ -95,6 +108,7 @@ export interface Database {
   discord_messages: DiscordMessagesTable;
   fourthwall_orders: FourthwallOrdersTable;
   rss_feeds: RSSFeedsTable;
+  scheduled_messages: ScheduledMessagesTable;
 }
 
 export type ReportOptions = {
@@ -125,4 +139,8 @@ export interface IDatabaseRepository {
   getRSSFeeds(channelId?: string): Promise<RSSFeed[]>;
   removeRSSFeed(url: string, channelId: string): Promise<void>;
   updateRSSFeed(entity: UpdateRSSFeed): Promise<void>;
+  getScheduledMessages(): Promise<ScheduledMessage[]>;
+  getScheduledMessage(name: string): Promise<ScheduledMessage | undefined>;
+  createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
+  removeScheduledMessage(id: string): Promise<void>;
 }

@@ -63,6 +63,10 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getRSSFeeds: vitest.fn(),
   updateRSSFeed: vitest.fn(),
   removeRSSFeed: vitest.fn(),
+  getScheduledMessages: vitest.fn(),
+  getScheduledMessage: vitest.fn(),
+  createScheduledMessage: vitest.fn(),
+  removeScheduledMessage: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({

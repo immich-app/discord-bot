@@ -16,8 +16,10 @@ import {
   NewFourthwallOrder,
   NewPayment,
   NewRSSFeed,
+  NewScheduledMessage,
   ReportOptions,
   RSSFeed,
+  ScheduledMessage,
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
   UpdateRSSFeed,
@@ -208,5 +210,21 @@ export class DatabaseRepository implements IDatabaseRepository {
       .where('rss_feeds.url', '=', entity.url)
       .where('rss_feeds.channelId', '=', entity.channelId)
       .execute();
+  }
+
+  getScheduledMessages(): Promise<ScheduledMessage[]> {
+    return this.db.selectFrom('scheduled_messages').selectAll().execute();
+  }
+
+  getScheduledMessage(name: string): Promise<ScheduledMessage | undefined> {
+    return this.db.selectFrom('scheduled_messages').where('name', '=', name).selectAll().executeTakeFirst();
+  }
+
+  createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage> {
+    return this.db.insertInto('scheduled_messages').values(entity).returningAll().executeTakeFirstOrThrow();
+  }
+
+  async removeScheduledMessage(id: string): Promise<void> {
+    await this.db.deleteFrom('scheduled_messages').where('id', '=', id).execute();
   }
 }
