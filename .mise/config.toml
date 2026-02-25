@@ -1,5 +1,6 @@
 [tasks.dev]
 run = """
+npm install
 docker compose -f docker-compose.dev.yml up -d --wait
 op run '--env-file={{config_root}}/.mise/dev.env' -- npm run start:dev
 """
