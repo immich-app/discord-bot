@@ -550,10 +550,9 @@ export class DiscordCommands {
         createdBy: interaction.user.id,
       });
 
-      return interaction.reply({
-        content: `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ${channel}`,
-        flags: [MessageFlags.Ephemeral],
-      });
+      return interaction.reply(
+        `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ${channelMention(channelId)}`,
+      );
     } catch (error) {
       return interaction.reply({
         content: `Failed to create scheduled message: ${error}`,
@@ -581,7 +580,7 @@ export class DiscordCommands {
     }
 
     const message = await this.scheduledMessageService.removeScheduledMessage(name);
-    return interaction.reply({ content: message });
+    return interaction.reply(message);
   }
 
   @Slash({ name: 'schedule-list', description: 'List all scheduled messages' })
@@ -595,7 +594,7 @@ export class DiscordCommands {
     const content = messages
       .map(
         (message) =>
-          `- ${bold(message.name)}:  ${inlineCode(message.cronExpression)} in ${channelMention(message.channelId)}\n  ${message.message}`,
+          `- ${bold(message.name)}:  ${inlineCode(message.cronExpression)} in ${channelMention(message.channelId)}: ${message.message}`,
       )
       .join('\n');
 
