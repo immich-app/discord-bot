@@ -20,10 +20,13 @@
     "check:all": "npm run check:code && npm run test:cov",
     "test": "vitest",
     "test:watch": "vitest --watch",
-    "test:cov": "vitest --coverage"
+    "test:cov": "vitest --coverage",
+    "migrations:generate": "sql-tools -u ${DB_URL:-postgres://postgres:postgres@localhost:5432/discord-bot} -f src/schema/migrations migrations generate -s dist/src/schema",
+    "migrations:revert": "sql-tools -u ${DB_URL:-postgres://postgres:postgres@localhost:5432/discord-bot} -f src/schema/migrations migrations revert -f dist/src/schema/migrations"
   },
   "dependencies": {
     "@discordx/importer": "^1.2.3",
+    "@immich/sql-tools": "^0.3.2",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",

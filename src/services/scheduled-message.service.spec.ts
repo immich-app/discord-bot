@@ -1,5 +1,6 @@
-import { IDatabaseRepository, ScheduledMessage } from 'src/interfaces/database.interface';
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { ScheduledMessage } from 'src/schema';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { Mocked, beforeEach, describe, expect, it, vitest } from 'vitest';
 

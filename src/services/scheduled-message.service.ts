@@ -1,8 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { inlineCode } from 'discord.js';
-import { IDatabaseRepository, NewScheduledMessage } from 'src/interfaces/database.interface';
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { NewScheduledMessage } from 'src/schema';
 import { shorten } from 'src/util';
 
 @Injectable()

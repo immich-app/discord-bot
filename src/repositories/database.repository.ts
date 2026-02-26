@@ -5,25 +5,24 @@ import path from 'node:path';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { getConfig } from 'src/config';
+import { IDatabaseRepository, ReportOptions } from 'src/interfaces/database.interface';
 import {
   Database,
   DiscordLink,
   DiscordLinkUpdate,
   DiscordMessage,
-  IDatabaseRepository,
   NewDiscordLink,
   NewDiscordMessage,
   NewFourthwallOrder,
   NewPayment,
   NewRSSFeed,
   NewScheduledMessage,
-  ReportOptions,
   RSSFeed,
   ScheduledMessage,
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
   UpdateRSSFeed,
-} from 'src/interfaces/database.interface';
+} from 'src/schema';
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
@@ -47,7 +46,7 @@ export class DatabaseRepository implements IDatabaseRepository {
       provider: new FileMigrationProvider({
         fs,
         path,
-        migrationFolder: path.join(__dirname, '..', 'migrations'),
+        migrationFolder: path.join(__dirname, '..', 'schema', 'migrations'),
       }),
     });
 
@@ -108,61 +107,61 @@ export class DatabaseRepository implements IDatabaseRepository {
   }
 
   getDiscordLinks(): Promise<DiscordLink[]> {
-    return this.db.selectFrom('discord_links').selectAll().execute();
+    return this.db.selectFrom('discord_link').selectAll().execute();
   }
 
   getDiscordLink(name: string): Promise<DiscordLink | undefined> {
-    return this.db.selectFrom('discord_links').where('name', '=', name).selectAll().executeTakeFirst();
+    return this.db.selectFrom('discord_link').where('name', '=', name).selectAll().executeTakeFirst();
   }
 
   async addDiscordLink(link: NewDiscordLink) {
-    await this.db.insertInto('discord_links').values(link).execute();
+    await this.db.insertInto('discord_link').values(link).execute();
   }
 
   async removeDiscordLink(id: string) {
-    await this.db.deleteFrom('discord_links').where('id', '=', id).execute();
+    await this.db.deleteFrom('discord_link').where('id', '=', id).execute();
   }
 
   async updateDiscordLink({ id, ...link }: DiscordLinkUpdate) {
-    await this.db.updateTable('discord_links').set(link).where('id', '=', id).execute();
+    await this.db.updateTable('discord_link').set(link).where('id', '=', id).execute();
   }
 
   getDiscordMessages(): Promise<DiscordMessage[]> {
-    return this.db.selectFrom('discord_messages').selectAll().execute();
+    return this.db.selectFrom('discord_message').selectAll().execute();
   }
 
   getDiscordMessage(name: string): Promise<DiscordMessage | undefined> {
-    return this.db.selectFrom('discord_messages').where('name', '=', name).selectAll().executeTakeFirst();
+    return this.db.selectFrom('discord_message').where('name', '=', name).selectAll().executeTakeFirst();
   }
 
   async addDiscordMessage(message: NewDiscordMessage): Promise<void> {
-    await this.db.insertInto('discord_messages').values(message).execute();
+    await this.db.insertInto('discord_message').values(message).execute();
   }
 
   async removeDiscordMessage(id: string): Promise<void> {
-    await this.db.deleteFrom('discord_messages').where('id', '=', id).execute();
+    await this.db.deleteFrom('discord_message').where('id', '=', id).execute();
   }
 
   async updateDiscordMessage({ id, ...message }: UpdateDiscordMessage): Promise<void> {
-    await this.db.updateTable('discord_messages').set(message).where('id', '=', id).execute();
+    await this.db.updateTable('discord_message').set(message).where('id', '=', id).execute();
   }
 
   async createFourthwallOrder(entity: NewFourthwallOrder): Promise<void> {
     await this.db
-      .insertInto('fourthwall_orders')
+      .insertInto('fourthwall_order')
       .onConflict((oc) => oc.doNothing())
       .values(entity)
       .execute();
   }
 
   async updateFourthwallOrder({ id, ...entity }: UpdateFourthwallOrder): Promise<void> {
-    await this.db.updateTable('fourthwall_orders').set(entity).where('id', '=', id).execute();
+    await this.db.updateTable('fourthwall_order').set(entity).where('id', '=', id).execute();
   }
 
   async getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }> {
     const { day, week, month } = options || {};
     const { revenue, profit } = await this.db
-      .selectFrom('fourthwall_orders')
+      .selectFrom('fourthwall_order')
       .select([(eb) => eb.fn.sum('revenue').as('revenue'), (eb) => eb.fn.sum('profit').as('profit')])
       .where('testMode', '=', false)
       .$if(!!day, (qb) =>
@@ -180,51 +179,51 @@ export class DatabaseRepository implements IDatabaseRepository {
   }
 
   streamFourthwallOrders() {
-    return this.db.selectFrom('fourthwall_orders').select('id').stream();
+    return this.db.selectFrom('fourthwall_order').select('id').stream();
   }
 
   async createRSSFeed(entity: NewRSSFeed): Promise<void> {
-    await this.db.insertInto('rss_feeds').values(entity).execute();
+    await this.db.insertInto('rss_feed').values(entity).execute();
   }
 
   async getRSSFeeds(channelId?: string): Promise<RSSFeed[]> {
     return this.db
-      .selectFrom('rss_feeds')
+      .selectFrom('rss_feed')
       .selectAll()
-      .$if(!!channelId, (qb) => qb.where('rss_feeds.channelId', '=', channelId!))
+      .$if(!!channelId, (qb) => qb.where('rss_feed.channelId', '=', channelId!))
       .execute();
   }
 
   async removeRSSFeed(url: string, channelId: string): Promise<void> {
     await this.db
-      .deleteFrom('rss_feeds')
-      .where('rss_feeds.url', '=', url)
-      .where('rss_feeds.channelId', '=', channelId)
+      .deleteFrom('rss_feed')
+      .where('rss_feed.url', '=', url)
+      .where('rss_feed.channelId', '=', channelId)
       .execute();
   }
 
   async updateRSSFeed(entity: UpdateRSSFeed): Promise<void> {
     await this.db
-      .updateTable('rss_feeds')
+      .updateTable('rss_feed')
       .set(entity)
-      .where('rss_feeds.url', '=', entity.url)
-      .where('rss_feeds.channelId', '=', entity.channelId)
+      .where('rss_feed.url', '=', entity.url)
+      .where('rss_feed.channelId', '=', entity.channelId)
       .execute();
   }
 
   getScheduledMessages(): Promise<ScheduledMessage[]> {
-    return this.db.selectFrom('scheduled_messages').selectAll().execute();
+    return this.db.selectFrom('scheduled_message').selectAll().execute();
   }
 
   getScheduledMessage(name: string): Promise<ScheduledMessage | undefined> {
-    return this.db.selectFrom('scheduled_messages').where('name', '=', name).selectAll().executeTakeFirst();
+    return this.db.selectFrom('scheduled_message').where('name', '=', name).selectAll().executeTakeFirst();
   }
 
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage> {
-    return this.db.insertInto('scheduled_messages').values(entity).returningAll().executeTakeFirstOrThrow();
+    return this.db.insertInto('scheduled_message').values(entity).returningAll().executeTakeFirstOrThrow();
   }
 
   async removeScheduledMessage(id: string): Promise<void> {
-    await this.db.deleteFrom('scheduled_messages').where('id', '=', id).execute();
+    await this.db.deleteFrom('scheduled_message').where('id', '=', id).execute();
   }
 }
