@@ -48,7 +48,11 @@ export class ScheduledMessageService {
   }
 
   async createScheduledMessage(entity: NewScheduledMessage) {
-    new CronJob(entity.cronExpression, () => {});
+    try {
+      new CronJob(entity.cronExpression, () => {});
+    } catch (error) {
+      throw new Error(`Invalid cron expression ${entity.cronExpression}: ${error}`);
+    }
 
     const message = await this.database.createScheduledMessage(entity);
     this.registerJob(message);
