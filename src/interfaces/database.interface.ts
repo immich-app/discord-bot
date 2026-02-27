@@ -1,115 +1,22 @@
-import { Generated, Insertable, JSONColumnType, Selectable, Updateable } from 'kysely';
 import { DateTime } from 'luxon';
+import {
+  DiscordLink,
+  DiscordLinkUpdate,
+  DiscordMessage,
+  NewDiscordLink,
+  NewDiscordMessage,
+  NewFourthwallOrder,
+  NewPayment,
+  NewRSSFeed,
+  NewScheduledMessage,
+  RSSFeed,
+  ScheduledMessage,
+  UpdateDiscordMessage,
+  UpdateFourthwallOrder,
+  UpdateRSSFeed,
+} from 'src/schema';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
-
-export interface PaymentTable {
-  event_id: string;
-  id: string;
-  amount: number;
-  currency: string;
-  status: string;
-  description: string;
-  created: number;
-  livemode: boolean;
-  data: JSONColumnType<object>;
-}
-
-export type Payment = Selectable<PaymentTable>;
-export type NewPayment = Insertable<PaymentTable>;
-
-export interface SponsorTable {
-  username: string;
-  email: string;
-  total: number;
-  claimed: boolean;
-  license_type: 'client' | 'server';
-  licenses: { license: string; activation: string }[];
-}
-
-export type Sponsor = Selectable<SponsorTable>;
-export type UpdateSponsor = Updateable<SponsorTable>;
-
-export interface DiscordLinksTable {
-  id: Generated<string>;
-  createdAt: Generated<Date>;
-  author: string;
-  link: string;
-  name: string;
-  usageCount: Generated<number>;
-}
-
-export type DiscordLink = Selectable<DiscordLinksTable>;
-export type NewDiscordLink = Insertable<DiscordLinksTable>;
-export type DiscordLinkUpdate = Updateable<DiscordLinksTable> & { id: string };
-
-export interface DiscordMessagesTable {
-  id: Generated<string>;
-  createdAt: Generated<Date>;
-  lastEditedBy: string;
-  name: string;
-  content: string;
-  usageCount: Generated<number>;
-}
-
-export type DiscordMessage = Selectable<DiscordMessagesTable>;
-export type NewDiscordMessage = Insertable<DiscordMessagesTable>;
-export type UpdateDiscordMessage = Updateable<DiscordMessagesTable> & { id: string };
-
-export interface FourthwallOrdersTable {
-  id: string;
-  discount: number;
-  tax: number;
-  shipping: number;
-  subtotal: number;
-  total: number;
-  revenue: number;
-  profit: number;
-  username?: string;
-  message?: string;
-  status: string;
-  createdAt: Date;
-  testMode: boolean;
-}
-
-export type FourthwallOrder = Selectable<FourthwallOrdersTable>;
-export type NewFourthwallOrder = Insertable<FourthwallOrdersTable>;
-export type UpdateFourthwallOrder = Updateable<FourthwallOrdersTable> & { id: string };
-
-export interface RSSFeedsTable {
-  url: string;
-  channelId: string;
-  lastId: string | null;
-  title: string | null;
-  profileImageUrl: string | null;
-}
-
-export type RSSFeed = Selectable<RSSFeedsTable>;
-export type NewRSSFeed = Insertable<RSSFeedsTable>;
-export type UpdateRSSFeed = Updateable<RSSFeedsTable> & { url: string; channelId: string };
-
-export interface ScheduledMessagesTable {
-  id: Generated<string>;
-  channelId: string;
-  message: string;
-  cronExpression: string;
-  createdBy: string;
-  name: string;
-  createdAt: Generated<Date>;
-}
-
-export type ScheduledMessage = Selectable<ScheduledMessagesTable>;
-export type NewScheduledMessage = Insertable<ScheduledMessagesTable>;
-
-export interface Database {
-  payment: PaymentTable;
-  sponsor: SponsorTable;
-  discord_links: DiscordLinksTable;
-  discord_messages: DiscordMessagesTable;
-  fourthwall_orders: FourthwallOrdersTable;
-  rss_feeds: RSSFeedsTable;
-  scheduled_messages: ScheduledMessagesTable;
-}
 
 export type ReportOptions = {
   day?: DateTime;
