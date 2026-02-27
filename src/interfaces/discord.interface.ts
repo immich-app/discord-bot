@@ -27,13 +27,26 @@ export interface IDiscordInterface {
   login(token: string): Promise<void>;
   sendMessage({
     channelId,
+    threadId,
     message,
     crosspost,
+    pin,
   }: {
     channelId: DiscordChannel | string;
+    threadId?: string;
     message: string | MessageCreateOptions;
     crosspost?: boolean;
+    pin?: boolean;
   }): Promise<void>;
   createEmote(name: string, emote: string | Buffer, guildId: string): Promise<GuildEmoji | undefined>;
   getEmotes(guildId: string): Promise<{ identifier: string; name: string | null; url: string; animated: boolean }[]>;
+  createThread(
+    channelId: string,
+    dto: { name: string; message: string; appliedTags?: string[] },
+  ): Promise<{ threadId?: string }>;
+  updateThread(
+    { channelId, threadId }: { channelId: string; threadId: string },
+    { name, message, appliedTags }: { name: string; message: string; appliedTags?: string[] },
+  ): Promise<void>;
+  closeThread(dto: { channelId: string; threadId: string }): Promise<void>;
 }

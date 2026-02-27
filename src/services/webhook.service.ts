@@ -1,5 +1,18 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { User, WebhookEvent, WorkflowRunEvent } from '@octokit/webhooks-types';
+import {
+  DiscussionCommentEvent,
+  DiscussionEvent,
+  IssueCommentEvent,
+  IssuesEvent,
+  PullRequestEvent,
+  PullRequestReviewCommentEvent,
+  PullRequestReviewEvent,
+  PullRequestReviewThreadEvent,
+  ReleaseEvent,
+  User,
+  WebhookEvent,
+  WorkflowRunEvent,
+} from '@octokit/webhooks-types';
 import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
 import _ from 'lodash';
 import semver from 'semver';
@@ -60,103 +73,28 @@ export class WebhookService {
       return;
     }
 
-    const { action } = dto;
-
     if ('repository' in dto && dto.repository?.private) {
       return;
     }
 
-    if (
-      'pull_request' in dto &&
-      (action === 'opened' || action === 'closed' || action === 'converted_to_draft' || action === 'ready_for_review')
-    ) {
-      const embed = this.getEmbed({
-        action,
-        repositoryName: dto.repository.full_name,
-        title: 'Pull request',
-        user: dto.sender,
-        event: dto.pull_request,
-      });
-      const color = this.getPrEmbedColor({
-        action,
-        isDraft: dto.pull_request.draft,
-        isMerged: dto.pull_request.merged,
-      });
-      embed.setColor(color);
-
-      await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
+    if ('pull_request' in dto) {
+      await Promise.all([this.handlePullRequestTeamUpdate(dto), this.handlePullRequestNotification(dto)]);
       return;
     }
 
-    if ('issue' in dto && (action === 'opened' || action === 'reopened' || action === 'closed')) {
-      const embed = this.getEmbed({
-        action,
-        repositoryName: dto.repository.full_name,
-        title: 'Issue',
-        user: dto.sender,
-        event: dto.issue,
-      });
-      embed.setColor(this.getIssueEmbedColor({ action }));
-
-      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+    if ('issue' in dto) {
+      await Promise.all([this.handleIssueNotification(dto)]);
       return;
     }
 
-    if ('discussion' in dto && (action === 'created' || action === 'deleted' || action === 'answered')) {
-      const embed = this.getEmbed({
-        action,
-        repositoryName: dto.repository.full_name,
-        title: 'Discussion',
-        user: dto.sender,
-        event: dto.discussion,
-      });
-      embed.setColor(this.getDiscussionEmbedColor({ action }));
-
-      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+    if ('discussion' in dto) {
+      await Promise.all([this.handleDiscussionNotification(dto)]);
       return;
     }
 
-    if ('release' in dto && action === 'released') {
-      const embedProps = {
-        repositoryName: dto.repository.full_name,
-        name: dto.release.name,
-        url: dto.release.html_url,
-        user: dto.sender,
-        description: isMainRepo(dto.repository.full_name) ? _.sample(ReleaseMessages) : undefined,
-      };
-      const messages = [
-        this.discord.sendMessage({
-          channelId: DiscordChannel.Releases,
-          message: {
-            embeds: [this.getReleaseEmbed(embedProps)],
-          },
-          crosspost: true,
-        }),
-      ];
-
-      if (isMainRepo(dto.repository.full_name)) {
-        if (semver.patch(dto.release.tag_name) === 0) {
-          messages.push(
-            this.discord.sendMessage({
-              channelId: DiscordChannel.Announcements,
-              message: {
-                embeds: [this.getReleaseEmbed(embedProps)],
-              },
-              crosspost: true,
-            }),
-          );
-        }
-
-        messages.push(
-          this.zulip.sendMessage({
-            stream: Constants.Zulip.Streams.Immich,
-            topic: Constants.Zulip.Topics.ImmichRelease,
-            content: `${embedProps.description!} ${dto.release.html_url}`,
-          }),
-        );
-      }
-
-      await Promise.all(messages);
+    if ('release' in dto) {
+      await Promise.all([this.handleReleaseNotification(dto)]);
+      return;
     }
 
     if ('workflow_run' in dto && dto.action === 'completed') {
@@ -487,5 +425,181 @@ export class WebhookService {
     } catch (error) {
       this.logger.error('Failed to handle workflow run failure', error);
     }
+  }
+
+  private async handlePullRequestNotification({
+    action,
+    sender,
+    repository,
+    pull_request,
+  }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+    if (
+      action === 'opened' ||
+      action === 'closed' ||
+      action === 'converted_to_draft' ||
+      action === 'ready_for_review'
+    ) {
+      const embed = this.getEmbed({
+        action,
+        repositoryName: repository.full_name,
+        title: 'Pull request',
+        user: sender,
+        event: pull_request,
+      });
+      const color = this.getPrEmbedColor({
+        action,
+        isDraft: pull_request.draft,
+        isMerged: pull_request.merged,
+      });
+      embed.setColor(color);
+
+      await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
+    }
+  }
+
+  private async handleIssueNotification({ action, repository, sender, issue }: IssuesEvent | IssueCommentEvent) {
+    if (action === 'opened' || action === 'reopened' || action === 'closed') {
+      const embed = this.getEmbed({
+        action,
+        repositoryName: repository.full_name,
+        title: 'Issue',
+        user: sender,
+        event: issue,
+      });
+      embed.setColor(this.getIssueEmbedColor({ action }));
+
+      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+    }
+  }
+
+  private async handleDiscussionNotification({
+    action,
+    repository,
+    sender,
+    discussion,
+  }: DiscussionEvent | DiscussionCommentEvent) {
+    if (action === 'created' || action === 'deleted' || action === 'answered') {
+      const embed = this.getEmbed({
+        action,
+        repositoryName: repository.full_name,
+        title: 'Discussion',
+        user: sender,
+        event: discussion,
+      });
+      embed.setColor(this.getDiscussionEmbedColor({ action }));
+
+      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+    }
+  }
+
+  private async handleReleaseNotification({ action, repository, release, sender }: ReleaseEvent) {
+    if (action !== 'released') {
+      return;
+    }
+
+    const embedProps = {
+      repositoryName: repository.full_name,
+      name: release.name,
+      url: release.html_url,
+      user: sender,
+      description: isMainRepo(repository.full_name) ? _.sample(ReleaseMessages) : undefined,
+    };
+    const messages = [
+      this.discord.sendMessage({
+        channelId: DiscordChannel.Releases,
+        message: {
+          embeds: [this.getReleaseEmbed(embedProps)],
+        },
+        crosspost: true,
+      }),
+    ];
+
+    if (isMainRepo(repository.full_name)) {
+      if (semver.patch(release.tag_name) === 0) {
+        messages.push(
+          this.discord.sendMessage({
+            channelId: DiscordChannel.Announcements,
+            message: {
+              embeds: [this.getReleaseEmbed(embedProps)],
+            },
+            crosspost: true,
+          }),
+        );
+      }
+
+      messages.push(
+        this.zulip.sendMessage({
+          stream: Constants.Zulip.Streams.Immich,
+          topic: Constants.Zulip.Topics.ImmichRelease,
+          content: `${embedProps.description!} ${release.html_url}`,
+        }),
+      );
+    }
+
+    await Promise.all(messages);
+  }
+
+  private async handlePullRequestTeamUpdate({
+    pull_request,
+    action,
+    ...dto
+  }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+    const pullRequest = await this.database.getPullRequestById(pull_request.id);
+
+    const name = `#${pull_request.id}: ${pull_request.title}`;
+    const message = shorten(pull_request.body ?? '', 2000);
+
+    if (!pullRequest) {
+      if (action === 'opened') {
+        const { threadId } = await this.discord.createThread(Constants.Discord.Channels.TeamPullRequests, {
+          name,
+          message,
+        });
+
+        if (!threadId) {
+          return;
+        }
+
+        await this.discord.sendMessage({
+          channelId: Constants.Discord.Channels.TeamPullRequests,
+          threadId,
+          message: pull_request.url,
+          pin: true,
+        });
+        await this.database.createPullRequest({ id: pull_request.id, discordThreadId: threadId });
+      }
+      return;
+    }
+
+    switch (action) {
+      case 'closed': {
+        await this.discord.sendMessage({
+          channelId: Constants.Discord.Channels.TeamPullRequests,
+          threadId: pullRequest.discordThreadId,
+          message: `Pull request has been ${pull_request.merged_at ? 'merged' : 'closed'} by [@${dto.sender.login}](${dto.sender.html_url})`,
+        });
+
+        await this.discord.closeThread({
+          channelId: Constants.Discord.Channels.TeamPullRequests,
+          threadId: pullRequest.discordThreadId,
+        });
+        return;
+      }
+
+      case 'converted_to_draft': {
+        await this.discord.sendMessage({
+          channelId: Constants.Discord.Channels.TeamPullRequests,
+          threadId: pullRequest.discordThreadId,
+          message: 'Pull request has been converted to draft',
+        });
+
+        break;
+      }
+    }
+
+    await this.discord.updateThread(
+      { channelId: Constants.Discord.Channels.TeamPullRequests, threadId: pullRequest.discordThreadId },
+      { name, message },
+    );
   }
 }

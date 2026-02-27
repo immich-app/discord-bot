@@ -192,4 +192,21 @@ export class GithubRepository implements IGithubInterface {
     );
     return repository.latestRelease.tagCommit.oid;
   }
+
+  async isCollaborator({ org, repo, userLogin }: { org: string; repo: string; userLogin: string }) {
+    const { repository } = await this.octokit.graphql<{ repository: { collaborators: { totalCount: number } } }>(
+      `
+      query Repository($org: String!, $repo: String!, $userLogin: String!) {
+        repository(owner: $org, name: $repo) {
+          collaborators(login: $userLogin) {
+            totalCount
+          }
+        }
+      }
+      `,
+      { org, repo, userLogin },
+    );
+
+    return repository.collaborators.totalCount === 1;
+  }
 }
