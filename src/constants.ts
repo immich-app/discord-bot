@@ -86,6 +86,7 @@ const discordRoles = {
 const discordChannels = {
   DevFocusTopic: '1045707766754451486',
   TeamFocusTopic: '1330248543721754746',
+  TeamPullRequests: '1476939413467562174',
   TeamAlerts: '1360190417643110460',
   YuccaFocusTopic: '1413525610700996739',
 };

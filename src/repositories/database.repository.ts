@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { FileMigrationProvider, Kysely, Migrator, PostgresDialect } from 'kysely';
+import { FileMigrationProvider, Insertable, Kysely, Migrator, PostgresDialect } from 'kysely';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
@@ -23,6 +23,7 @@ import {
   UpdateFourthwallOrder,
   UpdateRSSFeed,
 } from 'src/schema';
+import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
@@ -225,5 +226,13 @@ export class DatabaseRepository implements IDatabaseRepository {
 
   async removeScheduledMessage(id: string): Promise<void> {
     await this.db.deleteFrom('scheduled_message').where('id', '=', id).execute();
+  }
+
+  createPullRequest(entity: Insertable<PullRequestTable>) {
+    return this.db.insertInto('pull_request').values(entity).executeTakeFirst();
+  }
+
+  getPullRequestById(id: number) {
+    return this.db.selectFrom('pull_request').selectAll().where('id', '=', id).executeTakeFirst();
   }
 }

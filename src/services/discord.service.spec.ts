@@ -27,6 +27,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
     ),
   getCheckSuiteTriggerCommit: vitest.fn(),
   getLatestReleaseTag: vitest.fn(),
+  isCollaborator: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -34,6 +35,9 @@ const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),
+  closeThread: vitest.fn(),
+  createThread: vitest.fn(),
+  updateThread: vitest.fn(),
 });
 
 const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
@@ -67,6 +71,8 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getScheduledMessage: vitest.fn(),
   createScheduledMessage: vitest.fn(),
   removeScheduledMessage: vitest.fn(),
+  createPullRequest: vitest.fn(),
+  getPullRequestById: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({

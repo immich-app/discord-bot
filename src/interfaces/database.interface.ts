@@ -1,3 +1,4 @@
+import { InsertResult } from 'kysely';
 import { DateTime } from 'luxon';
 import {
   DiscordLink,
@@ -7,8 +8,10 @@ import {
   NewDiscordMessage,
   NewFourthwallOrder,
   NewPayment,
+  NewPullRequest,
   NewRSSFeed,
   NewScheduledMessage,
+  PullRequest,
   RSSFeed,
   ScheduledMessage,
   UpdateDiscordMessage,
@@ -50,4 +53,6 @@ export interface IDatabaseRepository {
   getScheduledMessage(name: string): Promise<ScheduledMessage | undefined>;
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
   removeScheduledMessage(id: string): Promise<void>;
+  createPullRequest(entity: NewPullRequest): Promise<InsertResult>;
+  getPullRequestById(id: number): Promise<PullRequest | undefined>;
 }
