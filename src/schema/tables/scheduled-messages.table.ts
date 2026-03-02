@@ -1,6 +1,6 @@
 import { Column, CreateDateColumn, Generated, PrimaryGeneratedColumn, Table } from '@immich/sql-tools';
 
-@Table('scheduled_messages')
+@Table('scheduled_message')
 export class ScheduledMessageTable {
   @PrimaryGeneratedColumn()
   id!: Generated<string>;
