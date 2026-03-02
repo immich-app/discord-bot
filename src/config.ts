@@ -1,8 +1,4 @@
-import dotenv from 'dotenv';
-
 export const getConfig = () => {
-  dotenv.config();
-
   const databaseUri = process.env.uri;
   const botToken = process.env.BOT_TOKEN;
   const zulipBotUsername = process.env.ZULIP_BOT_USERNAME;

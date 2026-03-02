@@ -2,6 +2,7 @@ import { INestApplication, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DIService, IDependencyRegistryEngine, InstanceOf } from 'discordx';
+import dotenv from 'dotenv';
 import { AppModule } from 'src/app.module';
 import { install } from 'undici';
 
@@ -31,6 +32,7 @@ export class NestjsRegistryEngine extends NoopRegistryEngine {
 }
 
 async function bootstrap() {
+  dotenv.config();
   const logger = new Logger('Main');
   const port = Number(process.env.IMMICH_PORT) || 8080;
 
