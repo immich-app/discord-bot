@@ -39,4 +39,5 @@ export interface IGithubInterface {
     checkSuiteNodeId: string,
   ): Promise<string>;
   getLatestReleaseTag(org: GithubOrg | string, repo: GithubRepo | string): Promise<string>;
+  isCollaborator(dto: { org: string; repo: string; userLogin: string }): Promise<boolean>;
 }

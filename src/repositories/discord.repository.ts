@@ -67,19 +67,32 @@ export class DiscordRepository implements IDiscordInterface {
 
   async sendMessage({
     channelId,
+    threadId,
     message,
     crosspost = false,
+    pin = false,
   }: {
     channelId: DiscordChannel | string;
+    threadId?: string;
     message: MessageCreateOptions;
     crosspost?: boolean;
+    pin?: boolean;
   }): Promise<void> {
-    const textChannel = await bot.channels.fetch(channelId);
-    if (textChannel?.isSendable()) {
-      const sentMessage = await textChannel.send(message);
+    let channel = await bot.channels.fetch(channelId);
+
+    if (threadId && channel?.isThreadOnly()) {
+      channel = await channel.threads.fetch(threadId);
+    }
+
+    if (channel?.isSendable()) {
+      const sentMessage = await channel.send(message);
 
       if (crosspost) {
         await sentMessage.crosspost();
+      }
+
+      if (pin) {
+        await sentMessage.pin();
       }
     }
   }
@@ -96,5 +109,49 @@ export class DiscordRepository implements IDiscordInterface {
       result.push({ identifier: emote.identifier, name: emote.name, url: emote.imageURL(), animated: emote.animated });
     }
     return result;
+  }
+
+  async createThread(
+    channelId: string,
+    { name, message, appliedTags }: { name: string; message: string; appliedTags?: string[] },
+  ) {
+    const channel = await bot.channels.fetch(channelId);
+    if (!channel?.isThreadOnly()) {
+      return {};
+    }
+
+    const { id } = await channel.threads.create({ name, message: { content: message }, appliedTags });
+    return { threadId: id };
+  }
+
+  async updateThread(
+    { channelId, threadId }: { channelId: string; threadId: string },
+    { name, message, appliedTags }: { name: string; message: string; appliedTags?: string[] },
+  ) {
+    const channel = await bot.channels.fetch(channelId);
+    if (!channel?.isThreadOnly()) {
+      return;
+    }
+
+    const thread = await channel.threads.fetch(threadId);
+    if (!thread) {
+      return;
+    }
+
+    const initialMessage = await thread.fetchStarterMessage();
+
+    await thread.setName(name);
+    await thread.setAppliedTags(appliedTags ?? []);
+    await initialMessage?.edit(message);
+  }
+
+  async closeThread({ channelId, threadId }: { channelId: string; threadId: string }) {
+    const channel = await bot.channels.fetch(channelId);
+    if (!channel?.isThreadOnly()) {
+      return;
+    }
+
+    const thread = await channel.threads.fetch(threadId);
+    await thread?.setArchived(true);
   }
 }

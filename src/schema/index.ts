@@ -4,6 +4,7 @@ import { DiscordLinkTable } from 'src/schema/tables/discord-links.table';
 import { DiscordMessageTable } from 'src/schema/tables/discord-messages.table';
 import { FourthwallOrderTable } from 'src/schema/tables/fourthwall-orders.table';
 import { PaymentTable } from 'src/schema/tables/payment.table';
+import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 import { RSSFeedTable } from 'src/schema/tables/rss-feeds.table';
 import { ScheduledMessageTable } from 'src/schema/tables/scheduled-messages.table';
 import { SponsorTable } from 'src/schema/tables/sponsor.table';
@@ -19,6 +20,7 @@ export class DiscordBotDatabase {
     FourthwallOrderTable,
     RSSFeedTable,
     ScheduledMessageTable,
+    PullRequestTable,
   ];
 }
 
@@ -47,6 +49,9 @@ export type UpdateRSSFeed = Updateable<RSSFeedTable> & { url: string; channelId:
 export type ScheduledMessage = Selectable<ScheduledMessageTable>;
 export type NewScheduledMessage = Insertable<ScheduledMessageTable>;
 
+export type PullRequest = Selectable<PullRequestTable>;
+export type NewPullRequest = Insertable<PullRequestTable>;
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
@@ -55,4 +60,5 @@ export interface Database {
   fourthwall_order: FourthwallOrderTable;
   rss_feed: RSSFeedTable;
   scheduled_message: ScheduledMessageTable;
+  pull_request: PullRequestTable;
 }
