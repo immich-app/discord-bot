@@ -550,7 +550,7 @@ export class WebhookService {
 
     const pullRequest = await this.database.getPullRequestById(pull_request.id);
 
-    const name = `#${pull_request.id}: ${pull_request.title}`;
+    const name = `#${pull_request.number}: ${pull_request.title}`;
     const message = shorten(pull_request.body ?? '', 2000);
 
     if (!pullRequest) {
