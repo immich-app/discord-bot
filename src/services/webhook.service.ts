@@ -544,6 +544,10 @@ export class WebhookService {
     action,
     ...dto
   }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+    if (dto.repository.full_name !== 'immich-app/immich') {
+      return;
+    }
+
     const pullRequest = await this.database.getPullRequestById(pull_request.id);
 
     const name = `#${pull_request.id}: ${pull_request.title}`;
