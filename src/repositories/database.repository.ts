@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { FileMigrationProvider, Insertable, Kysely, Migrator, PostgresDialect } from 'kysely';
+import { FileMigrationProvider, Insertable, Kysely, Migrator, PostgresDialect, Updateable } from 'kysely';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
@@ -234,5 +234,9 @@ export class DatabaseRepository implements IDatabaseRepository {
 
   getPullRequestById(id: number) {
     return this.db.selectFrom('pull_request').selectAll().where('id', '=', id).executeTakeFirst();
+  }
+
+  async updatePullRequest({ id, ...entity }: Updateable<PullRequestTable> & { id: number }) {
+    await this.db.updateTable('pull_request').set(entity).where('id', '=', id).execute();
   }
 }

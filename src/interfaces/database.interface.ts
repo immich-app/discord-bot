@@ -1,4 +1,4 @@
-import { InsertResult } from 'kysely';
+import { InsertResult, Updateable } from 'kysely';
 import { DateTime } from 'luxon';
 import {
   DiscordLink,
@@ -18,6 +18,7 @@ import {
   UpdateFourthwallOrder,
   UpdateRSSFeed,
 } from 'src/schema';
+import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
 
@@ -55,4 +56,5 @@ export interface IDatabaseRepository {
   removeScheduledMessage(id: string): Promise<void>;
   createPullRequest(entity: NewPullRequest): Promise<InsertResult>;
   getPullRequestById(id: number): Promise<PullRequest | undefined>;
+  updatePullRequest(entity: Updateable<PullRequestTable> & { id: number }): Promise<void>;
 }

@@ -35,7 +35,7 @@ const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),
-  closeThread: vitest.fn(),
+  setThreadArchived: vitest.fn(),
   createThread: vitest.fn(),
   updateThread: vitest.fn(),
 });
@@ -73,6 +73,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   removeScheduledMessage: vitest.fn(),
   createPullRequest: vitest.fn(),
   getPullRequestById: vitest.fn(),
+  updatePullRequest: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({

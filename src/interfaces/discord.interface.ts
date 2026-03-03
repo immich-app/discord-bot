@@ -48,5 +48,5 @@ export interface IDiscordInterface {
     { channelId, threadId }: { channelId: string; threadId: string },
     { name, message, appliedTags }: { name: string; message: string; appliedTags?: string[] },
   ): Promise<void>;
-  closeThread(dto: { channelId: string; threadId: string }): Promise<void>;
+  setThreadArchived(dto: { channelId: string; threadId: string }, archived: boolean): Promise<void>;
 }
