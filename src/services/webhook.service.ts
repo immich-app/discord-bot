@@ -551,7 +551,7 @@ export class WebhookService {
     const pullRequest = await this.database.getPullRequestById(pull_request.id);
 
     const name = `#${pull_request.number}: ${pull_request.title}`;
-    const message = shorten(pull_request.body ?? '', 2000);
+    const message = shorten(pull_request.body ?? '', 2000) || 'No content';
 
     if (!pullRequest) {
       if (action === 'opened' && dto.sender.type !== 'Bot') {
