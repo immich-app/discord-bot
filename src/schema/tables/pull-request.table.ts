@@ -7,4 +7,7 @@ export class PullRequestTable {
 
   @Column()
   discordThreadId!: string;
+
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  closedAt!: Date | null;
 }

@@ -21,7 +21,7 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),
-  closeThread: vitest.fn(),
+  setThreadArchived: vitest.fn(),
   createThread: vitest.fn(),
   updateThread: vitest.fn(),
 });

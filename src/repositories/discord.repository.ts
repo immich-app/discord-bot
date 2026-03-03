@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { IntentsBitField, MessageCreateOptions, Partials } from 'discord.js';
+import { IntentsBitField, MessageCreateOptions, MessageFlags, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
@@ -120,7 +120,11 @@ export class DiscordRepository implements IDiscordInterface {
       return {};
     }
 
-    const { id } = await channel.threads.create({ name, message: { content: message }, appliedTags });
+    const { id } = await channel.threads.create({
+      name,
+      message: { content: message, flags: [MessageFlags.SuppressEmbeds] },
+      appliedTags,
+    });
     return { threadId: id };
   }
 
@@ -145,13 +149,13 @@ export class DiscordRepository implements IDiscordInterface {
     await initialMessage?.edit(message);
   }
 
-  async closeThread({ channelId, threadId }: { channelId: string; threadId: string }) {
+  async setThreadArchived({ channelId, threadId }: { channelId: string; threadId: string }, archived: boolean) {
     const channel = await bot.channels.fetch(channelId);
     if (!channel?.isThreadOnly()) {
       return;
     }
 
     const thread = await channel.threads.fetch(threadId);
-    await thread?.setArchived(true);
+    await thread?.setArchived(archived);
   }
 }

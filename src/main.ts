@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DIService, IDependencyRegistryEngine, InstanceOf } from 'discordx';
 import dotenv from 'dotenv';
+import { json, urlencoded } from 'express';
 import { AppModule } from 'src/app.module';
 import { install } from 'undici';
 
@@ -43,6 +44,8 @@ async function bootstrap() {
   });
   DIService.engine = new NestjsRegistryEngine(app);
 
+  app.use(json({ limit: '50mb' }));
+  app.use(urlencoded({ extended: true, limit: '50mb' }));
   await app.listen(port);
   logger.log(`Immich Api is running on: ${await app.getUrl()}`);
 }

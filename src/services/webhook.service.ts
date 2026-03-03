@@ -554,7 +554,7 @@ export class WebhookService {
     const message = shorten(pull_request.body ?? '', 2000);
 
     if (!pullRequest) {
-      if (action === 'opened') {
+      if (action === 'opened' && dto.sender.type !== 'Bot') {
         const { threadId } = await this.discord.createThread(Constants.Discord.Channels.TeamPullRequests, {
           name,
           message,
@@ -567,7 +567,7 @@ export class WebhookService {
         await this.discord.sendMessage({
           channelId: Constants.Discord.Channels.TeamPullRequests,
           threadId,
-          message: pull_request.url,
+          message: { content: pull_request.html_url, flags: [MessageFlags.SuppressEmbeds] },
           pin: true,
         });
         await this.database.createPullRequest({ id: pull_request.id, discordThreadId: threadId });
@@ -583,10 +583,14 @@ export class WebhookService {
           message: `Pull request has been ${pull_request.merged_at ? 'merged' : 'closed'} by [@${dto.sender.login}](${dto.sender.html_url})`,
         });
 
-        await this.discord.closeThread({
-          channelId: Constants.Discord.Channels.TeamPullRequests,
-          threadId: pullRequest.discordThreadId,
-        });
+        await this.discord.setThreadArchived(
+          {
+            channelId: Constants.Discord.Channels.TeamPullRequests,
+            threadId: pullRequest.discordThreadId,
+          },
+          true,
+        );
+        await this.database.updatePullRequest({ id: pullRequest.id, closedAt: new Date() });
         return;
       }
 
@@ -597,6 +601,24 @@ export class WebhookService {
           message: 'Pull request has been converted to draft',
         });
 
+        break;
+      }
+
+      case 'reopened': {
+        await this.discord.sendMessage({
+          channelId: Constants.Discord.Channels.TeamPullRequests,
+          threadId: pullRequest.discordThreadId,
+          message: `Pull request has been reopened by [@${dto.sender.login}](${dto.sender.html_url})`,
+        });
+
+        await this.discord.setThreadArchived(
+          {
+            channelId: Constants.Discord.Channels.TeamPullRequests,
+            threadId: pullRequest.discordThreadId,
+          },
+          false,
+        );
+        await this.database.updatePullRequest({ id: pullRequest.id, closedAt: null });
         break;
       }
     }
