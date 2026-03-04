@@ -84,6 +84,7 @@ const discordRoles = {
 };
 
 const discordChannels = {
+  SupportCrewDraftAnnouncements: '1073000522338017381',
   DevFocusTopic: '1045707766754451486',
   TeamFocusTopic: '1330248543721754746',
   TeamPullRequests: '1476975523271016661',
@@ -92,12 +93,14 @@ const discordChannels = {
 };
 
 const outlineCollections = {
+  SupportCrew: 'e2910656-714c-4871-8721-447d9353bd73',
   Dev: '0b0dee90-b10e-416a-9059-ad0a061326b6',
   Team: '943c8f09-b8e7-4891-beb0-e3346ac22609',
   Yucca: 'a2ce7b2a-cc3a-48bb-8d4d-6712c4917dcb',
 };
 
 const outlineDocuments = {
+  SupportCrewAnnouncements: '25c227ce-7d6c-4a0e-84d2-e82fe362a609',
   DevFocusTopic: 'dbe1d7d2-ca67-42a2-adb2-43496cb048b7',
   TeamFocusTopic: '7fbd54e9-7f6f-44e5-9ed0-05a12e35937e',
   YuccaFocusTopic: 'ad2e16ee-094e-4f29-bfd4-cbf6b2f20f66',
