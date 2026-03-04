@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { GraphqlResponseError } from '@octokit/graphql';
 import { App, Octokit } from 'octokit';
-import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGithubInterface, PullRequest } from 'src/interfaces/github.interface';
 
 const makeLink = (org: string, repo: string, id: number, url: string) => `[${org}/${repo}#${id}](${url})`;
 
@@ -196,7 +196,7 @@ export class GithubRepository implements IGithubInterface {
   async isCollaborator({ org, repo, userLogin }: { org: string; repo: string; userLogin: string }) {
     const { repository } = await this.octokit.graphql<{ repository: { collaborators: { totalCount: number } } }>(
       `
-      query Repository($org: String!, $repo: String!, $userLogin: String!) {
+      query isCollaborator($org: String!, $repo: String!, $userLogin: String!) {
         repository(owner: $org, name: $repo) {
           collaborators(login: $userLogin) {
             totalCount
@@ -208,5 +208,56 @@ export class GithubRepository implements IGithubInterface {
     );
 
     return repository.collaborators.totalCount === 1;
+  }
+
+  async *getPullRequests(
+    { org, repo }: { org: string; repo: string },
+    { states = [] }: { states?: Array<'OPEN' | 'CLOSED' | 'MERGED'> } = {},
+  ) {
+    let hasNextPage = true;
+    let after: string = '';
+
+    while (hasNextPage) {
+      const {
+        repository: {
+          pullRequests: { nodes, pageInfo },
+        },
+      } = await this.octokit.graphql<{
+        repository: {
+          pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string }; nodes: PullRequest[] };
+        };
+      }>(
+        `
+      query getPullRequests($org: String!, $repo: String!, $states: [PullRequestState!], $after: String!) {
+        repository(owner: $org, name: $repo) {
+          pullRequests(first: 100, states: $states, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              repository {
+                nameWithOwner
+              }
+              fullDatabaseId
+              number
+              title
+              body
+              url
+              author {
+                __typename
+              }
+            }
+          }
+        }
+      }
+      `,
+        { org, repo, states, after },
+      );
+      hasNextPage = pageInfo.hasNextPage;
+      after = hasNextPage ? pageInfo.endCursor : '';
+
+      yield nodes;
+    }
   }
 }

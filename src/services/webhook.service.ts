@@ -539,7 +539,7 @@ export class WebhookService {
     await Promise.all(messages);
   }
 
-  private async handlePullRequestTeamUpdate({
+  async handlePullRequestTeamUpdate({
     pull_request,
     action,
     ...dto
@@ -550,7 +550,7 @@ export class WebhookService {
 
     const pullRequest = await this.database.getPullRequestById(pull_request.id);
 
-    const name = `#${pull_request.number}: ${pull_request.title}`;
+    const name = shorten(`#${pull_request.number}: ${pull_request.title}`, 100);
     const message = shorten(pull_request.body ?? '', 2000) || 'No content';
 
     if (!pullRequest) {
@@ -580,7 +580,10 @@ export class WebhookService {
         await this.discord.sendMessage({
           channelId: Constants.Discord.Channels.TeamPullRequests,
           threadId: pullRequest.discordThreadId,
-          message: `Pull request has been ${pull_request.merged_at ? 'merged' : 'closed'} by [@${dto.sender.login}](${dto.sender.html_url})`,
+          message: {
+            content: `Pull request has been ${pull_request.merged_at ? 'merged' : 'closed'} by [@${dto.sender.login}](${dto.sender.html_url})`,
+            flags: [MessageFlags.SuppressEmbeds],
+          },
         });
 
         await this.discord.setThreadArchived(
@@ -608,7 +611,10 @@ export class WebhookService {
         await this.discord.sendMessage({
           channelId: Constants.Discord.Channels.TeamPullRequests,
           threadId: pullRequest.discordThreadId,
-          message: `Pull request has been reopened by [@${dto.sender.login}](${dto.sender.html_url})`,
+          message: {
+            content: `Pull request has been reopened by [@${dto.sender.login}](${dto.sender.html_url})`,
+            flags: [MessageFlags.SuppressEmbeds],
+          },
         });
 
         await this.discord.setThreadArchived(

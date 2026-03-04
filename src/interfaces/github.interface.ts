@@ -20,6 +20,28 @@ export interface SearchResult {
   }>;
 }
 
+export type PullRequest = {
+  fullDatabaseId: string;
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  repository: { nameWithOwner: string };
+  author: { __typename: 'Bot' | 'User' | 'Organization' };
+};
+
+export type PullRequestBaseEvent = {
+  repository: { full_name: string };
+  sender: { type: 'Bot' | 'User' | 'Organization' };
+  pull_request: {
+    number: number;
+    id: number;
+    title: string;
+    body: string;
+    html_url: string;
+  };
+};
+
 export interface IGithubInterface {
   init(appId: string, privateKey: string, installationId: string): Promise<void>;
   getIssueOrPr(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
@@ -40,4 +62,8 @@ export interface IGithubInterface {
   ): Promise<string>;
   getLatestReleaseTag(org: GithubOrg | string, repo: GithubRepo | string): Promise<string>;
   isCollaborator(dto: { org: string; repo: string; userLogin: string }): Promise<boolean>;
+  getPullRequests(
+    { org, repo }: { org: string; repo: string },
+    { states }: { states?: Array<'OPEN' | 'CLOSED' | 'MERGED'> },
+  ): AsyncGenerator<PullRequest[]>;
 }
