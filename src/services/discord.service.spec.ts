@@ -28,6 +28,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   getCheckSuiteTriggerCommit: vitest.fn(),
   getLatestReleaseTag: vitest.fn(),
   isCollaborator: vitest.fn(),
+  getPullRequests: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PullRequestEvent } from '@octokit/webhooks-types';
 import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
@@ -20,8 +21,10 @@ import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discor
 import { Constants, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 import { DiscordService } from 'src/services/discord.service';
+import { GithubService } from 'src/services/github.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
+import { WebhookService } from 'src/services/webhook.service';
 
 const authGuard = async (interaction: CommandInteraction) => {
   const isValid = [
@@ -48,6 +51,8 @@ export class DiscordCommands {
     private service: DiscordService,
     private rssService: RSSService,
     private scheduledMessageService: ScheduledMessageService,
+    private githubService: GithubService,
+    private webhookService: WebhookService,
   ) {}
 
   @Slash({ name: 'link-add', description: 'Add a new link' })
@@ -599,5 +604,16 @@ export class DiscordCommands {
       .join('\n');
 
     return interaction.reply({ content, flags: [MessageFlags.Ephemeral] });
+  }
+
+  @Slash({ name: 'backfill-pull-requests', description: 'Backfill pull requests' })
+  async backfillPullRequests(interaction: CommandInteraction) {
+    const deferredReply = await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    const pullRequests = await this.githubService.getOpenPullRequests();
+    for (const pullRequest of pullRequests) {
+      await this.webhookService.handlePullRequestTeamUpdate({ ...pullRequest, action: 'opened' } as PullRequestEvent);
+    }
+
+    return deferredReply.edit('Successfully backfilled pull requests');
   }
 }
