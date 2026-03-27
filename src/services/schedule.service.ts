@@ -130,7 +130,7 @@ export class ScheduleService {
   async onCreateMonthlySummary() {
     const endOfMonth = DateTime.now().endOf('month');
 
-    if (endOfMonth.diffNow('days').days !== 7) {
+    if (Math.floor(endOfMonth.diffNow('days').days) !== 7) {
       return;
     }
 
@@ -191,7 +191,7 @@ Well, that's it for this month. As always, if you find the project helpful, you 
     });
     const thread = await this.discord.createThread(Constants.Discord.Channels.SupportCrewDraftAnnouncements, {
       name,
-      message: response.url,
+      message: Constants.Urls.Outline + response.url,
     });
 
     if (thread) {
