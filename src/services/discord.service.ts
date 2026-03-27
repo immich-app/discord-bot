@@ -80,13 +80,9 @@ export class DiscordService {
   ) {}
 
   async init() {
-    const { bot, github, zulip } = getConfig();
+    const { bot, zulip } = getConfig();
     if (bot.token !== 'dev') {
       await this.discord.login(bot.token);
-    }
-
-    if (github.appId !== 'dev') {
-      await this.github.init(github.appId, github.privateKey, github.installationId);
     }
 
     if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {

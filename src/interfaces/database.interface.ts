@@ -55,6 +55,6 @@ export interface IDatabaseRepository {
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
   removeScheduledMessage(id: string): Promise<void>;
   createPullRequest(entity: NewPullRequest): Promise<InsertResult>;
-  getPullRequestById(id: number): Promise<PullRequest | undefined>;
-  updatePullRequest(entity: Updateable<PullRequestTable> & { id: number }): Promise<void>;
+  getPullRequestById(nodeId: string): Promise<PullRequest | undefined>;
+  updatePullRequest(entity: Updateable<PullRequestTable> & { nodeId: string }): Promise<void>;
 }

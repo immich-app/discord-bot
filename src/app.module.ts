@@ -10,6 +10,7 @@ import { providers } from 'src/repositories';
 import { services } from 'src/services';
 import { DatabaseService } from 'src/services/database.service';
 import { DiscordService } from 'src/services/discord.service';
+import { GithubService } from 'src/services/github.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { ZulipService } from 'src/services/zulip.service';
 
@@ -25,11 +26,13 @@ export class AppModule implements OnModuleInit {
   constructor(
     private databaseService: DatabaseService,
     private discordService: DiscordService,
+    private githubService: GithubService,
     private scheduledMessageService: ScheduledMessageService,
     private zulipService: ZulipService,
   ) {}
 
   async onModuleInit() {
+    await this.githubService.init();
     await this.databaseService.runMigrations();
     await this.discordService.init();
     await this.scheduledMessageService.init();

@@ -21,6 +21,7 @@ export interface SearchResult {
 }
 
 export type PullRequest = {
+  id: string;
   fullDatabaseId: string;
   number: number;
   title: string;

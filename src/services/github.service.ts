@@ -1,9 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { getConfig } from 'src/config';
 import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
 
 @Injectable()
 export class GithubService {
   constructor(@Inject(IGithubInterface) private repository: IGithubInterface) {}
+
+  async init() {
+    const { github } = getConfig();
+    if (github.appId !== 'dev') {
+      await this.repository.init(github.appId, github.privateKey, github.installationId);
+    }
+  }
 
   async getOpenPullRequests() {
     const pullRequests: PullRequestBaseEvent[] = [];
