@@ -247,4 +247,13 @@ export class DatabaseRepository implements IDatabaseRepository {
       .onConflict((oc) => oc.column('nodeId').doUpdateSet(entity))
       .execute();
   }
+
+  async getLatestPullRequestByNumber(number: number) {
+    return this.db
+      .selectFrom('pull_request')
+      .selectAll()
+      .where('number', '=', number)
+      .orderBy('updatedAt', 'desc')
+      .executeTakeFirst();
+  }
 }

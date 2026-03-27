@@ -92,6 +92,10 @@ const discordChannels = {
   YuccaFocusTopic: '1413525610700996739',
 };
 
+const discordCategories = {
+  Team: '1330248426654531585',
+};
+
 const outlineCollections = {
   SupportCrew: 'e2910656-714c-4871-8721-447d9353bd73',
   Dev: '0b0dee90-b10e-416a-9059-ad0a061326b6',
@@ -116,6 +120,7 @@ export const Constants = {
     Roles: discordRoles,
     Channels: discordChannels,
     Tags: discordTags,
+    Categories: discordCategories,
   },
   Cron: {
     ImmichBirthday: '36 4 3 2 *',
