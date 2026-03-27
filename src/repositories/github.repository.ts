@@ -1,16 +1,16 @@
 import { Logger } from '@nestjs/common';
 import { GraphqlResponseError } from '@octokit/graphql';
-import { channelMention } from 'discord.js';
+import { channelLink, hyperlink } from 'discord.js';
 import { App, Octokit } from 'octokit';
 import { IGithubInterface, PullRequest } from 'src/interfaces/github.interface';
 
-const makeLink = (org: string, repo: string, id: number, url: string) => `[${org}/${repo}#${id}](${url})`;
+const makeLink = (org: string, repo: string, id: number, url: string) => hyperlink(`${org}/${repo}#${id}`, url);
 
 const makeIssueOrPRMessage = (dto: { type: string; title: string; link: string; discordThreadId?: string }) => {
   const { type, title, link, discordThreadId } = dto;
 
   if (discordThreadId) {
-    return `${channelMention(discordThreadId)} – ${link}`;
+    return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link}, ${hyperlink('Thread', channelLink(discordThreadId))})`;
   }
 
   return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
