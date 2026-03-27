@@ -666,22 +666,14 @@ ${formattedCode}
   }
 
   async handleTaggingOfPullRequestThreads(message: OmitPartialGroupDMChannel<Message<boolean>>) {
-    if (message.channelId !== Constants.Discord.Channels.TeamPullRequests) {
+    const channel = message.channel;
+
+    if (!channel.isThread() || channel.parentId !== Constants.Discord.Channels.TeamPullRequests) {
       return;
     }
 
-    if (message.author.bot) {
-      return;
-    }
-
-    const thread = await message.thread?.fetch();
-
-    if (!thread) {
-      return;
-    }
-
-    if (!thread.appliedTags.includes(Constants.Discord.Tags.TeamPulLRequestsDiscussion)) {
-      await message.thread?.setAppliedTags([...thread.appliedTags, Constants.Discord.Tags.TeamPulLRequestsDiscussion]);
+    if (!channel.appliedTags.includes(Constants.Discord.Tags.TeamPulLRequestsDiscussion)) {
+      await channel.setAppliedTags([...channel.appliedTags, Constants.Discord.Tags.TeamPulLRequestsDiscussion]);
     }
   }
 
