@@ -309,8 +309,9 @@ export class DiscordService {
       }
 
       const latestPr = await this.database.getLatestPullRequestByNumber(id);
+      const isQuickRef = !org && !orgPage && !repo && !repoPage;
 
-      if (!org && !orgPage && !repo && !repoPage && id < 1000) {
+      if (isQuickRef && (!latestPr || latestPr.updatedAt < DateTime.now().minus({ week: 2 }).toJSDate()) && id < 1000) {
         continue;
       }
 
