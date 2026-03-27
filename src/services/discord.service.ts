@@ -1,6 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { ChannelType, CommandInteraction, GuildMember, TextChannel } from 'discord.js';
+import {
+  ChannelType,
+  CommandInteraction,
+  GuildMember,
+  Message,
+  OmitPartialGroupDMChannel,
+  TextChannel,
+} from 'discord.js';
 import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -656,6 +663,26 @@ ${formattedCode}
     }
 
     await Promise.all(promises);
+  }
+
+  async handleTaggingOfPullRequestThreads(message: OmitPartialGroupDMChannel<Message<boolean>>) {
+    if (message.channelId !== Constants.Discord.Channels.TeamPullRequests) {
+      return;
+    }
+
+    if (message.author.bot) {
+      return;
+    }
+
+    const thread = await message.thread?.fetch();
+
+    if (!thread) {
+      return;
+    }
+
+    if (!thread.appliedTags.includes(Constants.Discord.Tags.TeamPulLRequestsDiscussion)) {
+      await message.thread?.setAppliedTags([...thread.appliedTags, Constants.Discord.Tags.TeamPulLRequestsDiscussion]);
+    }
   }
 
   private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {
