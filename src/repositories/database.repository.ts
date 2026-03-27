@@ -239,4 +239,12 @@ export class DatabaseRepository implements IDatabaseRepository {
   async updatePullRequest({ nodeId, ...entity }: Updateable<PullRequestTable> & { nodeId: string }) {
     await this.db.updateTable('pull_request').set(entity).where('nodeId', '=', nodeId).execute();
   }
+
+  async upsertPullRequest({ nodeId, ...entity }: Insertable<PullRequestTable>) {
+    await this.db
+      .insertInto('pull_request')
+      .values({ nodeId, ...entity })
+      .onConflict((oc) => oc.column('nodeId').doUpdateSet(entity))
+      .execute();
+  }
 }

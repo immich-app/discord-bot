@@ -78,6 +78,7 @@ export class WebhookService {
     }
 
     if ('pull_request' in dto) {
+      await this.upsertPullRequest(dto);
       await Promise.all([this.handlePullRequestTeamUpdate(dto), this.handlePullRequestNotification(dto)]);
       return;
     }
@@ -550,10 +551,14 @@ export class WebhookService {
 
     const pullRequest = await this.database.getPullRequestById(pull_request.node_id);
 
+    if (!pullRequest) {
+      return;
+    }
+
     const name = shorten(`#${pull_request.number}: ${pull_request.title}`, 100);
     const message = shorten(pull_request.body ?? '', 2000) || 'No content';
 
-    if (!pullRequest) {
+    if (!pullRequest.discordThreadId) {
       if (action === 'opened' && dto.sender.type !== 'Bot') {
         const { threadId } = await this.discord.createThread(Constants.Discord.Channels.TeamPullRequests, {
           name,
@@ -570,11 +575,8 @@ export class WebhookService {
           message: { content: pull_request.html_url, flags: [MessageFlags.SuppressEmbeds] },
           pin: true,
         });
-        await this.database.createPullRequest({
+        await this.database.updatePullRequest({
           nodeId: pull_request.node_id,
-          organization: dto.repository.owner.login,
-          repository: dto.repository.name,
-          number: pull_request.number,
           discordThreadId: threadId,
         });
       }
@@ -639,5 +641,18 @@ export class WebhookService {
       { channelId: Constants.Discord.Channels.TeamPullRequests, threadId: pullRequest.discordThreadId },
       { name, message },
     );
+  }
+
+  async upsertPullRequest({
+    pull_request,
+    repository,
+  }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+    await this.database.upsertPullRequest({
+      nodeId: pull_request.node_id,
+      number: pull_request.number,
+      organization: repository.owner.login,
+      repository: repository.name,
+      updatedAt: pull_request.updated_at,
+    });
   }
 }
