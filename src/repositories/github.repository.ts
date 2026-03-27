@@ -239,6 +239,7 @@ export class GithubRepository implements IGithubInterface {
               repository {
                 nameWithOwner
               }
+              id
               fullDatabaseId
               number
               title

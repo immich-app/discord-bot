@@ -548,7 +548,7 @@ export class WebhookService {
       return;
     }
 
-    const pullRequest = await this.database.getPullRequestById(pull_request.id);
+    const pullRequest = await this.database.getPullRequestById(pull_request.node_id);
 
     const name = shorten(`#${pull_request.number}: ${pull_request.title}`, 100);
     const message = shorten(pull_request.body ?? '', 2000) || 'No content';
@@ -570,7 +570,13 @@ export class WebhookService {
           message: { content: pull_request.html_url, flags: [MessageFlags.SuppressEmbeds] },
           pin: true,
         });
-        await this.database.createPullRequest({ id: pull_request.id, discordThreadId: threadId });
+        await this.database.createPullRequest({
+          nodeId: pull_request.node_id,
+          organization: dto.repository.owner.login,
+          repository: dto.repository.name,
+          number: pull_request.number,
+          discordThreadId: threadId,
+        });
       }
       return;
     }
@@ -593,7 +599,7 @@ export class WebhookService {
           },
           true,
         );
-        await this.database.updatePullRequest({ id: pullRequest.id, closedAt: new Date() });
+        await this.database.updatePullRequest({ nodeId: pullRequest.nodeId, closedAt: new Date() });
         return;
       }
 
@@ -624,7 +630,7 @@ export class WebhookService {
           },
           false,
         );
-        await this.database.updatePullRequest({ id: pullRequest.id, closedAt: null });
+        await this.database.updatePullRequest({ nodeId: pullRequest.nodeId, closedAt: null });
         break;
       }
     }

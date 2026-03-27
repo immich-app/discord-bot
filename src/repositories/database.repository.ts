@@ -232,11 +232,11 @@ export class DatabaseRepository implements IDatabaseRepository {
     return this.db.insertInto('pull_request').values(entity).executeTakeFirst();
   }
 
-  getPullRequestById(id: number) {
-    return this.db.selectFrom('pull_request').selectAll().where('id', '=', id).executeTakeFirst();
+  getPullRequestById(nodeId: string) {
+    return this.db.selectFrom('pull_request').selectAll().where('nodeId', '=', nodeId).executeTakeFirst();
   }
 
-  async updatePullRequest({ id, ...entity }: Updateable<PullRequestTable> & { id: number }) {
-    await this.db.updateTable('pull_request').set(entity).where('id', '=', id).execute();
+  async updatePullRequest({ nodeId, ...entity }: Updateable<PullRequestTable> & { nodeId: string }) {
+    await this.db.updateTable('pull_request').set(entity).where('nodeId', '=', nodeId).execute();
   }
 }
