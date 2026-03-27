@@ -75,6 +75,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   createPullRequest: vitest.fn(),
   getPullRequestById: vitest.fn(),
   updatePullRequest: vitest.fn(),
+  upsertPullRequest: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({

@@ -57,4 +57,5 @@ export interface IDatabaseRepository {
   createPullRequest(entity: NewPullRequest): Promise<InsertResult>;
   getPullRequestById(nodeId: string): Promise<PullRequest | undefined>;
   updatePullRequest(entity: Updateable<PullRequestTable> & { nodeId: string }): Promise<void>;
+  upsertPullRequest({ nodeId, ...entity }: NewPullRequest): Promise<void>;
 }
