@@ -73,6 +73,7 @@ const discordTags = {
   HelpDeskUsage: '1049704247517794315',
   DevOutline: '1377250701637455985',
   TeamOutline: '1377250780523925505',
+  TeamPulLRequestsDiscussion: '1486726583803969536',
   YuccaOutline: '1438185967155417230',
 };
 

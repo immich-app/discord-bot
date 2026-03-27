@@ -48,6 +48,7 @@ export class DiscordEvents {
     const [messageParts, twitterLinks] = await Promise.all([
       this.service.handleGithubReferences({ content: message.content, channelParentId: message.channel.parentId }),
       this.service.handleTwitterReferences(message.content),
+      this.service.handleTaggingOfPullRequestThreads(message),
     ]);
 
     if (messageParts.length !== 0) {
