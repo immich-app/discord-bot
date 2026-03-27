@@ -41,8 +41,12 @@ export class DiscordEvents {
       return;
     }
 
+    if (message.channel.isDMBased()) {
+      return;
+    }
+
     const [messageParts, twitterLinks] = await Promise.all([
-      this.service.handleGithubReferences(message.content),
+      this.service.handleGithubReferences({ content: message.content, channelParentId: message.channel.parentId }),
       this.service.handleTwitterReferences(message.content),
     ]);
 

@@ -1,9 +1,20 @@
 import { Logger } from '@nestjs/common';
 import { GraphqlResponseError } from '@octokit/graphql';
+import { channelMention } from 'discord.js';
 import { App, Octokit } from 'octokit';
 import { IGithubInterface, PullRequest } from 'src/interfaces/github.interface';
 
 const makeLink = (org: string, repo: string, id: number, url: string) => `[${org}/${repo}#${id}](${url})`;
+
+const makeIssueOrPRMessage = (dto: { type: string; title: string; link: string; discordThreadId?: string }) => {
+  const { type, title, link, discordThreadId } = dto;
+
+  if (discordThreadId) {
+    return `${channelMention(discordThreadId)} – ${link}`;
+  }
+
+  return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
+};
 
 const handleGraphqlError = (error: unknown) => {
   if (!(error instanceof GraphqlResponseError)) {
@@ -24,7 +35,7 @@ export class GithubRepository implements IGithubInterface {
     this.octokit = await app.getInstallationOctokit(Number(installationId));
   }
 
-  async getIssueOrPr(org: string, repo: string, id: number) {
+  async getIssueOrPrMessage(org: string, repo: string, id: number, discordThreadId?: string) {
     try {
       const { repository } = await this.octokit.graphql<{
         repository: { issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string } };
@@ -48,14 +59,19 @@ export class GithubRepository implements IGithubInterface {
         `,
         { org, repo, num: id },
       );
-      return `[${repository.issueOrPullRequest.__typename === 'Issue' ? 'Issue' : 'Pull Request'}] ${repository.issueOrPullRequest.title} (${makeLink(org, repo, id, repository.issueOrPullRequest.url)})`;
+      return makeIssueOrPRMessage({
+        link: makeLink(org, repo, id, repository.issueOrPullRequest.url),
+        type: repository.issueOrPullRequest.__typename,
+        title: repository.issueOrPullRequest.title,
+        discordThreadId,
+      });
     } catch (error) {
       handleGraphqlError(error);
       this.logger.log(`Could not fetch issue or PR #${id}`);
     }
   }
 
-  async getDiscussion(org: string, repo: string, id: number) {
+  async getDiscussionMessage(org: string, repo: string, id: number) {
     try {
       const { repository } = await this.octokit.graphql<{ repository: { discussion: { title: string; url: string } } }>(
         `

@@ -9,11 +9,11 @@ import { Mocked, describe, expect, it, vitest } from 'vitest';
 
 const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   search: vitest.fn(),
-  getDiscussion: vitest
+  getDiscussionMessage: vitest
     .fn()
     .mockImplementation((org, repo, id) => Promise.resolve(`https://github.com/${org}/${repo}/discussions/${id}`)),
   getForkCount: vitest.fn(),
-  getIssueOrPr: vitest
+  getIssueOrPrMessage: vitest
     .fn()
     .mockImplementation((org, repo, id) =>
       Promise.resolve(`https://github.com/${org}/${repo}/${id % 2 === 0 ? 'pull' : 'issues'}/${id}`),
@@ -76,6 +76,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getPullRequestById: vitest.fn(),
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
+  getLatestPullRequestByNumber: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
@@ -333,7 +334,7 @@ describe('Bot test', () => {
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
-      await expect(sut.handleGithubThreadReferences(message)).resolves.toEqual(links);
+      await expect(sut.handleGithubThreadReferences({ content: message })).resolves.toEqual(links);
     });
   });
 

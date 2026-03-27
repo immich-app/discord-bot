@@ -25,6 +25,7 @@ type GithubLink = {
   repo: GithubRepo | string;
   id: number;
   type?: LinkType;
+  discordThreadId?: string;
 };
 type LinkType = 'issues' | 'pull' | 'discussions';
 
@@ -276,14 +277,20 @@ export class DiscordService {
     return links;
   }
 
-  async handleGithubReferences(content: string) {
+  async handleGithubReferences({ content, channelParentId }: { content: string; channelParentId: string | null }) {
     const codeSnippets = await this.handleGithubFileReferences(content);
-    const links = await this.handleGithubThreadReferences(content);
+    const links = await this.handleGithubThreadReferences({ content, channelParentId });
 
     return [...codeSnippets, ...links].filter((e) => e !== undefined);
   }
 
-  async handleGithubThreadReferences(content: string) {
+  async handleGithubThreadReferences({
+    content,
+    channelParentId,
+  }: {
+    content: string;
+    channelParentId?: string | null;
+  }) {
     const links: GithubLink[] = [];
 
     content = content.replaceAll(/```.*```/gs, '');
@@ -301,43 +308,50 @@ export class DiscordService {
         continue;
       }
 
+      const latestPr = await this.database.getLatestPullRequestByNumber(id);
+
       if (!org && !orgPage && !repo && !repoPage && id < 1000) {
         continue;
       }
 
       links.push({
         id,
-        org: org || orgPage || GithubOrg.ImmichApp,
-        repo: repo || repoPage || GithubRepo.Immich,
-        type: category as LinkType,
+        org: org || orgPage || latestPr?.organization || GithubOrg.ImmichApp,
+        repo: repo || repoPage || latestPr?.repository || GithubRepo.Immich,
+        type: latestPr ? 'pull' : (category as LinkType),
+        discordThreadId:
+          channelParentId === Constants.Discord.Categories.Team ? (latestPr?.discordThreadId ?? undefined) : undefined,
       });
     }
 
     const keys = new Set<string>();
     const requests: GithubLink[] = [];
 
-    for (const { id, org, repo, type } of links) {
+    for (const { id, org, repo, type, discordThreadId } of links) {
       const key = id + org + repo;
       if (keys.has(key)) {
         continue;
       }
 
-      requests.push({ id, org, repo, type });
+      requests.push({ id, org, repo, type, discordThreadId });
       keys.add(key);
     }
 
     const results = await Promise.all(
-      requests.map(async ({ org, repo, id, type }) => {
+      requests.map(async ({ org, repo, id, type, discordThreadId }) => {
         switch (type) {
           case 'issues':
           case 'pull':
-            return this.github.getIssueOrPr(org, repo, id);
+            return await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId);
 
           case 'discussions':
-            return this.github.getDiscussion(org, repo, id);
+            return await this.github.getDiscussionMessage(org, repo, id);
 
           default:
-            return (await this.github.getIssueOrPr(org, repo, id)) || (await this.github.getDiscussion(org, repo, id));
+            return (
+              (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId)) ||
+              (await this.github.getDiscussionMessage(org, repo, id))
+            );
         }
       }),
     );
@@ -410,7 +424,7 @@ ${formattedCode}
   }
 
   getPrOrIssue(id: number) {
-    return this.github.getIssueOrPr(GithubOrg.ImmichApp, GithubRepo.Immich, id);
+    return this.github.getIssueOrPrMessage(GithubOrg.ImmichApp, GithubRepo.Immich, id);
   }
 
   async getMessages(value?: string) {
