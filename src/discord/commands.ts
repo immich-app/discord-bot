@@ -566,6 +566,30 @@ export class DiscordCommands {
     }
   }
 
+  @Slash({ name: 'schedule-edit', description: 'Edit an existing scheduled message' })
+  async handleScheduleEdit(
+    @SlashOption({
+      name: 'name',
+      description: 'The name of the scheduled message to edit',
+      type: ApplicationCommandOptionType.String,
+      required: true,
+      autocomplete: true,
+    })
+    name: string,
+    interaction: CommandInteraction | AutocompleteInteraction,
+  ) {
+    if (interaction.isAutocomplete()) {
+      const value = interaction.options.getFocused(true).value;
+      const results = await this.scheduledMessageService.getScheduledMessages(value);
+      return interaction.respond(results);
+    }
+
+    const messageOrModal = await this.scheduledMessageService.editScheduledMessage(name);
+    return typeof messageOrModal === 'string'
+      ? interaction.reply(messageOrModal)
+      : interaction.showModal(messageOrModal);
+  }
+
   @Slash({ name: 'schedule-remove', description: 'Remove a scheduled message' })
   async handleScheduleRemove(
     @SlashOption({

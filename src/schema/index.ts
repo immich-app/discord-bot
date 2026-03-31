@@ -48,6 +48,7 @@ export type UpdateRSSFeed = Updateable<RSSFeedTable> & { url: string; channelId:
 
 export type ScheduledMessage = Selectable<ScheduledMessageTable>;
 export type NewScheduledMessage = Insertable<ScheduledMessageTable>;
+export type UpdateScheduledMessage = Updateable<ScheduledMessageTable>;
 
 export type PullRequest = Selectable<PullRequestTable>;
 export type NewPullRequest = Insertable<PullRequestTable>;
