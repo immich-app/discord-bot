@@ -17,6 +17,7 @@ import {
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
   UpdateRSSFeed,
+  UpdateScheduledMessage,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
@@ -53,6 +54,7 @@ export interface IDatabaseRepository {
   getScheduledMessages(): Promise<ScheduledMessage[]>;
   getScheduledMessage(name: string): Promise<ScheduledMessage | undefined>;
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
+  updateScheduledMessage(entity: UpdateScheduledMessage & { name: string }): Promise<ScheduledMessage | undefined>;
   removeScheduledMessage(id: string): Promise<void>;
   createPullRequest(entity: NewPullRequest): Promise<InsertResult>;
   getPullRequestById(nodeId: string): Promise<PullRequest | undefined>;

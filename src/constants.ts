@@ -3,6 +3,7 @@ export enum DiscordModal {
   Logs = 'logsModal',
   Compose = 'composeModal',
   Message = 'messageModal',
+  ScheduledMessageEdit = 'scheduledMessageEdit',
 }
 
 export enum DiscordButton {

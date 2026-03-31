@@ -71,6 +71,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getScheduledMessages: vitest.fn(),
   getScheduledMessage: vitest.fn(),
   createScheduledMessage: vitest.fn(),
+  updateScheduledMessage: vitest.fn(),
   removeScheduledMessage: vitest.fn(),
   createPullRequest: vitest.fn(),
   getPullRequestById: vitest.fn(),

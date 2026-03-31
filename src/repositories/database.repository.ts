@@ -22,6 +22,7 @@ import {
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
   UpdateRSSFeed,
+  UpdateScheduledMessage,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
@@ -222,6 +223,15 @@ export class DatabaseRepository implements IDatabaseRepository {
 
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage> {
     return this.db.insertInto('scheduled_message').values(entity).returningAll().executeTakeFirstOrThrow();
+  }
+
+  updateScheduledMessage(entity: UpdateScheduledMessage & { name: string }) {
+    return this.db
+      .updateTable('scheduled_message')
+      .set(entity)
+      .where('name', '=', entity.name)
+      .returningAll()
+      .executeTakeFirst();
   }
 
   async removeScheduledMessage(id: string): Promise<void> {

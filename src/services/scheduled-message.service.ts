@@ -1,11 +1,24 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
-import { inlineCode } from 'discord.js';
+import {
+  heading,
+  HeadingLevel,
+  inlineCode,
+  LabelBuilder,
+  ModalBuilder,
+  ModalSubmitInteraction,
+  TextDisplayBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} from 'discord.js';
+import { Discord, ModalComponent } from 'discordx';
+import { DiscordModal } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { NewScheduledMessage } from 'src/schema';
 import { shorten } from 'src/util';
 
+@Discord()
 @Injectable()
 export class ScheduledMessageService {
   private logger = new Logger(ScheduledMessageService.name);
@@ -57,6 +70,54 @@ export class ScheduledMessageService {
 
     const message = await this.database.createScheduledMessage(entity);
     this.registerJob(message);
+  }
+
+  async editScheduledMessage(name: string) {
+    const message = await this.database.getScheduledMessage(name);
+    if (!message) {
+      return 'Scheduled message not found';
+    }
+
+    return new ModalBuilder({
+      title: 'Edit message',
+      customId: `${DiscordModal.ScheduledMessageEdit}-${name}`,
+    })
+      .addTextDisplayComponents(new TextDisplayBuilder({ content: heading(message.name, HeadingLevel.One) }))
+      .addLabelComponents(
+        new LabelBuilder({ label: 'Cron expression' }).setTextInputComponent(
+          new TextInputBuilder({
+            customId: 'cronExpressionInput',
+            style: TextInputStyle.Short,
+            value: message.cronExpression,
+          }),
+        ),
+
+        new LabelBuilder({ label: 'Message' }).setTextInputComponent(
+          new TextInputBuilder({
+            customId: 'messageInput',
+            style: TextInputStyle.Paragraph,
+            value: message.message,
+          }),
+        ),
+      );
+  }
+
+  @ModalComponent({ id: new RegExp(`${DiscordModal.ScheduledMessageEdit}-.+`) })
+  async handleEditScheduledMessageModal(interaction: ModalSubmitInteraction): Promise<void> {
+    const name = interaction.customId.split('-').splice(1).join('-');
+    const cronExpression = interaction.fields.getTextInputValue('cronExpressionInput');
+    const message = interaction.fields.getTextInputValue('messageInput');
+
+    const updatedMessage = await this.database.updateScheduledMessage({ name, cronExpression, message });
+
+    if (!updatedMessage) {
+      await interaction.reply(`Failed updating scheduled message ${inlineCode(name)}`);
+      return;
+    }
+
+    this.registerJob(updatedMessage);
+
+    await interaction.reply(`Successfully updated scheduled message ${inlineCode(updatedMessage.name)}`);
   }
 
   async removeScheduledMessage(name: string) {
