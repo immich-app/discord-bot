@@ -13,13 +13,17 @@
     "lib": ["dom", "es2023"],
     "sourceMap": true,
     "outDir": "./dist",
+    "rootDir": "./src",
     "incremental": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "preserveWatchOutput": true,
-    "baseUrl": "./",
+    "paths": {
+      "src/*": ["./src/*"]
+    },
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
     "jsx": "react",
     "types": ["vitest/globals"]
   },
-  "exclude": ["dist", "node_modules", "upload"]
+  "exclude": ["dist", "node_modules", "upload", "vitest.config.mts"]
 }
