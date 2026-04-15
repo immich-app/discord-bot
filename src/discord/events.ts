@@ -135,7 +135,7 @@ export class DiscordEvents {
     const role =
       thread.parentId === Constants.Discord.Channels.YuccaFocusTopic
         ? Constants.Discord.Roles.Yucca
-        : Constants.Discord.Roles.Team;
+        : Constants.Discord.Roles.Immich;
 
     const message = await thread.send({
       content: `<@&${role}> ${link}`,
