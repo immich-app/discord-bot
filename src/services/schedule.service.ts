@@ -198,7 +198,7 @@ Well, that's it for this month. As always, if you find the project helpful, you 
       await this.discord.sendMessage({
         channelId: Constants.Discord.Channels.SupportCrewDraftAnnouncements,
         threadId: thread.threadId,
-        message: `${roleMention(Constants.Discord.Roles.SupportCrew)} ${roleMention(Constants.Discord.Roles.Team)} let's start with this month's recap! 🚀`,
+        message: `${roleMention(Constants.Discord.Roles.SupportCrew)} ${roleMention(Constants.Discord.Roles.Immich)} let's start with this month's recap! 🚀`,
       });
     }
   }
