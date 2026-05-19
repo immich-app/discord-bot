@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
-import { FileMigrationProvider, Insertable, Kysely, Migrator, PostgresDialect, Updateable } from 'kysely';
+import { Insertable, Kysely, PostgresDialect, Updateable } from 'kysely';
+import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
