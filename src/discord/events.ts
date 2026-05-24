@@ -25,7 +25,7 @@ export class DiscordEvents {
     this.logger.debug(message);
   }
 
-  @Once({ event: 'ready' })
+  @Once({ event: 'clientReady' })
   async onReady() {
     await this.service.onReady();
   }
