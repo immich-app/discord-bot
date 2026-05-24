@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { IntentsBitField, MessageCreateOptions, MessageFlags, Partials } from 'discord.js';
 import { Client } from 'discordx';
+import { Constants } from 'src/constants';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
 class DiscordLogger extends Logger {
@@ -49,16 +50,21 @@ const bot = new Client({
 });
 
 export class DiscordRepository implements IDiscordInterface {
-  private logger = new Logger(DiscordRepository.name);
-
   constructor() {
     bot
-      .once('ready', async () => {
+      .once('clientReady', async () => {
         // await bot.clearApplicationCommands();
         await bot.initApplicationCommands();
       })
-      .on('interactionCreate', (interaction) => bot.executeInteraction(interaction) as Promise<void>)
-      .on('messageCreate', (message) => bot.executeCommand(message) as Promise<void>);
+      .on(
+        'interactionCreate',
+        (interaction) =>
+          Constants.Discord.Servers.includes(interaction.guildId ?? '') && bot.executeInteraction(interaction),
+      )
+      .on(
+        'messageCreate',
+        (message) => Constants.Discord.Servers.includes(message.guildId ?? '') && bot.executeCommand(message),
+      );
   }
 
   async login(token: string) {

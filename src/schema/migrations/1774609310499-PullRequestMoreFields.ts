@@ -15,17 +15,19 @@ export async function up(db: Kysely<any>): Promise<void> {
   await sql`ALTER TABLE "pull_request" ADD "repository" character varying;`.execute(db);
   await sql`ALTER TABLE "pull_request" ADD "number" integer;`.execute(db);
 
-  for await (const batch of repo.getPullRequests({ org: 'immich-app', repo: 'immich' })) {
-    for (const pr of batch) {
-      await db.updateTable('pull_request')
-        .set({
-          nodeId: pr.id,
-          organization: 'immich-app',
-          repository: 'immich',
-          number: pr.number,
-        })
-        .where('id', '=', pr.fullDatabaseId)
-        .execute();
+  if (github.appId !== 'dev') {
+    for await (const batch of repo.getPullRequests({ org: 'immich-app', repo: 'immich' })) {
+      for (const pr of batch) {
+        await db.updateTable('pull_request')
+          .set({
+            nodeId: pr.id,
+            organization: 'immich-app',
+            repository: 'immich',
+            number: pr.number,
+          })
+          .where('id', '=', pr.fullDatabaseId)
+          .execute();
+      }
     }
   }
 

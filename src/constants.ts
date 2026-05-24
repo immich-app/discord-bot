@@ -124,6 +124,7 @@ export const Constants = {
     Channels: discordChannels,
     Tags: discordTags,
     Categories: discordCategories,
+    Servers: ['979116623879368755', '1369624002863173762'],
   },
   Cron: {
     ImmichBirthday: '36 4 3 2 *',
