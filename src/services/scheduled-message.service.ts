@@ -5,6 +5,7 @@ import {
   HeadingLevel,
   inlineCode,
   LabelBuilder,
+  MessageFlags,
   ModalBuilder,
   ModalSubmitInteraction,
   TextDisplayBuilder,
@@ -41,17 +42,22 @@ export class ScheduledMessageService {
     cronExpression,
     channelId,
     message,
+    suppressEmbeds,
   }: {
     id: string;
     cronExpression: string;
     channelId: string;
     message: string;
+    suppressEmbeds: boolean;
   }) {
     const job = CronJob.from({
       cronTime: cronExpression,
       onTick: async () => {
         try {
-          await this.discord.sendMessage({ channelId, message: { content: message } });
+          await this.discord.sendMessage({
+            channelId,
+            message: { content: message, flags: suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [] },
+          });
         } catch (error) {
           this.logger.error(`Failed to send scheduled message ${id}: ${error}`);
         }
@@ -99,6 +105,10 @@ export class ScheduledMessageService {
             value: message.message,
           }),
         ),
+
+        new LabelBuilder({ label: 'Suppress Embeds' }).setCheckboxComponent((builder) =>
+          builder.setCustomId('suppressEmbedsCheckbox').setDefault(message.suppressEmbeds),
+        ),
       );
   }
 
@@ -107,8 +117,14 @@ export class ScheduledMessageService {
     const name = interaction.customId.split('-').splice(1).join('-');
     const cronExpression = interaction.fields.getTextInputValue('cronExpressionInput');
     const message = interaction.fields.getTextInputValue('messageInput');
+    const suppressEmbeds = interaction.fields.getCheckbox('suppressEmbedsCheckbox');
 
-    const updatedMessage = await this.database.updateScheduledMessage({ name, cronExpression, message });
+    const updatedMessage = await this.database.updateScheduledMessage({
+      name,
+      cronExpression,
+      message,
+      suppressEmbeds,
+    });
 
     if (!updatedMessage) {
       await interaction.reply(`Failed updating scheduled message ${inlineCode(name)}`);

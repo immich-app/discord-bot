@@ -11,6 +11,9 @@ export class ScheduledMessageTable {
   @Column()
   message!: string;
 
+  @Column({ type: 'boolean', default: true })
+  suppressEmbeds!: Generated<boolean>;
+
   @Column()
   cronExpression!: string;
 

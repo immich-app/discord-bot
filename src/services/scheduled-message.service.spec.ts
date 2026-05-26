@@ -31,6 +31,7 @@ const makeScheduledMessage = (overrides: Partial<ScheduledMessage> = {}): Schedu
   name: 'test-message',
   channelId: '123456',
   message: 'Hello world',
+  suppressEmbeds: true,
   cronExpression: '0 9 * * 1',
   createdBy: 'user-1',
   createdAt: new Date(),
