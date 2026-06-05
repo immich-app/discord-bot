@@ -1,6 +1,5 @@
 import js from '@eslint/js';
 import tsParser from '@typescript-eslint/parser';
-import noRelativeImportPaths from 'eslint-plugin-no-relative-import-paths';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tseslint from 'typescript-eslint';
@@ -27,10 +26,6 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    plugins: {
-      'no-relative-import-paths': noRelativeImportPaths,
-    },
-
     languageOptions: {
       parser: tsParser,
       ecmaVersion: 5,
@@ -45,7 +40,17 @@ export default [
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-explicit-any': 'off',
-      'no-relative-import-paths/no-relative-import-paths': 'error',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['.*'],
+              message: 'Relative imports are not allowed.',
+            },
+          ],
+        },
+      ],
     },
   },
 ];
