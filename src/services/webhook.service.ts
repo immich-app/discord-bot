@@ -494,7 +494,7 @@ export class WebhookService {
   }
 
   private async handleReleaseNotification({ action, repository, release, sender }: ReleaseEvent) {
-    if (action !== 'released') {
+    if (action !== 'released' && action !== 'prereleased') {
       return;
     }
 
@@ -516,7 +516,7 @@ export class WebhookService {
     ];
 
     if (isMainRepo(repository.full_name)) {
-      if (semver.patch(release.tag_name) === 0) {
+      if (semver.patch(release.tag_name) === 0 && semver.prerelease(release.tag_name) === null) {
         messages.push(
           this.discord.sendMessage({
             channelId: DiscordChannel.Announcements,
