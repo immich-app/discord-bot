@@ -494,7 +494,7 @@ export class WebhookService {
   }
 
   private async handleReleaseNotification({ action, repository, release, sender }: ReleaseEvent) {
-    if (action !== 'released' && action !== 'prereleased') {
+    if (action !== 'published') {
       return;
     }
 
