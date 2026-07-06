@@ -131,6 +131,7 @@ export class ScheduledMessageService {
       return;
     }
 
+    await this.jobs.get(updatedMessage.id)?.stop();
     this.registerJob(updatedMessage);
 
     await interaction.reply(`Successfully updated scheduled message ${inlineCode(updatedMessage.name)}`);
