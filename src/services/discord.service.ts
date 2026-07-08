@@ -74,6 +74,9 @@ const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
+// A run of this many consecutively-numbered quick refs is treated as a pasted stack trace/log, not real references.
+const MAX_SEQUENTIAL_QUICK_REFS = 5;
+
 @Injectable()
 export class DiscordService {
   private logger = new Logger(DiscordService.name);
@@ -302,21 +305,44 @@ export class DiscordService {
 
     content = content.replaceAll(/```.*```/gs, '');
 
-    const matches = content.matchAll(GITHUB_THREAD_REGEX);
+    const refs = [...content.matchAll(GITHUB_THREAD_REGEX)]
+      .filter((match) => match.groups)
+      .map((match) => {
+        const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups!;
+        return {
+          org,
+          orgPage,
+          repo,
+          repoPage,
+          category,
+          id: Number(num ?? numPage),
+          isQuickRef: !org && !orgPage && !repo && !repoPage,
+        };
+      })
+      .filter((ref) => !Number.isNaN(ref.id));
 
-    for (const match of matches) {
-      if (!match || !match.groups) {
-        continue;
-      }
+    const sequential = new Set(
+      [...new Set(refs.filter((ref) => ref.isQuickRef).map((ref) => ref.id))]
+        .sort((a, b) => a - b)
+        .reduce<number[][]>((runs, id) => {
+          const run = runs.at(-1);
+          if (run && id === run.at(-1)! + 1) {
+            run.push(id);
+          } else {
+            runs.push([id]);
+          }
+          return runs;
+        }, [])
+        .filter((run) => run.length >= MAX_SEQUENTIAL_QUICK_REFS)
+        .flat(),
+    );
 
-      const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups;
-      const id = Number(num ?? numPage);
-      if (Number.isNaN(id)) {
+    for (const { org, orgPage, repo, repoPage, category, id, isQuickRef } of refs) {
+      if (isQuickRef && sequential.has(id)) {
         continue;
       }
 
       const latestPr = await this.database.getLatestPullRequestByNumber(id);
-      const isQuickRef = !org && !orgPage && !repo && !repoPage;
 
       if (isQuickRef && (!latestPr || latestPr.updatedAt < DateTime.now().minus({ week: 2 }).toJSDate()) && id < 1000) {
         continue;

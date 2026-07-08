@@ -313,6 +313,27 @@ describe('Bot test', () => {
         links: ['https://github.com/fluxcd/flux2-kustomize-helm-example/pull/42'],
       },
       {
+        name: 'should ignore a stack trace',
+        message: [
+          '#0      throwException (package:sqlite3/src/implementation/exception.dart:101)',
+          '#1      StatementImplementation._selectResults (package:sqlite3/src/implementation/statement.dart:111)',
+          '#2      StatementImplementation.selectWith (package:sqlite3/src/implementation/statement.dart:293)',
+          '#3      CommonPreparedStatement.select (package:sqlite3/src/statement.dart:97)',
+          '#4      PoolConnection.select (package:sqlite3_connection_pool/src/connection.dart:57)',
+          '#5      IsolateWorker._entrypoint (package:sqlite_async/src/native/database/worker.dart:66)',
+        ].join('\n'),
+        links: [],
+      },
+      {
+        name: 'should keep a short run of sequential quick refs',
+        message: '#4242 #4243 #4244',
+        links: [
+          'https://github.com/immich-app/immich/pull/4242',
+          'https://github.com/immich-app/immich/issues/4243',
+          'https://github.com/immich-app/immich/pull/4244',
+        ],
+      },
+      {
         name: 'should return all the links',
         message: [
           '#1234',
