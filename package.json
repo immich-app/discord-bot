@@ -73,7 +73,8 @@
     "eslint": "^10.0.0",
     "prettier": "^3.0.3",
     "prettier-plugin-organize-imports": "^4.0.0",
-    "typescript": "^6.0.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.56.0",
     "unplugin-swc": "^1.5.1",
     "vitest": "^4.0.0"
