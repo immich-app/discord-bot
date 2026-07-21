@@ -17,6 +17,7 @@ export const getConfig = () => {
   const fourthwallPassword = process.env.FOURTHWALL_PASSWORD;
   const fourthwallWebhookSlug = process.env.FOURTHWALL_SLUG;
   const outlineApiKey = process.env.OUTLINE_API_KEY;
+  const loopDedupeApiKey = process.env.LOOPDEDUPE_SEARCH_API_KEY;
 
   if (
     !databaseUri ||
@@ -31,7 +32,8 @@ export const getConfig = () => {
     !githubAppId ||
     !githubInstallationId ||
     !githubPrivateKey ||
-    !outlineApiKey
+    !outlineApiKey ||
+    !loopDedupeApiKey
   ) {
     console.log({
       databaseUri,
@@ -47,6 +49,7 @@ export const getConfig = () => {
       githubInstallationId,
       githubPrivateKey,
       outlineApiKey,
+      loopDedupeApiKey,
     });
     throw new Error('Missing required environment variables');
   }
@@ -87,6 +90,9 @@ export const getConfig = () => {
     },
     outline: {
       apiKey: outlineApiKey,
+    },
+    loopDedupe: {
+      apiKey: loopDedupeApiKey,
     },
   };
 };

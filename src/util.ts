@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { channelLink, hyperlink } from 'discord.js';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
 type Repos = { discord: IDiscordInterface; logger: Logger };
@@ -72,4 +73,16 @@ export const shorten = (text: string, maxLength: number = 100) => {
 
 export const formatCommand = (name: string, ...args: string[]) => {
   return `\n\`\`\`\n/${name} ${args.join(' ')}\n\`\`\``;
+};
+
+export const makeLink = (org: string, repo: string, id: number, url: string) => hyperlink(`${org}/${repo}#${id}`, url);
+
+export const makeIssueOrPRMessage = (dto: { type: string; title: string; link: string; discordThreadId?: string }) => {
+  const { type, title, link, discordThreadId } = dto;
+
+  if (discordThreadId) {
+    return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link}, ${hyperlink('Thread', channelLink(discordThreadId))})`;
+  }
+
+  return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
 };

@@ -1,20 +1,8 @@
 import { Logger } from '@nestjs/common';
 import { GraphqlResponseError } from '@octokit/graphql';
-import { channelLink, hyperlink } from 'discord.js';
 import { App, Octokit } from 'octokit';
 import { IGithubInterface, PullRequest } from 'src/interfaces/github.interface';
-
-const makeLink = (org: string, repo: string, id: number, url: string) => hyperlink(`${org}/${repo}#${id}`, url);
-
-const makeIssueOrPRMessage = (dto: { type: string; title: string; link: string; discordThreadId?: string }) => {
-  const { type, title, link, discordThreadId } = dto;
-
-  if (discordThreadId) {
-    return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link}, ${hyperlink('Thread', channelLink(discordThreadId))})`;
-  }
-
-  return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
-};
+import { makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const handleGraphqlError = (error: unknown) => {
   if (!(error instanceof GraphqlResponseError)) {
@@ -35,7 +23,7 @@ export class GithubRepository implements IGithubInterface {
     this.octokit = await app.getInstallationOctokit(Number(installationId));
   }
 
-  async getIssueOrPrMessage(org: string, repo: string, id: number, discordThreadId?: string) {
+  async getIssueOrPrMessage(org: string, repo: string, num: number, discordThreadId?: string) {
     try {
       const { repository } = await this.octokit.graphql<{
         repository: { issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string } };
@@ -57,17 +45,17 @@ export class GithubRepository implements IGithubInterface {
         }
       }
         `,
-        { org, repo, num: id },
+        { org, repo, num },
       );
       return makeIssueOrPRMessage({
-        link: makeLink(org, repo, id, repository.issueOrPullRequest.url),
+        link: makeLink(org, repo, num, repository.issueOrPullRequest.url),
         type: repository.issueOrPullRequest.__typename,
         title: repository.issueOrPullRequest.title,
         discordThreadId,
       });
     } catch (error) {
       handleGraphqlError(error);
-      this.logger.log(`Could not fetch issue or PR #${id}`);
+      this.logger.log(`Could not fetch issue or PR #${num}`);
     }
   }
 

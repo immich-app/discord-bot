@@ -48,7 +48,7 @@ export interface IGithubInterface {
   getIssueOrPrMessage(
     org: GithubOrg | string,
     repo: GithubRepo | string,
-    id: number,
+    num: number,
     discordThreadId?: string,
   ): Promise<string | undefined>;
   getDiscussionMessage(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
