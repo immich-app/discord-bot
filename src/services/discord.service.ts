@@ -17,9 +17,10 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
-import { formatCommand, logError, shorten } from 'src/util';
+import { formatCommand, logError, makeIssueOrPRMessage, makeLink, shorten } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
@@ -83,6 +84,7 @@ export class DiscordService {
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IFourthwallRepository) private fourthwall: IFourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
+    @Inject(ILoopDedupeInterface) private loopDedupe: ILoopDedupeInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
@@ -675,6 +677,21 @@ ${formattedCode}
     if (!channel.appliedTags.includes(Constants.Discord.Tags.TeamPulLRequestsDiscussion)) {
       await channel.setAppliedTags([...channel.appliedTags, Constants.Discord.Tags.TeamPulLRequestsDiscussion]);
     }
+  }
+
+  async handleFindSimilarIssuesOrDiscussions(messageContent: string) {
+    const similarIssues = await this.loopDedupe.getForText(messageContent);
+    const links = similarIssues.map(({ title, item_type, number, similarity }) => {
+      const url = `https://github.com/${GithubOrg.ImmichApp}/${GithubRepo.Immich}/${item_type === 'issue' ? 'issues' : 'discussions'}/${number}`;
+      const link = makeLink(GithubOrg.ImmichApp, GithubRepo.Immich, number, url);
+
+      if (item_type === 'discussion') {
+        return `[Discussion] ${title} (${link}), Similarity: ${similarity.toFixed(3)}`;
+      }
+
+      return makeIssueOrPRMessage({ type: 'Issue', link, title }) + `, Similarity: ${similarity.toFixed(3)}`;
+    });
+    return links.filter((link) => link !== undefined).join('\n');
   }
 
   private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {

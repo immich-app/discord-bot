@@ -2,6 +2,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { DiscordService } from 'src/services/discord.service';
@@ -90,12 +91,17 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   sendMessage: vitest.fn(),
 });
 
+const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
+  getForText: vitest.fn(),
+});
+
 describe('Bot test', () => {
   let sut: DiscordService;
 
   let discordMock: Mocked<IDiscordInterface>;
   let fourthwallMock: Mocked<IFourthwallRepository>;
   let githubMock: Mocked<IGithubInterface>;
+  let loopDedupeMock: Mocked<ILoopDedupeInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
   let zulipMock: Mocked<IZulipInterface>;
@@ -104,11 +110,20 @@ describe('Bot test', () => {
     discordMock = newDiscordMockRepository();
     fourthwallMock = newFourthwallMockRepository();
     githubMock = newGithubMockRepository();
+    loopDedupeMock = newLoopDedupeMockRepository();
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
     zulipMock = newZulipMockRepository();
 
-    sut = new DiscordService(databaseMock, discordMock, fourthwallMock, githubMock, outlineMock, zulipMock);
+    sut = new DiscordService(
+      databaseMock,
+      discordMock,
+      fourthwallMock,
+      githubMock,
+      loopDedupeMock,
+      outlineMock,
+      zulipMock,
+    );
   });
 
   it('should work', () => {
