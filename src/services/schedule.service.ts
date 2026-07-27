@@ -179,7 +179,7 @@ Hello everyone!
 
 ### @jrasm91
 
-### @bwees
+### @danieldietzler
 
 
 ## Upcoming goals
