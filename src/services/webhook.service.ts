@@ -13,11 +13,12 @@ import {
   WebhookEvent,
   WorkflowRunEvent,
 } from '@octokit/webhooks-types';
-import { Colors, EmbedBuilder, MessageFlags } from 'discord.js';
+import { Colors, EmbedBuilder, MessageFlags, roleMention } from 'discord.js';
 import _ from 'lodash';
+import { DateTime } from 'luxon';
 import semver from 'semver';
 import { getConfig } from 'src/config';
-import { Constants, ReleaseMessages } from 'src/constants';
+import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -27,6 +28,7 @@ import {
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { makeLicenseFields, makeOrderFields, shorten, withErrorLogging } from 'src/util';
@@ -60,6 +62,7 @@ export class WebhookService {
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IFourthwallRepository) private fourthwall: FourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
+    @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -94,7 +97,7 @@ export class WebhookService {
     }
 
     if ('release' in dto) {
-      await Promise.all([this.handleReleaseNotification(dto)]);
+      await Promise.all([this.handleReleaseNotification(dto), this.handleCreateReleaseNotes(dto)]);
       return;
     }
 
@@ -538,6 +541,65 @@ export class WebhookService {
     }
 
     await Promise.all(messages);
+  }
+
+  private async handleCreateReleaseNotes({ action, repository, release }: ReleaseEvent) {
+    if (action !== 'created') {
+      return;
+    }
+
+    if (repository.full_name !== `${GithubOrg.ImmichApp}/${GithubRepo.Immich}`) {
+      return;
+    }
+
+    // we only want this for minor bumps
+    if (semver.minor(release.tag_name) === 0 || semver.patch(release.tag_name) !== 0) {
+      return;
+    }
+
+    const response = await this.outline.createDocument({
+      collectionId: Constants.Outline.Collections.SupportCrew,
+      parentDocumentId: Constants.Outline.Documents.SupportCrewReleaseNotes,
+      title: release.tag_name,
+      icon: 'rocket',
+      iconColor: '#00D084',
+      text: `
+---
+
+description: Release notes for ${release.tag_name} – TODO
+
+publishedAt: ${DateTime.now().toFormat('yyyy-LL-dd')}
+
+slug: ${release.tag_name}-release
+
+type: release
+
+authors: [Immich Team]
+
+---
+
+Welcome to Immich \`${release.tag_name}\`!
+
+This release ...
+
+${release.body}
+`,
+    });
+
+    const share = await this.outline.shareDocument(response.id);
+
+    await this.discord.createThread(Constants.Discord.Channels.SupportCrewDraftAnnouncements, {
+      name: release.tag_name,
+      message: `
+${roleMention(Constants.Discord.Roles.SupportCrew)} ${roleMention(Constants.Discord.Roles.Contributor)} ${roleMention(Constants.Discord.Roles.Immich)} Release time!
+
+${Constants.Urls.Outline + response.url}
+
+
+
+Read only for Nicholas: ${share.url}
+`,
+    });
   }
 
   async handlePullRequestTeamUpdate({

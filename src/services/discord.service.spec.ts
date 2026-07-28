@@ -45,6 +45,7 @@ const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
 const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
   addToDocument: vitest.fn(),
   createDocument: vitest.fn(),
+  shareDocument: vitest.fn(),
 });
 
 const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
