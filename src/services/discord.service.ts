@@ -557,9 +557,6 @@ ${formattedCode}
     text?: string;
   }) {
     const { Urls, Discord, Outline } = Constants;
-    const {
-      outline: { apiKey },
-    } = getConfig();
 
     switch (threadParentId) {
       case Discord.Channels.DevFocusTopic: {
@@ -572,7 +569,6 @@ ${formattedCode}
           text,
           collectionId: Outline.Collections.Dev,
           parentDocumentId: Outline.Documents.DevFocusTopic,
-          apiKey,
           icon: 'hammer',
           iconColor: '#0366D6',
         });
@@ -588,7 +584,6 @@ ${formattedCode}
           text,
           collectionId: Outline.Collections.Team,
           parentDocumentId: Outline.Documents.TeamFocusTopic,
-          apiKey,
           icon: 'hammer',
           iconColor: '#FF5C80',
         });
@@ -604,7 +599,6 @@ ${formattedCode}
           text,
           collectionId: Outline.Collections.Yucca,
           parentDocumentId: Outline.Documents.YuccaFocusTopic,
-          apiKey,
           icon: 'hammer',
           iconColor: '#FF825C',
         });

@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Colors, EmbedBuilder, roleMention } from 'discord.js';
 import { DateTime } from 'luxon';
-import { getConfig } from 'src/config';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -134,14 +133,10 @@ export class ScheduleService {
       return;
     }
 
-    const {
-      outline: { apiKey },
-    } = getConfig();
     const name = `${endOfMonth.monthLong} ${endOfMonth.year} recap`;
     const response = await this.outline.createDocument({
-      apiKey,
       collectionId: Constants.Outline.Collections.SupportCrew,
-      parentDocumentId: Constants.Outline.Documents.SupportCrewAnnouncements,
+      parentDocumentId: Constants.Outline.Documents.SupportCrewBlog,
       title: name,
       icon: 'pencil',
       iconColor: '#00D084',

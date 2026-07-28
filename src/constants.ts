@@ -107,7 +107,8 @@ const outlineCollections = {
 };
 
 const outlineDocuments = {
-  SupportCrewAnnouncements: '25c227ce-7d6c-4a0e-84d2-e82fe362a609',
+  SupportCrewBlog: '25c227ce-7d6c-4a0e-84d2-e82fe362a609',
+  SupportCrewReleaseNotes: 'da856355-0844-43df-bd71-f8edce5382d9',
   DevFocusTopic: 'dbe1d7d2-ca67-42a2-adb2-43496cb048b7',
   TeamFocusTopic: '7fbd54e9-7f6f-44e5-9ed0-05a12e35937e',
   YuccaFocusTopic: 'ad2e16ee-094e-4f29-bfd4-cbf6b2f20f66',

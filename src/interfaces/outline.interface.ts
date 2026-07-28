@@ -1,7 +1,17 @@
 export const IOutlineInterface = 'IOutlineRepository';
 
 export type DocumentCreateResponse = {
+  id: string;
+  parentDocumentId: string | null;
   url: string;
+};
+
+export type DocumentShareResponse = {
+  url: string;
+  allowSubscriptions: boolean;
+  allowIndexing: boolean;
+  showLastUpdated: boolean;
+  showTOC: boolean;
 };
 
 export interface IOutlineInterface {
@@ -10,9 +20,9 @@ export interface IOutlineInterface {
     text?: string;
     collectionId: string;
     parentDocumentId?: string;
-    apiKey: string;
     icon?: string;
     iconColor?: string;
   }): Promise<DocumentCreateResponse>;
-  addToDocument(options: { id: string; text: string; apiKey: string }): Promise<void>;
+  addToDocument(options: { id: string; text: string }): Promise<void>;
+  shareDocument(id: string): Promise<DocumentShareResponse>;
 }
