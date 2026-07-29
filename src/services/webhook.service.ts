@@ -437,6 +437,10 @@ export class WebhookService {
     repository,
     pull_request,
   }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+    if (sender.login === 'mergify[bot]') {
+      return;
+    }
+
     if (
       action === 'opened' ||
       action === 'closed' ||
