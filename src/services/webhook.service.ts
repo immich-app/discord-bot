@@ -571,13 +571,9 @@ export class WebhookService {
 ---
 
 description: Release notes for ${release.tag_name} – TODO
-
 publishedAt: ${DateTime.now().toFormat('yyyy-LL-dd')}
-
 slug: ${release.tag_name}-release
-
 type: release
-
 authors: [Immich Team]
 
 ---
