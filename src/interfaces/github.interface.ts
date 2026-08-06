@@ -49,9 +49,15 @@ export interface IGithubInterface {
     org: GithubOrg | string,
     repo: GithubRepo | string,
     num: number,
-    discordThreadId?: string,
+    discordThreadId: string | undefined,
+    isPrivileged: boolean,
   ): Promise<string | undefined>;
-  getDiscussionMessage(org: GithubOrg | string, repo: GithubRepo | string, id: number): Promise<string | undefined>;
+  getDiscussionMessage(
+    org: GithubOrg | string,
+    repo: GithubRepo | string,
+    id: number,
+    isPrivileged: boolean,
+  ): Promise<string | undefined>;
   getForkCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   getStarCount(org: GithubOrg | string, repo: GithubRepo | string): Promise<number>;
   search(options: SearchOptions): Promise<SearchResult>;
@@ -60,6 +66,7 @@ export interface IGithubInterface {
     repo: GithubRepo | string,
     ref: string,
     path: string,
+    isPrivileged: boolean,
   ): Promise<string[] | undefined>;
   getCheckSuiteTriggerCommit(
     org: GithubOrg | string,

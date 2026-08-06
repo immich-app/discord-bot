@@ -15,6 +15,7 @@ export async function up(db: Kysely<any>): Promise<void> {
   await sql`ALTER TABLE "pull_request" ADD "repository" character varying;`.execute(db);
   await sql`ALTER TABLE "pull_request" ADD "number" integer;`.execute(db);
 
+  let count = 0;
   if (github.appId !== 'dev') {
     for await (const batch of repo.getPullRequests({ org: 'immich-app', repo: 'immich' })) {
       for (const pr of batch) {
@@ -28,6 +29,7 @@ export async function up(db: Kysely<any>): Promise<void> {
           .where('id', '=', pr.fullDatabaseId)
           .execute();
       }
+      console.log(`Processed ${count += batch.length}`)
     }
   }
 

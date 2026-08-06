@@ -76,35 +76,46 @@ export class WebhookService {
       return;
     }
 
-    if ('repository' in dto && dto.repository?.private) {
+    if (!('repository' in dto)) {
       return;
     }
 
-    if ('pull_request' in dto) {
-      await this.upsertPullRequest(dto);
-      await Promise.all([this.handlePullRequestTeamUpdate(dto), this.handlePullRequestNotification(dto)]);
-      return;
+    switch (true) {
+      case 'pull_request' in dto: {
+        await this.upsertPullRequest(dto);
+        break;
+      }
+
+      case 'workflow_run' in dto && dto.action === 'completed': {
+        const conclusion = dto.workflow_run.conclusion;
+        if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
+          await this.handleWorkflowRunFailure(dto);
+        }
+        break;
+      }
     }
 
-    if ('issue' in dto) {
-      await Promise.all([this.handleIssueNotification(dto)]);
-      return;
-    }
+    if (!dto.repository?.private) {
+      switch (true) {
+        case 'pull_request' in dto: {
+          await Promise.all([this.handlePullRequestTeamUpdate(dto), this.handlePullRequestNotification(dto)]);
+          break;
+        }
 
-    if ('discussion' in dto) {
-      await Promise.all([this.handleDiscussionNotification(dto)]);
-      return;
-    }
+        case 'issue' in dto: {
+          await Promise.all([this.handleIssueNotification(dto)]);
+          break;
+        }
 
-    if ('release' in dto) {
-      await Promise.all([this.handleReleaseNotification(dto), this.handleCreateReleaseNotes(dto)]);
-      return;
-    }
+        case 'discussion' in dto: {
+          await Promise.all([this.handleDiscussionNotification(dto)]);
+          break;
+        }
 
-    if ('workflow_run' in dto && dto.action === 'completed') {
-      const conclusion = dto.workflow_run.conclusion;
-      if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
-        await this.handleWorkflowRunFailure(dto);
+        case 'release' in dto: {
+          await Promise.all([this.handleReleaseNotification(dto), this.handleCreateReleaseNotes(dto)]);
+          break;
+        }
       }
     }
   }
