@@ -351,25 +351,28 @@ describe('Bot test', () => {
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
-      await expect(sut.handleGithubThreadReferences({ content: message })).resolves.toEqual(links);
+      await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual(links);
     });
   });
 
   describe('handleGithubFileReferences', () => {
     it('should return nothing if the message is empty', async () => {
-      const result = await sut.handleGithubFileReferences('');
+      const result = await sut.handleGithubFileReferences('', false);
 
       expect(result).toEqual([]);
     });
 
     it('should return nothing if the message does not contain a file reference', async () => {
-      const result = await sut.handleGithubFileReferences('This is a test message');
+      const result = await sut.handleGithubFileReferences('This is a test message', false);
 
       expect(result).toEqual([]);
     });
 
     it('should return the full file in a snippet', async () => {
-      const result = await sut.handleGithubFileReferences('https://github.com/immich-app/immich/blob/main/src/test.js');
+      const result = await sut.handleGithubFileReferences(
+        'https://github.com/immich-app/immich/blob/main/src/test.js',
+        false,
+      );
       expect(result).toHaveLength(1);
       expect(result[0]).toContain('```js\n');
       expect(result[0]).toContain('function test() { return "immich-app/immich @ main: src/test.js"; }');
@@ -379,6 +382,7 @@ describe('Bot test', () => {
       githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
       const result = await sut.handleGithubFileReferences(
         'https://github.com/immich-app/immich/blob/main/src/test.js#L1-L2',
+        false,
       );
       expect(result).toHaveLength(1);
       expect(result[0]).toContain('```js\n');
@@ -391,6 +395,7 @@ describe('Bot test', () => {
       githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
       const result = await sut.handleGithubFileReferences(
         'https://github.com/immich-app/immich/blob/main/src/test.js#L3',
+        false,
       );
       expect(result).toHaveLength(1);
       expect(result[0]).toContain('```js\n');
@@ -401,11 +406,14 @@ describe('Bot test', () => {
 
     it('should support multiple file references', async () => {
       githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
-      const result = await sut.handleGithubFileReferences(`
+      const result = await sut.handleGithubFileReferences(
+        `
         https://github.com/immich-app/immich/blob/main/src/test.js#L3
-        Test message inbetween
+        Test message in between
         https://github.com/immich-app/immich/blob/anotherref/file.txt
-      `);
+      `,
+        false,
+      );
       expect(result).toHaveLength(2);
       expect(result[0]).toContain('```js\n');
       expect(result[0]).not.toContain('line 1');

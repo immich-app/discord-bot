@@ -23,14 +23,24 @@ export class GithubRepository implements IGithubInterface {
     this.octokit = await app.getInstallationOctokit(Number(installationId));
   }
 
-  async getIssueOrPrMessage(org: string, repo: string, num: number, discordThreadId?: string) {
+  async getIssueOrPrMessage(
+    org: string,
+    repo: string,
+    num: number,
+    discordThreadId: string | undefined,
+    isPrivileged: boolean,
+  ) {
     try {
       const { repository } = await this.octokit.graphql<{
-        repository: { issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string } };
+        repository: {
+          isPrivate: boolean;
+          issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string };
+        };
       }>(
         `
       query issueOrPr($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
+          isPrivate
           issueOrPullRequest(number: $num) {
             __typename
             ...on Issue {
@@ -47,6 +57,11 @@ export class GithubRepository implements IGithubInterface {
         `,
         { org, repo, num },
       );
+
+      if (repository.isPrivate && !isPrivileged) {
+        return;
+      }
+
       return makeIssueOrPRMessage({
         link: makeLink(org, repo, num, repository.issueOrPullRequest.url),
         type: repository.issueOrPullRequest.__typename,
@@ -59,12 +74,15 @@ export class GithubRepository implements IGithubInterface {
     }
   }
 
-  async getDiscussionMessage(org: string, repo: string, id: number) {
+  async getDiscussionMessage(org: string, repo: string, id: number, isPrivileged: boolean) {
     try {
-      const { repository } = await this.octokit.graphql<{ repository: { discussion: { title: string; url: string } } }>(
+      const { repository } = await this.octokit.graphql<{
+        repository: { isPrivate: boolean; discussion: { title: string; url: string } };
+      }>(
         `
       query discussion($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
+          isPrivate
           discussion(number: $num) {
             title
             url
@@ -74,6 +92,10 @@ export class GithubRepository implements IGithubInterface {
       `,
         { org, repo, num: id },
       );
+
+      if (repository.isPrivate && !isPrivileged) {
+        return;
+      }
 
       return `[Discussion] ${repository.discussion.title} (${makeLink(org, repo, id, repository.discussion.url)})`;
     } catch (error) {
@@ -128,11 +150,14 @@ export class GithubRepository implements IGithubInterface {
       .then((response) => response.data) as any;
   }
 
-  async getRepositoryFileContent(org: string, repo: string, ref: string, path: string) {
-    const { repository } = await this.octokit.graphql<{ repository: { object: { text: string | undefined } } }>(
+  async getRepositoryFileContent(org: string, repo: string, ref: string, path: string, isPrivileged: boolean) {
+    const { repository } = await this.octokit.graphql<{
+      repository: { isPrivate: boolean; object: { text: string | undefined } };
+    }>(
       `
       query getFile($org: String!, $repo: String!, $expression: String!) {
         repository(owner: $org, name: $repo) {
+          isPrivate
           object(expression: $expression) {
             ... on Blob {
               text
@@ -148,7 +173,7 @@ export class GithubRepository implements IGithubInterface {
       },
     );
 
-    return repository.object?.text?.split('\n');
+    return isPrivileged || !repository.isPrivate ? repository.object?.text?.split('\n') : undefined;
   }
 
   async getCheckSuiteTriggerCommit(org: string, repo: string, checkSuiteNodeId: string) {

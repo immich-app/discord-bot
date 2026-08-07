@@ -286,20 +286,26 @@ export class DiscordService {
     return links;
   }
 
-  async handleGithubReferences({ content, channelParentId }: { content: string; channelParentId: string | null }) {
-    const codeSnippets = await this.handleGithubFileReferences(content);
-    const links = await this.handleGithubThreadReferences({ content, channelParentId });
+  async handleGithubReferences(
+    { content, channelParentId }: { content: string; channelParentId: string | null },
+    isPrivileged: boolean,
+  ) {
+    const codeSnippets = await this.handleGithubFileReferences(content, isPrivileged);
+    const links = await this.handleGithubThreadReferences({ content, channelParentId }, isPrivileged);
 
     return [...codeSnippets, ...links].filter((e) => e !== undefined);
   }
 
-  async handleGithubThreadReferences({
-    content,
-    channelParentId,
-  }: {
-    content: string;
-    channelParentId?: string | null;
-  }) {
+  async handleGithubThreadReferences(
+    {
+      content,
+      channelParentId,
+    }: {
+      content: string;
+      channelParentId?: string | null;
+    },
+    isPrivileged: boolean,
+  ) {
     const links: GithubLink[] = [];
 
     content = content.replaceAll(/```.*```/gs, '');
@@ -352,15 +358,15 @@ export class DiscordService {
         switch (type) {
           case 'issues':
           case 'pull':
-            return await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId);
+            return await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged);
 
           case 'discussions':
-            return await this.github.getDiscussionMessage(org, repo, id);
+            return await this.github.getDiscussionMessage(org, repo, id, isPrivileged);
 
           default:
             return (
-              (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId)) ||
-              (await this.github.getDiscussionMessage(org, repo, id))
+              (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged)) ||
+              (await this.github.getDiscussionMessage(org, repo, id, isPrivileged))
             );
         }
       }),
@@ -369,7 +375,7 @@ export class DiscordService {
     return results;
   }
 
-  async handleGithubFileReferences(content: string) {
+  async handleGithubFileReferences(content: string, isPrivileged: boolean) {
     const snippets: GithubCodeSnippet[] = [];
 
     const matches = content.matchAll(GITHUB_FILE_REGEX);
@@ -386,7 +392,7 @@ export class DiscordService {
         continue;
       }
 
-      const file = await this.github.getRepositoryFileContent(org, repo, ref, decodeURIComponent(path));
+      const file = await this.github.getRepositoryFileContent(org, repo, ref, decodeURIComponent(path), isPrivileged);
       if (!file || file.length === 0) {
         continue;
       }
@@ -434,7 +440,7 @@ ${formattedCode}
   }
 
   getPrOrIssue(id: number) {
-    return this.github.getIssueOrPrMessage(GithubOrg.ImmichApp, GithubRepo.Immich, id);
+    return this.github.getIssueOrPrMessage(GithubOrg.ImmichApp, GithubRepo.Immich, id, undefined, false);
   }
 
   async getMessages(value?: string) {
