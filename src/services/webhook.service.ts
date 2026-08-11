@@ -45,6 +45,13 @@ const isImmichProduct = (payload: StripeBase<PaymentIntent>) =>
 
 const isMainRepo = (name: string) => name === 'immich-app/immich';
 
+const getActionName = (action: string, pullRequest: { merged: boolean | null }) => {
+  if (action === 'closed' && pullRequest.merged) {
+    return 'merged';
+  }
+  return action;
+};
+
 type BaseEvent = {
   number: number;
   title: string;
@@ -459,7 +466,7 @@ export class WebhookService {
       action === 'ready_for_review'
     ) {
       const embed = this.getEmbed({
-        action,
+        action: getActionName(action, pull_request),
         repositoryName: repository.full_name,
         title: 'Pull request',
         user: sender,
