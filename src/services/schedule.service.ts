@@ -23,7 +23,7 @@ export class ScheduleService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ day: endOfYesterday });
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -36,7 +36,7 @@ export class ScheduleService {
     });
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -57,7 +57,7 @@ export class ScheduleService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ week: endOfYesterday });
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -72,7 +72,7 @@ export class ScheduleService {
     });
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -95,7 +95,7 @@ export class ScheduleService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ month: endOfYesterday });
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -110,7 +110,7 @@ export class ScheduleService {
     });
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()

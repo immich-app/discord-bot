@@ -1,5 +1,6 @@
-import { Body, Controller, Injectable, Param, Post } from '@nestjs/common';
+import { Body, Controller, Injectable, Param, Post, Req, Res } from '@nestjs/common';
 import { WebhookEvent } from '@octokit/webhooks-types';
+import { Request, Response } from 'express';
 import { GithubStatusComponent, GithubStatusIncident, StripeBase } from 'src/dtos/webhook.dto';
 import { FourthwallOrderCreateWebhook, FourthwallOrderUpdateWebhook } from 'src/interfaces/fourthwall.interface';
 import { WebhookService } from 'src/services/webhook.service';
@@ -22,6 +23,18 @@ export class WebhookController {
   @Post('stripe-payments/:slug')
   async onStripePayment(@Body() dto: StripeBase, @Param('slug') slug: string) {
     await this.service.onStripePayment(dto, slug);
+  }
+
+  @Post('polar-payments/immich-client/:slug')
+  async onPolarImmichClientPayment(@Req() request: Request, @Res() response: Response, @Param('slug') slug: string) {
+    await this.service.onPolarPayment(request, response, slug, 'immich-client');
+    response.status(202);
+  }
+
+  @Post('polar-payments/immich-server/:slug')
+  async onPolarImmichServerPayment(@Req() request: Request, @Res() response: Response, @Param('slug') slug: string) {
+    await this.service.onPolarPayment(request, response, slug, 'immich-server');
+    response.status(202);
   }
 
   @Post('fourthwall-order/:slug')
