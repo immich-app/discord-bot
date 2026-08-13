@@ -79,7 +79,7 @@ export class DatabaseRepository implements IDatabaseRepository {
       .select([(b) => b.fn.count<number>('description').as('product_count'), 'description'])
       .groupBy('description')
       .where('livemode', '=', true)
-      .where('status', '=', 'succeeded');
+      .where((eb) => eb.or([eb('status', '=', 'succeeded'), eb('status', '=', 'paid')]));
 
     if (day) {
       builder = builder.where((eq) =>
