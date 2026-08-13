@@ -318,7 +318,7 @@ export class WebhookService {
     } else {
       data = {
         id: event.data.id,
-        description: event.data.description,
+        description: orgSlug ?? event.data.description,
         amount: event.data.totalAmount,
         created: 0,
         currency: event.data.currency,
@@ -361,7 +361,7 @@ export class WebhookService {
       logger: this.logger,
     });
 
-    const licenseType = (orgSlug ?? description).split('-')[1];
+    const licenseType = description.split('-')[1];
     await this.discord.sendMessage({
       channelId: DiscordChannel.Purchases,
       message: {
