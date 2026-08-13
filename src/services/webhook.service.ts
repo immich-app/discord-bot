@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, Logger, RawBodyRequest, UnauthorizedException } from '@nestjs/common';
 import {
   DiscussionCommentEvent,
   DiscussionEvent,
@@ -13,7 +13,10 @@ import {
   WebhookEvent,
   WorkflowRunEvent,
 } from '@octokit/webhooks-types';
+import { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
+import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks.js';
 import { Colors, EmbedBuilder, MessageFlags, roleMention } from 'discord.js';
+import { Request, Response } from 'express';
 import _ from 'lodash';
 import { DateTime } from 'luxon';
 import semver from 'semver';
@@ -40,8 +43,7 @@ const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dt
 const isPaymentEvent = (payload: StripeBase): payload is StripeBase<PaymentIntent> =>
   payload.data.object.object === 'payment_intent';
 
-const isImmichProduct = (payload: StripeBase<PaymentIntent>) =>
-  ['immich-server', 'immich-client'].includes(payload.data.object.description);
+const isImmichProduct = (description: string) => ['immich-server', 'immich-client'].includes(description);
 
 const isMainRepo = (name: string) => name === 'immich-app/immich';
 
@@ -168,8 +170,36 @@ export class WebhookService {
       throw new UnauthorizedException();
     }
 
-    if (isPaymentEvent(dto) && isImmichProduct(dto)) {
-      void this.handleStripePayment(dto);
+    if (isPaymentEvent(dto) && isImmichProduct(dto.data.object.description)) {
+      void this.handlePayment(dto);
+    }
+  }
+
+  async onPolarPayment(
+    request: RawBodyRequest<Request>,
+    response: Response,
+    slug: string,
+    orgSlug: 'immich-client' | 'immich-server',
+  ) {
+    const { slugs, polar } = getConfig();
+    if (!slugs.polarWebhook || slug !== slugs.polarWebhook) {
+      throw new UnauthorizedException();
+    }
+
+    try {
+      const secret = orgSlug === 'immich-client' ? polar.immichClientSecret : polar.immichServerSecret;
+      const event = validateEvent(JSON.stringify(request.body), request.headers as Record<string, string>, secret);
+      if (event.type !== 'order.paid') {
+        return;
+      }
+
+      await this.handlePayment(event, orgSlug);
+    } catch (error) {
+      if (error instanceof WebhookVerificationError) {
+        response.status(403).send('');
+        return;
+      }
+      throw error;
     }
   }
 
@@ -248,7 +278,7 @@ export class WebhookService {
     const { revenue, profit } = await this.database.getTotalFourthwallOrders();
 
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
@@ -268,13 +298,42 @@ export class WebhookService {
     });
   }
 
-  private async handleStripePayment(event: StripeBase<PaymentIntent>) {
-    const { id, description, amount, created, currency, status, livemode } = event.data.object;
+  private async handlePayment(
+    event: StripeBase<PaymentIntent> | WebhookOrderPaidPayload,
+    orgSlug?: 'immich-client' | 'immich-server',
+  ) {
+    let data: {
+      id: string;
+      description: string;
+      amount: number;
+      created: number;
+      currency: string;
+      status: string;
+      livemode: boolean;
+      source: 'stripe' | 'polar';
+    };
+
+    if ('object' in event.data) {
+      data = { ...event.data.object, source: 'stripe' };
+    } else {
+      data = {
+        id: event.data.id,
+        description: event.data.description,
+        amount: event.data.totalAmount,
+        created: 0,
+        currency: event.data.currency,
+        status: event.data.status,
+        source: 'polar',
+        livemode: true,
+      };
+    }
+
+    const { id, description, amount, created, currency, status, livemode, source } = data;
 
     await withErrorLogging({
       method: () =>
         this.database.createPayment({
-          event_id: event.id,
+          event_id: id,
           id,
           amount,
           currency,
@@ -290,7 +349,7 @@ export class WebhookService {
       logger: this.logger,
     });
 
-    if (status !== 'succeeded') {
+    if (status !== 'succeeded' && status !== 'paid') {
       return;
     }
 
@@ -302,15 +361,22 @@ export class WebhookService {
       logger: this.logger,
     });
 
-    const licenseType = description.split('-')[1];
+    const licenseType = (orgSlug ?? description).split('-')[1];
     await this.discord.sendMessage({
-      channelId: DiscordChannel.Stripe,
+      channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
             .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
-            .setURL(`https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`)
-            .setAuthor({ name: 'Stripe Payments', url: 'https://stripe.com' })
+            .setURL(
+              source === 'stripe'
+                ? `https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`
+                : `https://polar.sh/dashboard/${orgSlug}/sales/${id}`,
+            )
+            .setAuthor({
+              name: source === 'stripe' ? 'Stripe Payments' : 'Polar payments',
+              url: source === 'stripe' ? 'https://stripe.com' : 'https://polar.sh',
+            })
             .setDescription(`Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`)
             .setColor(livemode ? Colors.Green : Colors.Yellow)
             .setFields(makeLicenseFields({ server, client })),

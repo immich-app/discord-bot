@@ -12,6 +12,9 @@ export const getConfig = () => {
   const githubInstallationId = process.env.GITHUB_INSTALLATION_ID;
   const githubPrivateKey = process.env.GITHUB_PRIVATE_KEY;
   const stripeWebhookSlug = process.env.STRIPE_PAYMENT_SLUG;
+  const polarWebhookSlug = process.env.POLAR_PAYMENT_SLUG;
+  const polarWebhookImmichClientSecret = process.env.POLAR_PAYMENT_IMMICH_CLIENT_WEBHOOK_SECRET;
+  const polarWebhookImmichServerSecret = process.env.POLAR_PAYMENT_IMMICH_SERVER_WEBHOOK_SECRET;
   const commitSha = process.env.COMMIT_SHA;
   const fourthwallUser = process.env.FOURTHWALL_USER;
   const fourthwallPassword = process.env.FOURTHWALL_PASSWORD;
@@ -33,7 +36,9 @@ export const getConfig = () => {
     !githubInstallationId ||
     !githubPrivateKey ||
     !outlineApiKey ||
-    !loopDedupeApiKey
+    !loopDedupeApiKey ||
+    !polarWebhookImmichClientSecret ||
+    !polarWebhookImmichServerSecret
   ) {
     console.log({
       databaseUri,
@@ -50,6 +55,8 @@ export const getConfig = () => {
       githubPrivateKey,
       outlineApiKey,
       loopDedupeApiKey,
+      polarWebhookImmichClientSecret,
+      polarWebhookImmichServerSecret,
     });
     throw new Error('Missing required environment variables');
   }
@@ -71,7 +78,12 @@ export const getConfig = () => {
       githubWebhook: githubWebhookSlug,
       githubStatusWebhook: githubStatusWebhookSlug,
       stripeWebhook: stripeWebhookSlug,
+      polarWebhook: polarWebhookSlug,
       fourthwallWebhook: fourthwallWebhookSlug,
+    },
+    polar: {
+      immichClientSecret: polarWebhookImmichClientSecret,
+      immichServerSecret: polarWebhookImmichServerSecret,
     },
     zulip: {
       bot: {
