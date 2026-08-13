@@ -1,13 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import {
-  ChannelType,
-  CommandInteraction,
-  GuildMember,
-  Message,
-  OmitPartialGroupDMChannel,
-  TextChannel,
-} from 'discord.js';
+import { CommandInteraction, GuildMember, Message, OmitPartialGroupDMChannel, SendableChannels } from 'discord.js';
 import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -643,7 +636,7 @@ ${formattedCode}
     await deferredInteraction.edit('Done syncing');
   }
 
-  async pruneMessagesInChannel(channel: TextChannel, userId: string, deleteAfter: DateTime) {
+  async pruneMessagesInChannel(channel: SendableChannels, userId: string, deleteAfter: DateTime) {
     const messages = await channel.messages.fetch();
 
     for (const [, message] of messages.filter(({ author }) => author.id === userId)) {
@@ -656,7 +649,7 @@ ${formattedCode}
   async pruneMessages(interaction: CommandInteraction, member: GuildMember, minutes: number) {
     const deleteAfter = DateTime.now().minus({ minutes });
     const channels = interaction
-      .guild!.channels.cache.filter((channel) => channel.type === ChannelType.GuildText)
+      .guild!.channels.cache.filter((channel) => channel.isSendable())
       .filter((channel) => channel.permissionsFor(member).has('SendMessages'));
 
     const promises: Promise<void>[] = [];
