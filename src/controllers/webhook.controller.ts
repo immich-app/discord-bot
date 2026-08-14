@@ -28,13 +28,13 @@ export class WebhookController {
   @Post('polar-payments/immich-client/:slug')
   async onPolarImmichClientPayment(@Req() request: Request, @Res() response: Response, @Param('slug') slug: string) {
     await this.service.onPolarPayment(request, response, slug, 'immich-client');
-    response.status(202);
+    response.status(202).send('');
   }
 
   @Post('polar-payments/immich-server/:slug')
   async onPolarImmichServerPayment(@Req() request: Request, @Res() response: Response, @Param('slug') slug: string) {
     await this.service.onPolarPayment(request, response, slug, 'immich-server');
-    response.status(202);
+    response.status(202).send('');
   }
 
   @Post('fourthwall-order/:slug')
