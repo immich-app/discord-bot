@@ -320,7 +320,7 @@ export class WebhookService {
         id: event.data.id,
         description: orgSlug ?? event.data.description,
         amount: event.data.totalAmount,
-        created: 0,
+        created: DateTime.fromJSDate(event.data.createdAt).toUnixInteger(),
         currency: event.data.currency,
         status: event.data.status,
         source: 'polar',
