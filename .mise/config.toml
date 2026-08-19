@@ -1,0 +1,18 @@
+[tasks.dev]
+run = """
+npm install
+docker compose -f docker-compose.dev.yml up -d --wait
+op run '--env-file={{config_root}}/.mise/dev.env' -- npm run start:dev
+"""
+description = "Start the dev discord bot with secrets from 1Password"
+
+[tasks."dev:db"]
+run = "docker compose -f docker-compose.dev.yml up -d --wait"
+description = "Start the dev database"
+
+[tasks."dev:db:stop"]
+run = "docker compose -f docker-compose.dev.yml down"
+description = "Stop the dev database"
+
+[settings]
+experimental = true
