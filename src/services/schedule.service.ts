@@ -144,10 +144,15 @@ export class ScheduleService {
 ---
 
 description: A recap of ${endOfMonth.monthLong}, ${endOfMonth.year}, including an update on upcoming features, releases, developer updates, and more.
+
 publishedAt: ${endOfMonth.toFormat('yyyy-LL-dd')}
+
 slug: ${endOfMonth.year}-${endOfMonth.monthLong.toLowerCase()}-recap
+
 authors: [Immich Team]
+
 type: recap
+
 coverAttribution: Photo by <a href="https://unsplash.com/@v2osk" class="underline">v2osk</a> on <a href="https://unsplash.com/photos/foggy-mountain-summit-1Z2niiBPg5A" class="underline">Unsplash</a>
 
 ---
