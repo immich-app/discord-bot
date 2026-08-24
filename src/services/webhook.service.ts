@@ -1,5 +1,4 @@
 import { Inject, Injectable, Logger, RawBodyRequest, UnauthorizedException } from '@nestjs/common';
-import type { components } from '@octokit/openapi-webhooks-types';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks.js';
@@ -393,7 +392,7 @@ export class WebhookService {
   }: {
     repositoryName: string;
     name: string;
-    user: components['schemas']['simple-user'];
+    user: NonNullable<EmitterWebhookEvent<'release'>['payload']['sender']>;
     url: string;
     description?: string;
   }) {
@@ -415,7 +414,7 @@ export class WebhookService {
     action: string;
     repositoryName: string;
     title: string;
-    user: components['schemas']['simple-user'];
+    user: NonNullable<EmitterWebhookEvent<'pull_request'>['payload']['sender']>;
     event: BaseEvent;
   }) {
     return new EmbedBuilder({
@@ -513,14 +512,13 @@ export class WebhookService {
     }
   }
 
-  private async handlePullRequestNotification(dto: PullRequestEvent) {
+  private async handlePullRequestNotification({ action, sender, repository, pull_request }: PullRequestEvent) {
     if (
-      dto.action === 'opened' ||
-      dto.action === 'closed' ||
-      dto.action === 'converted_to_draft' ||
-      dto.action === 'ready_for_review'
+      action === 'opened' ||
+      action === 'closed' ||
+      action === 'converted_to_draft' ||
+      action === 'ready_for_review'
     ) {
-      const { action, sender, repository, pull_request } = dto;
       const embed = this.getEmbed({
         action: getActionName(action, pull_request),
         repositoryName: repository.full_name,

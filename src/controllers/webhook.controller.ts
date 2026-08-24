@@ -12,9 +12,9 @@ export class WebhookController {
 
   @Post('github/:slug')
   async onGithub(
-    @Headers('x-github-event') name: string,
-    @Headers('x-github-delivery') id: string,
-    @Body() payload: unknown,
+    @Headers('x-github-delivery') id: EmitterWebhookEvent['id'],
+    @Headers('x-github-event') name: EmitterWebhookEvent['name'],
+    @Body() payload: EmitterWebhookEvent['payload'],
     @Param('slug') slug: string,
   ) {
     await this.service.onGithub({ id, name, payload } as EmitterWebhookEvent, slug);
