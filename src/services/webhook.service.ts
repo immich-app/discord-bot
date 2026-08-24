@@ -469,10 +469,13 @@ export class WebhookService {
     }
   }
 
-  private getDiscussionEmbedColor(dto: { action: 'created' | 'deleted' | 'answered' }) {
+  private getDiscussionEmbedColor(dto: { action: 'created' | 'reopened' | 'deleted' | 'answered' }) {
     switch (dto.action) {
       case 'created': {
         return 'Orange';
+      }
+      case 'reopened': {
+        return 'DarkOrange';
       }
       case 'deleted': {
         return 'NotQuiteBlack';
@@ -563,7 +566,7 @@ export class WebhookService {
     sender,
     discussion,
   }: EmitterWebhookEvent<'discussion' | 'discussion_comment'>['payload']) {
-    if (action === 'created' || action === 'deleted' || action === 'answered') {
+    if (action === 'created' || action === 'reopened' || action === 'deleted' || action === 'answered') {
       const embed = this.getEmbed({
         action,
         repositoryName: repository.full_name,
