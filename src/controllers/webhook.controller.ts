@@ -1,5 +1,5 @@
-import { Body, Controller, Injectable, Param, Post, Req, Res } from '@nestjs/common';
-import { WebhookEvent } from '@octokit/webhooks-types';
+import { Body, Controller, Headers, Injectable, Param, Post, Req, Res } from '@nestjs/common';
+import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import { Request, Response } from 'express';
 import { GithubStatusComponent, GithubStatusIncident, StripeBase } from 'src/dtos/webhook.dto';
 import { FourthwallOrderCreateWebhook, FourthwallOrderUpdateWebhook } from 'src/interfaces/fourthwall.interface';
@@ -11,8 +11,13 @@ export class WebhookController {
   constructor(private service: WebhookService) {}
 
   @Post('github/:slug')
-  async onGithub(@Body() dto: WebhookEvent, @Param('slug') slug: string) {
-    await this.service.onGithub(dto, slug);
+  async onGithub(
+    @Headers('x-github-delivery') id: EmitterWebhookEvent['id'],
+    @Headers('x-github-event') name: EmitterWebhookEvent['name'],
+    @Body() payload: EmitterWebhookEvent['payload'],
+    @Param('slug') slug: string,
+  ) {
+    await this.service.onGithub({ id, name, payload } as EmitterWebhookEvent, slug);
   }
 
   @Post('github-status/:slug')

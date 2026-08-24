@@ -1,18 +1,5 @@
 import { Inject, Injectable, Logger, RawBodyRequest, UnauthorizedException } from '@nestjs/common';
-import {
-  DiscussionCommentEvent,
-  DiscussionEvent,
-  IssueCommentEvent,
-  IssuesEvent,
-  PullRequestEvent,
-  PullRequestReviewCommentEvent,
-  PullRequestReviewEvent,
-  PullRequestReviewThreadEvent,
-  ReleaseEvent,
-  User,
-  WebhookEvent,
-  WorkflowRunEvent,
-} from '@octokit/webhooks-types';
+import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks.js';
 import { Colors, EmbedBuilder, MessageFlags, roleMention } from 'discord.js';
@@ -54,10 +41,13 @@ const getActionName = (action: string, pullRequest: { merged: boolean | null }) 
   return action;
 };
 
+type PullRequestEvent = EmitterWebhookEvent<
+  'pull_request' | 'pull_request_review' | 'pull_request_review_comment' | 'pull_request_review_thread'
+>['payload'];
+
 type BaseEvent = {
   number: number;
   title: string;
-  user: User;
   html_url: string;
   body: string | null;
 };
@@ -75,56 +65,63 @@ export class WebhookService {
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
-  async onGithub(dto: WebhookEvent, slug: string) {
+  async onGithub(event: EmitterWebhookEvent, slug: string) {
     const { slugs } = getConfig();
     if (!slugs.githubWebhook || slug !== slugs.githubWebhook) {
       throw new UnauthorizedException();
     }
 
-    if (!('action' in dto)) {
-      return;
-    }
+    switch (event.name) {
+      case 'pull_request':
+      case 'pull_request_review':
+      case 'pull_request_review_comment':
+      case 'pull_request_review_thread': {
+        const { payload } = event;
+        await this.upsertPullRequest(payload);
 
-    if (!('repository' in dto)) {
-      return;
-    }
-
-    switch (true) {
-      case 'pull_request' in dto: {
-        await this.upsertPullRequest(dto);
+        if (!payload.repository.private) {
+          await Promise.all([this.handlePullRequestTeamUpdate(payload), this.handlePullRequestNotification(payload)]);
+        }
         break;
       }
 
-      case 'workflow_run' in dto && dto.action === 'completed': {
-        const conclusion = dto.workflow_run.conclusion;
+      case 'workflow_run': {
+        const { payload } = event;
+        if (payload.action !== 'completed') {
+          break;
+        }
+
+        const conclusion = payload.workflow_run.conclusion;
         if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
-          await this.handleWorkflowRunFailure(dto);
+          await this.handleWorkflowRunFailure(payload);
         }
         break;
       }
-    }
 
-    if (!dto.repository?.private) {
-      switch (true) {
-        case 'pull_request' in dto: {
-          await Promise.all([this.handlePullRequestTeamUpdate(dto), this.handlePullRequestNotification(dto)]);
-          break;
+      case 'issues':
+      case 'issue_comment': {
+        const { payload } = event;
+        if (!payload.repository.private) {
+          await this.handleIssueNotification(payload);
         }
+        break;
+      }
 
-        case 'issue' in dto: {
-          await Promise.all([this.handleIssueNotification(dto)]);
-          break;
+      case 'discussion':
+      case 'discussion_comment': {
+        const { payload } = event;
+        if (!payload.repository.private) {
+          await this.handleDiscussionNotification(payload);
         }
+        break;
+      }
 
-        case 'discussion' in dto: {
-          await Promise.all([this.handleDiscussionNotification(dto)]);
-          break;
+      case 'release': {
+        const { payload } = event;
+        if (!payload.repository.private) {
+          await Promise.all([this.handleReleaseNotification(payload), this.handleCreateReleaseNotes(payload)]);
         }
-
-        case 'release' in dto: {
-          await Promise.all([this.handleReleaseNotification(dto), this.handleCreateReleaseNotes(dto)]);
-          break;
-        }
+        break;
       }
     }
   }
@@ -395,7 +392,7 @@ export class WebhookService {
   }: {
     repositoryName: string;
     name: string;
-    user: User;
+    user: NonNullable<EmitterWebhookEvent<'release'>['payload']['sender']>;
     url: string;
     description?: string;
   }) {
@@ -417,7 +414,7 @@ export class WebhookService {
     action: string;
     repositoryName: string;
     title: string;
-    user: User;
+    user: NonNullable<EmitterWebhookEvent<'pull_request'>['payload']['sender']>;
     event: BaseEvent;
   }) {
     return new EmbedBuilder({
@@ -486,7 +483,7 @@ export class WebhookService {
     }
   }
 
-  private async handleWorkflowRunFailure(event: WorkflowRunEvent) {
+  private async handleWorkflowRunFailure(event: EmitterWebhookEvent<'workflow_run.completed'>['payload']) {
     try {
       const { workflow_run, repository } = event;
 
@@ -515,12 +512,7 @@ export class WebhookService {
     }
   }
 
-  private async handlePullRequestNotification({
-    action,
-    sender,
-    repository,
-    pull_request,
-  }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+  private async handlePullRequestNotification({ action, sender, repository, pull_request }: PullRequestEvent) {
     if (
       action === 'opened' ||
       action === 'closed' ||
@@ -536,7 +528,7 @@ export class WebhookService {
       });
       const color = this.getPrEmbedColor({
         action,
-        isDraft: pull_request.draft,
+        isDraft: pull_request.draft ?? false,
         isMerged: pull_request.merged,
       });
       embed.setColor(color);
@@ -545,7 +537,12 @@ export class WebhookService {
     }
   }
 
-  private async handleIssueNotification({ action, repository, sender, issue }: IssuesEvent | IssueCommentEvent) {
+  private async handleIssueNotification({
+    action,
+    repository,
+    sender,
+    issue,
+  }: EmitterWebhookEvent<'issues' | 'issue_comment'>['payload']) {
     if (action === 'opened' || action === 'reopened' || action === 'closed') {
       const embed = this.getEmbed({
         action,
@@ -565,7 +562,7 @@ export class WebhookService {
     repository,
     sender,
     discussion,
-  }: DiscussionEvent | DiscussionCommentEvent) {
+  }: EmitterWebhookEvent<'discussion' | 'discussion_comment'>['payload']) {
     if (action === 'created' || action === 'deleted' || action === 'answered') {
       const embed = this.getEmbed({
         action,
@@ -580,14 +577,19 @@ export class WebhookService {
     }
   }
 
-  private async handleReleaseNotification({ action, repository, release, sender }: ReleaseEvent) {
-    if (action !== 'published') {
+  private async handleReleaseNotification({
+    action,
+    repository,
+    release,
+    sender,
+  }: EmitterWebhookEvent<'release'>['payload']) {
+    if (action !== 'published' || !sender) {
       return;
     }
 
     const embedProps = {
       repositoryName: repository.full_name,
-      name: release.name,
+      name: release.name ?? release.tag_name,
       url: release.html_url,
       user: sender,
       description: isMainRepo(repository.full_name) ? _.sample(ReleaseMessages) : undefined,
@@ -627,7 +629,7 @@ export class WebhookService {
     await Promise.all(messages);
   }
 
-  private async handleCreateReleaseNotes({ action, repository, release }: ReleaseEvent) {
+  private async handleCreateReleaseNotes({ action, repository, release }: EmitterWebhookEvent<'release'>['payload']) {
     if (action !== 'created') {
       return;
     }
@@ -682,11 +684,9 @@ Read only for Nicholas: ${share.url}
     });
   }
 
-  async handlePullRequestTeamUpdate({
-    pull_request,
-    action,
-    ...dto
-  }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+  async handlePullRequestTeamUpdate(dto: PullRequestEvent) {
+    const { pull_request } = dto;
+
     if (dto.repository.full_name !== 'immich-app/immich') {
       return;
     }
@@ -701,7 +701,7 @@ Read only for Nicholas: ${share.url}
     const message = shorten(pull_request.body ?? '', 2000) || 'No content';
 
     if (!pullRequest.discordThreadId) {
-      if (action === 'opened' && dto.sender.type !== 'Bot') {
+      if (dto.action === 'opened' && dto.sender.type !== 'Bot') {
         const { threadId } = await this.discord.createThread(Constants.Discord.Channels.TeamPullRequests, {
           name,
           message,
@@ -725,7 +725,7 @@ Read only for Nicholas: ${share.url}
       return;
     }
 
-    switch (action) {
+    switch (dto.action) {
       case 'closed': {
         await this.discord.sendMessage({
           channelId: Constants.Discord.Channels.TeamPullRequests,
@@ -785,10 +785,7 @@ Read only for Nicholas: ${share.url}
     );
   }
 
-  async upsertPullRequest({
-    pull_request,
-    repository,
-  }: PullRequestEvent | PullRequestReviewEvent | PullRequestReviewCommentEvent | PullRequestReviewThreadEvent) {
+  async upsertPullRequest({ pull_request, repository }: PullRequestEvent) {
     await this.database.upsertPullRequest({
       nodeId: pull_request.node_id,
       number: pull_request.number,
