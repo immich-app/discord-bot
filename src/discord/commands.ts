@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PullRequestEvent } from '@octokit/webhooks-types';
+import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
@@ -635,7 +635,10 @@ export class DiscordCommands {
     const deferredReply = await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
     const pullRequests = await this.githubService.getOpenPullRequests();
     for (const pullRequest of pullRequests) {
-      await this.webhookService.handlePullRequestTeamUpdate({ ...pullRequest, action: 'opened' } as PullRequestEvent);
+      await this.webhookService.handlePullRequestTeamUpdate({
+        ...pullRequest,
+        action: 'opened',
+      } as EmitterWebhookEvent<'pull_request'>['payload']);
     }
 
     return deferredReply.edit('Successfully backfilled pull requests');
