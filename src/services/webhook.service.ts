@@ -191,6 +191,7 @@ export class WebhookService {
       }
 
       await this.handlePayment(event, orgSlug);
+      response.status(202).send('');
     } catch (error) {
       if (error instanceof WebhookVerificationError) {
         response.status(403).send('');
