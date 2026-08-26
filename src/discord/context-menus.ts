@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { ApplicationCommandType, MessageContextMenuCommandInteraction, MessageFlags } from 'discord.js';
 import { ContextMenu, Discord } from 'discordx';
-import { DiscordService } from 'src/services/discord.service';
+import { ChatService } from 'src/services/chat.service';
 
 @Discord()
 @Injectable()
 export class DiscordContextMenus {
-  constructor(private service: DiscordService) {}
+  constructor(private service: ChatService) {}
 
   @ContextMenu({ name: 'Find similar issues', type: ApplicationCommandType.Message })
   async handleFindSimilarIssues(interaction: MessageContextMenuCommandInteraction) {

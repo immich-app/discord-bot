@@ -3,9 +3,10 @@ import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
-import { DiscordService } from 'src/services/discord.service';
+import { ChatService } from 'src/services/chat.service';
 import { Mocked, describe, expect, it, vitest } from 'vitest';
 
 const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
@@ -82,6 +83,17 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getLatestPullRequestByNumber: vitest.fn(),
 });
 
+const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
+  init: vitest.fn(),
+  registerEventListener: vitest.fn() as any,
+  send: vitest.fn(),
+  reply: vitest.fn(),
+  updatePost: vitest.fn(),
+  createEmote: vitest.fn(),
+  streamChannels: vitest.fn(),
+  joinChannel: vitest.fn(),
+});
+
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
   getOrder: vitest.fn(),
 });
@@ -97,7 +109,7 @@ const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
 });
 
 describe('Bot test', () => {
-  let sut: DiscordService;
+  let sut: ChatService;
 
   let discordMock: Mocked<IDiscordInterface>;
   let fourthwallMock: Mocked<IFourthwallRepository>;
@@ -105,6 +117,7 @@ describe('Bot test', () => {
   let loopDedupeMock: Mocked<ILoopDedupeInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
+  let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
 
   beforeEach(() => {
@@ -114,15 +127,17 @@ describe('Bot test', () => {
     loopDedupeMock = newLoopDedupeMockRepository();
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
+    mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
 
-    sut = new DiscordService(
+    sut = new ChatService(
       databaseMock,
       discordMock,
       fourthwallMock,
       githubMock,
       loopDedupeMock,
       outlineMock,
+      mattermostMock,
       zulipMock,
     );
   });

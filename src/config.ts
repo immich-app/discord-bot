@@ -21,6 +21,8 @@ export const getConfig = () => {
   const fourthwallWebhookSlug = process.env.FOURTHWALL_SLUG;
   const outlineApiKey = process.env.OUTLINE_API_KEY;
   const loopDedupeApiKey = process.env.LOOPDEDUPE_SEARCH_API_KEY;
+  const mattermostDomain = process.env.MATTERMOST_DOMAIN;
+  const mattermostBotToken = process.env.MATTERMOST_BOT_TOKEN;
 
   if (
     !databaseUri ||
@@ -38,7 +40,9 @@ export const getConfig = () => {
     !outlineApiKey ||
     !loopDedupeApiKey ||
     !polarWebhookImmichClientSecret ||
-    !polarWebhookImmichServerSecret
+    !polarWebhookImmichServerSecret ||
+    !mattermostDomain ||
+    !mattermostBotToken
   ) {
     console.log({
       databaseUri,
@@ -57,6 +61,8 @@ export const getConfig = () => {
       loopDedupeApiKey,
       polarWebhookImmichClientSecret,
       polarWebhookImmichServerSecret,
+      mattermostDomain,
+      mattermostBotToken,
     });
     throw new Error('Missing required environment variables');
   }
@@ -95,6 +101,10 @@ export const getConfig = () => {
         apiKey: zulipUserApiKey,
       },
       realm: zulipDomain,
+    },
+    mattermost: {
+      domain: mattermostDomain,
+      botToken: mattermostBotToken,
     },
     fourthwall: {
       user: fourthwallUser,

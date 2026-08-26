@@ -114,6 +114,14 @@ const outlineDocuments = {
   YuccaFocusTopic: 'ad2e16ee-094e-4f29-bfd4-cbf6b2f20f66',
 };
 
+const mattermostChannels = {
+  Purchases: 'g13ys4ikht8cmdg8rnsrq4rm7a',
+};
+
+const mattermostTeams = {
+  Immich: 'bnkhcrxqz7dfupj5pb66ktu3oe',
+};
+
 export const Constants = {
   Urls: {
     Docs: docs,
@@ -137,6 +145,10 @@ export const Constants = {
   Outline: {
     Collections: outlineCollections,
     Documents: outlineDocuments,
+  },
+  Mattermost: {
+    Channels: mattermostChannels,
+    Teams: mattermostTeams,
   },
   Zulip: {
     Streams: { Immich: 54, FUTOStaff: 2 },

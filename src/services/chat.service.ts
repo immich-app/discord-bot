@@ -1,3 +1,4 @@
+import { WebSocketEvents } from '@mattermost/client';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { CommandInteraction, GuildMember, Message, OmitPartialGroupDMChannel, SendableChannels } from 'discord.js';
@@ -11,6 +12,7 @@ import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interf
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
+import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink, shorten } from 'src/util';
@@ -69,8 +71,8 @@ const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
 @Injectable()
-export class DiscordService {
-  private logger = new Logger(DiscordService.name);
+export class ChatService {
+  private logger = new Logger(ChatService.name);
 
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
@@ -79,6 +81,7 @@ export class DiscordService {
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(ILoopDedupeInterface) private loopDedupe: ILoopDedupeInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
+    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -90,6 +93,30 @@ export class DiscordService {
 
     if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {
       await this.zulip.init(zulip);
+    }
+
+    await this.mattermost.init();
+    this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
+  }
+
+  async onMattermostPosted(msg: MattermostEventMessage<WebSocketEvents.Posted>) {
+    const post = JSON.parse(msg.data.post) as Post;
+
+    if (post.props.from_bot === 'true') {
+      return;
+    }
+
+    const messageParts = await this.handleGithubReferences({ content: post.message }, true);
+
+    if (messageParts.length !== 0) {
+      await this.mattermost.updatePost({
+        message: `${post.message}
+
+---
+
+${messageParts.join('\n')}`,
+        postId: post.id,
+      });
     }
   }
 
@@ -280,7 +307,7 @@ export class DiscordService {
   }
 
   async handleGithubReferences(
-    { content, channelParentId }: { content: string; channelParentId: string | null },
+    { content, channelParentId }: { content: string; channelParentId?: string | null },
     isPrivileged: boolean,
   ) {
     const codeSnippets = await this.handleGithubFileReferences(content, isPrivileged);
@@ -329,7 +356,11 @@ export class DiscordService {
         repo: repo || repoPage || latestPr?.repository || GithubRepo.Immich,
         type: latestPr ? 'pull' : (category as LinkType),
         discordThreadId:
-          channelParentId === Constants.Discord.Categories.Team ? (latestPr?.discordThreadId ?? undefined) : undefined,
+          channelParentId === undefined
+            ? undefined
+            : channelParentId === Constants.Discord.Categories.Team
+              ? (latestPr?.discordThreadId ?? undefined)
+              : undefined,
       });
     }
 
@@ -631,6 +662,7 @@ ${formattedCode}
     for (const emote of await this.discord.getEmotes(interaction.guildId)) {
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
       await this.zulip.createEmote(emote.name ?? emote.identifier, url);
+      await this.mattermost.createEmote(emote.name ?? emote.identifier, url);
     }
 
     await deferredInteraction.edit('Done syncing');
