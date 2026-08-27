@@ -3,7 +3,7 @@ import { MessageFlags, ThreadChannel } from 'discord.js';
 import { ArgsOf, Discord, On, Once, RestArgsOf } from 'discordx';
 import _ from 'lodash';
 import { Constants } from 'src/constants';
-import { DiscordService } from 'src/services/discord.service';
+import { ChatService } from 'src/services/chat.service';
 
 const shorten = (message: string | null) => {
   if (!message) {
@@ -18,7 +18,7 @@ const shorten = (message: string | null) => {
 export class DiscordEvents {
   private logger = new Logger(DiscordEvents.name);
 
-  constructor(private service: DiscordService) {}
+  constructor(private service: ChatService) {}
 
   @On.rest({ event: 'restDebug' })
   onDebug([message]: RestArgsOf<'restDebug'>) {

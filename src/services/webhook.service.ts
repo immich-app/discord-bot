@@ -18,6 +18,7 @@ import {
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
@@ -62,6 +63,7 @@ export class WebhookService {
     @Inject(IFourthwallRepository) private fourthwall: FourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
+    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -381,6 +383,19 @@ export class WebhookService {
         ],
         flags: [MessageFlags.SuppressNotifications],
       },
+    });
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: `Immich ${licenseType} product key purchased! \n Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`,
+      // TODO beautify
+      // props: {
+      //   mm_blocks: [
+      //     {
+      //       type: 'text',
+      //       text: `[${source === 'stripe' ? 'Stripe Payments' : 'Polar payments'}](${source === 'stripe' ? 'https://stripe.com' : 'https://polar.sh'})`,
+      //     },
+      //   ],
+      // },
     });
   }
 

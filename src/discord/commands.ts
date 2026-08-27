@@ -20,7 +20,7 @@ import {
 import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
-import { DiscordService } from 'src/services/discord.service';
+import { ChatService } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
@@ -48,7 +48,7 @@ const authGuard = async (interaction: CommandInteraction) => {
 @Injectable()
 export class DiscordCommands {
   constructor(
-    private service: DiscordService,
+    private service: ChatService,
     private rssService: RSSService,
     private scheduledMessageService: ScheduledMessageService,
     private githubService: GithubService,
