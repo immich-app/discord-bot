@@ -386,7 +386,7 @@ export class WebhookService {
     });
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
-      message: `Immich ${licenseType} product key purchased! \n Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`,
+      message: `Immich ${licenseType} product key purchased! \nPrice: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`,
       // TODO beautify
       // props: {
       //   mm_blocks: [
