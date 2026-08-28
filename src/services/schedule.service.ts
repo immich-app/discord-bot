@@ -143,6 +143,8 @@ export class ScheduleService {
       text: `
 ---
 
+title: ${endOfMonth.monthLong} recap
+
 description: A recap of ${endOfMonth.monthLong}, ${endOfMonth.year}, including an update on upcoming features, releases, developer updates, and more.
 
 publishedAt: ${endOfMonth.toFormat('yyyy-LL-dd')}
