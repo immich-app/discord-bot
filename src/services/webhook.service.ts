@@ -657,25 +657,39 @@ export class WebhookService {
       return;
     }
 
+    const version = semver.parse(release.tag_name);
+
+    if (!version) {
+      return;
+    }
+
     // we only want this for minor bumps
-    if (semver.minor(release.tag_name) === 0 || semver.patch(release.tag_name) !== 0) {
+    if (version.minor === 0 || version.patch !== 0) {
+      return;
+    }
+
+    const [releaseVersion] = version.format().split('-', 1);
+
+    const existingDocuments = await this.outline.searchDocuments({ title: releaseVersion });
+    // TODO remove filter once new version of outline gets released (>1.9.2) with search filters support
+    if (existingDocuments.filter((document) => document.title === releaseVersion).length > 0) {
       return;
     }
 
     const response = await this.outline.createDocument({
       collectionId: Constants.Outline.Collections.SupportCrew,
       parentDocumentId: Constants.Outline.Documents.SupportCrewReleaseNotes,
-      title: release.tag_name,
+      title: releaseVersion,
       icon: 'rocket',
       iconColor: '#00D084',
       text: `
 ---
 
-description: Release notes for ${release.tag_name} – TODO
+description: Release notes for ${releaseVersion} – TODO
 
 publishedAt: ${DateTime.now().toFormat('yyyy-LL-dd')}
 
-slug: ${release.tag_name}-release
+slug: ${releaseVersion}-release
 
 type: release
 
@@ -683,7 +697,7 @@ authors: [Immich Team]
 
 ---
 
-Welcome to Immich \`${release.tag_name}\`!
+Welcome to Immich \`${releaseVersion}\`!
 
 This release ...
 
@@ -694,7 +708,7 @@ ${release.body}
     const share = await this.outline.shareDocument(response.id);
 
     await this.discord.createThread(Constants.Discord.Channels.SupportCrewDraftAnnouncements, {
-      name: release.tag_name,
+      name: releaseVersion,
       message: `
 ${roleMention(Constants.Discord.Roles.SupportCrew)} ${roleMention(Constants.Discord.Roles.Contributor)} ${roleMention(Constants.Discord.Roles.Immich)} Release time!
 
