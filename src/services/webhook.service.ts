@@ -668,7 +668,7 @@ export class WebhookService {
       return;
     }
 
-    const [releaseVersion] = version.format().split('-', 1);
+    const releaseVersion = `v${version.format().split('-', 1)[0]}`;
 
     const existingDocuments = await this.outline.searchDocuments({ title: releaseVersion });
     // TODO remove filter once new version of outline gets released (>1.9.2) with search filters support
