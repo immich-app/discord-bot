@@ -47,6 +47,7 @@ const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
   addToDocument: vitest.fn(),
   createDocument: vitest.fn(),
   shareDocument: vitest.fn(),
+  searchDocuments: vitest.fn(),
 });
 
 const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
