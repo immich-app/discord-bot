@@ -115,11 +115,11 @@ const outlineDocuments = {
 };
 
 const mattermostChannels = {
-  Purchases: 'g13ys4ikht8cmdg8rnsrq4rm7a',
+  Purchases: 'ijh1ciffcp8fdyy4y5snxnornr',
 };
 
 const mattermostTeams = {
-  Immich: 'bnkhcrxqz7dfupj5pb66ktu3oe',
+  Immich: 'ejumard7n7budjfeayghjrr3or',
 };
 
 export const Constants = {
