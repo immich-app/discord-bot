@@ -13,9 +13,10 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { Discord, ModalComponent } from 'discordx';
-import { DiscordModal } from 'src/constants';
+import { Constants, DiscordModal } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { NewScheduledMessage } from 'src/schema';
 import { shorten } from 'src/util';
 
@@ -28,6 +29,7 @@ export class ScheduledMessageService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
+    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
   ) {}
 
   async init() {
@@ -35,6 +37,59 @@ export class ScheduledMessageService {
     for (const message of messages) {
       this.registerJob(message);
     }
+
+    await this.mattermost.registerCommand(
+      {
+        trigger: 'schedule-add',
+        display_name: 'Schedule add',
+        description: 'Create a recurring scheduled message',
+        auto_complete: true,
+        auto_complete_desc: 'cron is a regular cron expression. The message may include role mentions and markdown.',
+        team_id: Constants.Mattermost.Teams.Immich,
+        parameters: [
+          { name: 'name', type: 'text', optional: false },
+          { name: 'cronExpression', type: 'text', optional: false },
+          { name: 'message', type: 'text', optional: false },
+          { name: 'channel', type: 'channelMention', optional: false },
+        ],
+      },
+      async ({ user_id, parameters: { name, cronExpression, message, channel } }) => {
+        try {
+          await this.createScheduledMessage({
+            name,
+            cronExpression,
+            message,
+            channelId: channel,
+            createdBy: user_id,
+            service: 'mattermost',
+          });
+          return {
+            response_type: 'in_channel',
+            text: `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ~${channel}`,
+          };
+        } catch (error) {
+          return { text: `Failed to create scheduled message: ${error}` };
+        }
+      },
+    );
+
+    await this.mattermost.registerCommand(
+      {
+        trigger: 'schedule-remove',
+        display_name: 'Schedule add',
+        description: 'Remove scheduled message',
+        auto_complete: true,
+        team_id: Constants.Mattermost.Teams.Immich,
+        parameters: [{ name: 'name', type: 'text', optional: false }],
+      },
+      async ({ parameters: { name } }) => {
+        const message = await this.removeScheduledMessage(name);
+        return {
+          response_type: 'in_channel',
+          text: message,
+        };
+      },
+    );
   }
 
   private registerJob({
@@ -43,21 +98,31 @@ export class ScheduledMessageService {
     channelId,
     message,
     suppressEmbeds,
+    service,
   }: {
     id: string;
     cronExpression: string;
     channelId: string;
     message: string;
     suppressEmbeds: boolean;
+    service: 'discord' | 'mattermost';
   }) {
     const job = CronJob.from({
       cronTime: cronExpression,
       onTick: async () => {
         try {
-          await this.discord.sendMessage({
-            channelId,
-            message: { content: message, flags: suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [] },
-          });
+          if (service === 'discord') {
+            await this.discord.sendMessage({
+              channelId,
+              message: { content: message, flags: suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [] },
+            });
+          } else {
+            await this.mattermost.send({
+              channelId,
+              message,
+              props: suppressEmbeds ? { remove_link_preview: 'true' } : undefined,
+            });
+          }
         } catch (error) {
           this.logger.error(`Failed to send scheduled message ${id}: ${error}`);
         }

@@ -18,7 +18,7 @@ import {
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
+import { CommandWebhookRequest, IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
@@ -210,6 +210,10 @@ export class WebhookService {
     }
 
     void this.handleFourthwallOrder(dto);
+  }
+
+  async onMattermostCommand(dto: CommandWebhookRequest<never>, slug: string) {
+    return this.mattermost.runCommand(slug, dto);
   }
 
   private async handleFourthwallOrder(dto: FourthwallOrderCreateWebhook | FourthwallOrderUpdateWebhook) {

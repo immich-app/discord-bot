@@ -93,6 +93,8 @@ const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
   createEmote: vitest.fn(),
   streamChannels: vitest.fn(),
   joinChannel: vitest.fn(),
+  registerCommand: vitest.fn() as any,
+  runCommand: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({

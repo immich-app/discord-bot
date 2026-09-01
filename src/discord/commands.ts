@@ -553,6 +553,7 @@ export class DiscordCommands {
         message,
         channelId,
         createdBy: interaction.user.id,
+        service: 'discord',
       });
 
       return interaction.reply(
