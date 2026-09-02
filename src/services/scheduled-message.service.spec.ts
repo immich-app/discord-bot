@@ -1,5 +1,6 @@
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { ScheduledMessage } from 'src/schema';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { Mocked, beforeEach, describe, expect, it, vitest } from 'vitest';
@@ -26,6 +27,19 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   updateThread: vitest.fn(),
 });
 
+const newMattermostMock = (): Mocked<IMattermostInterface> => ({
+  createEmote: vitest.fn(),
+  init: vitest.fn(),
+  joinChannel: vitest.fn(),
+  registerCommand: vitest.fn() as any,
+  registerEventListener: vitest.fn() as any,
+  reply: vitest.fn(),
+  runCommand: vitest.fn(),
+  send: vitest.fn(),
+  streamChannels: vitest.fn(),
+  updatePost: vitest.fn(),
+});
+
 const makeScheduledMessage = (overrides: Partial<ScheduledMessage> = {}): ScheduledMessage => ({
   id: 'msg-1',
   name: 'test-message',
@@ -35,6 +49,7 @@ const makeScheduledMessage = (overrides: Partial<ScheduledMessage> = {}): Schedu
   cronExpression: '0 9 * * 1',
   createdBy: 'user-1',
   createdAt: new Date(),
+  service: 'discord',
   ...overrides,
 });
 
@@ -42,11 +57,13 @@ describe('ScheduledMessageService', () => {
   let sut: ScheduledMessageService;
   let databaseMock: ReturnType<typeof newDatabaseMock>;
   let discordMock: Mocked<IDiscordInterface>;
+  let mattermostMock: Mocked<IMattermostInterface>;
 
   beforeEach(() => {
     databaseMock = newDatabaseMock();
     discordMock = newDiscordMock();
-    sut = new ScheduledMessageService(databaseMock as unknown as IDatabaseRepository, discordMock);
+    mattermostMock = newMattermostMock();
+    sut = new ScheduledMessageService(databaseMock as unknown as IDatabaseRepository, discordMock, mattermostMock);
   });
 
   describe('onModuleInit', () => {
@@ -71,7 +88,8 @@ describe('ScheduledMessageService', () => {
         message: 'test',
         cronExpression: 'not a cron',
         createdBy: 'user-1',
-      };
+        service: 'discord',
+      } as const;
 
       await expect(sut.createScheduledMessage(entity)).rejects.toThrow();
       expect(databaseMock.createScheduledMessage).not.toHaveBeenCalled();
@@ -84,7 +102,8 @@ describe('ScheduledMessageService', () => {
         message: 'Hello!',
         cronExpression: '0 9 * * 1',
         createdBy: 'user-1',
-      };
+        service: 'discord',
+      } as const;
       const created = makeScheduledMessage({ id: 'new-1', ...entity });
       databaseMock.createScheduledMessage.mockResolvedValue(created);
 

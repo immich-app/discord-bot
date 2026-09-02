@@ -23,6 +23,9 @@ export class ScheduledMessageTable {
   @Column({ unique: true })
   name!: string;
 
+  @Column({ default: 'discord' })
+  service!: 'discord' | 'mattermost';
+
   @CreateDateColumn()
   createdAt!: Generated<Date>;
 }
