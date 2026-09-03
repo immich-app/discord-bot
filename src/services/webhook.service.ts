@@ -300,6 +300,20 @@ export class WebhookService {
         flags: [MessageFlags.SuppressNotifications],
       },
     });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'} \nPrice: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
+      // TODO beautify
+      // props: {
+      //   mm_blocks: [
+      //     {
+      //       type: 'text',
+      //       text: ...
+      //     },
+      //   ],
+      // },
+    });
   }
 
   private async handlePayment(
