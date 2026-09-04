@@ -32,6 +32,7 @@ export class MattermostRepository implements IMattermostInterface {
 
     const wsClient = new WebSocketClient();
     wsClient.initialize(this.#client.getWebSocketUrl(), mattermost.botToken);
+    wsClient.addMissedMessageListener(() => {});
     this.#wsClient = wsClient;
   }
 
