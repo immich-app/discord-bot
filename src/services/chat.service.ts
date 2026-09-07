@@ -742,7 +742,7 @@ ${formattedCode}
   }
 
   private async suppressMattermostEmbeds(post: Post) {
-    if (post.metadata.embeds.length === 0 || post.props.remove_link_preview === 'true') {
+    if (!post.metadata?.embeds || post.metadata.embeds.length === 0 || post.props.remove_link_preview === 'true') {
       return;
     }
 
