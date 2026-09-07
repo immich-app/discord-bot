@@ -5,6 +5,7 @@ import { DateTime } from 'luxon';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { getTotal, makeLicenseFields, makeOrderFields } from 'src/util';
 
@@ -14,6 +15,7 @@ export class ScheduleService {
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
+    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
   ) {}
 
   @Cron(Constants.Cron.DailyReport)
@@ -44,6 +46,77 @@ export class ScheduleService {
             .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
             .setColor(Colors.DarkPurple)
             .setFields(makeOrderFields({ revenue, profit })),
+        ],
+      },
+    });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: `#${Colors.Purple.toString(16)}`,
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: `Daily product keys report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`,
+              },
+              { type: 'text', text: `Total: ${getTotal({ server, client })}` },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: `#${Colors.DarkPurple.toString(16)}`,
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: `Daily orders report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`,
+              },
+              {
+                type: 'text',
+                text: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
+              },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeOrderFields({ revenue, profit }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
         ],
       },
     });
@@ -85,6 +158,77 @@ export class ScheduleService {
         ],
       },
     });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: `#${Colors.Purple.toString(16)}`,
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: `Weekly licenses report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
+              },
+              { type: 'text', text: `Total: ${getTotal({ server, client })}` },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: `#${Colors.DarkPurple.toString(16)}`,
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: `Weekly orders report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
+              },
+              {
+                type: 'text',
+                text: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
+              },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeOrderFields({ revenue, profit }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
+        ],
+      },
+    });
   }
 
   @Cron(Constants.Cron.MonthlyReport)
@@ -120,6 +264,77 @@ export class ScheduleService {
             .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
             .setColor(Colors.DarkPurple)
             .setFields(makeOrderFields({ revenue, profit })),
+        ],
+      },
+    });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: `#${Colors.Purple.toString(16)}`,
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: `Monthly licenses report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
+              },
+              { type: 'text', text: `Total: ${getTotal({ server, client })}` },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await this.mattermost.send({
+      channelId: Constants.Mattermost.Channels.Purchases,
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: `#${Colors.DarkPurple.toString(16)}`,
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: `Monthly orders report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
+              },
+              {
+                type: 'text',
+                text: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
+              },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeOrderFields({ revenue, profit }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
         ],
       },
     });

@@ -22,7 +22,7 @@ import { CommandWebhookRequest, IMattermostInterface } from 'src/interfaces/matt
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
-import { makeLicenseFields, makeOrderFields, shorten, withErrorLogging } from 'src/util';
+import { asHexColor, makeLicenseFields, makeOrderFields, shorten, withErrorLogging } from 'src/util';
 
 const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dto is GithubStatusIncident => {
   return !!(dto as GithubStatusIncident).incident;
@@ -160,6 +160,34 @@ export class WebhookService {
       }
 
       await this.discord.sendMessage({ channelId: DiscordChannel.GithubStatus, message: { embeds: [embed] } });
+      await this.mattermost.send({
+        channelId: Constants.Mattermost.Channels.GithubStatus,
+        message: '',
+        props: {
+          mm_blocks: [
+            {
+              type: 'container',
+              accent_color: embed.data.color ? asHexColor(embed.data.color) : undefined,
+              border: true,
+              gap: 'small',
+              content: [
+                {
+                  type: 'text',
+                  text: '[GitHub Status](https://githubstatus.com)',
+                  is_subtle: true,
+                  size: 'small',
+                },
+                {
+                  type: 'text',
+                  text: `#### [${dto.page.status_description}](${dto.incident.shortlink}))`,
+                },
+                { type: 'text', text: `**${dto.incident.name}**` },
+                { type: 'text', text: dto.incident.incident_updates[0].body.replaceAll('<br />', '\n') },
+              ],
+            },
+          ],
+        },
+      });
     }
   }
 
@@ -303,16 +331,47 @@ export class WebhookService {
 
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
-      message: `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'} \nPrice: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
-      // TODO beautify
-      // props: {
-      //   mm_blocks: [
-      //     {
-      //       type: 'text',
-      //       text: ...
-      //     },
-      //   ],
-      // },
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: asHexColor(
+              dto.testMode ? Colors.Yellow : dtoOrder.status === 'CANCELLED' ? Colors.Red : Colors.DarkGreen,
+            ),
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text: '[Fourthwall](https://fourthwall.com)',
+                is_subtle: true,
+                size: 'small',
+              },
+              {
+                type: 'text',
+                text: `#### [${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id})`,
+              },
+              {
+                type: 'text',
+                text: `Price: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
+              },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeOrderFields({ revenue, profit, message: dtoOrder.message }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
+        ],
+      },
     });
   }
 
@@ -380,17 +439,18 @@ export class WebhookService {
     });
 
     const licenseType = description.split('-')[1];
+    const url =
+      source === 'stripe'
+        ? `https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`
+        : `https://polar.sh/dashboard/${orgSlug}/sales/${id}`;
+
     await this.discord.sendMessage({
       channelId: DiscordChannel.Purchases,
       message: {
         embeds: [
           new EmbedBuilder()
             .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
-            .setURL(
-              source === 'stripe'
-                ? `https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`
-                : `https://polar.sh/dashboard/${orgSlug}/sales/${id}`,
-            )
+            .setURL(url)
             .setAuthor({
               name: source === 'stripe' ? 'Stripe Payments' : 'Polar payments',
               url: source === 'stripe' ? 'https://stripe.com' : 'https://polar.sh',
@@ -404,16 +464,43 @@ export class WebhookService {
     });
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
-      message: `Immich ${licenseType} product key purchased! \nPrice: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`,
-      // TODO beautify
-      // props: {
-      //   mm_blocks: [
-      //     {
-      //       type: 'text',
-      //       text: `[${source === 'stripe' ? 'Stripe Payments' : 'Polar payments'}](${source === 'stripe' ? 'https://stripe.com' : 'https://polar.sh'})`,
-      //     },
-      //   ],
-      // },
+      message: '',
+      props: {
+        mm_blocks: [
+          {
+            type: 'container',
+            accent_color: asHexColor(livemode ? Colors.Green : Colors.Yellow),
+            border: true,
+            gap: 'small',
+            content: [
+              {
+                type: 'text',
+                text:
+                  source === 'stripe' ? '[Stripe payments](https://stripe.com)' : '[Polar Payments](https://polar.sh)',
+                is_subtle: true,
+                size: 'small',
+              },
+              {
+                type: 'text',
+                text: `#### [${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased](${url}))`,
+              },
+              { type: 'text', text: `Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}` },
+              { type: 'divider' },
+              {
+                type: 'column_set',
+                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
+                  type: 'column',
+                  gap: 'small',
+                  items: [
+                    { type: 'text', text: `**${name}**` },
+                    { type: 'text', text: value },
+                  ],
+                })),
+              },
+            ],
+          },
+        ],
+      },
     });
   }
 
@@ -438,6 +525,51 @@ export class WebhookService {
     });
   }
 
+  private getReleaseMattermostBlock({
+    repositoryName,
+    name,
+    user,
+    url,
+    description,
+  }: {
+    repositoryName: string;
+    name: string;
+    user: NonNullable<EmitterWebhookEvent<'release'>['payload']['sender']>;
+    url: string;
+    description?: string;
+  }) {
+    return {
+      type: 'container',
+      border: true,
+      accent_color: undefined as string | undefined,
+      gap: 'small',
+      content: [
+        {
+          type: 'container',
+          gap: 'small',
+          flow: 'horizontal',
+          content: [
+            {
+              type: 'image',
+              url: user.avatar_url,
+              alt_text: `${user.login}'s avatar`,
+              size: 'small',
+              image_style: 'person',
+              horizontal_alignment: 'left',
+              max_width: 26,
+            },
+            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true, size: 'small' },
+          ],
+        },
+        {
+          type: 'text',
+          text: `#### [[${repositoryName}] New release: ${name}](${url})`,
+        },
+        description ? { type: 'text', text: shorten(description, 500) } : undefined,
+      ],
+    };
+  }
+
   private getEmbed({
     action,
     repositoryName,
@@ -453,15 +585,58 @@ export class WebhookService {
   }) {
     return new EmbedBuilder({
       title: `[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}`,
-      author: {
-        name: user.login,
-        url: user.html_url,
-        iconURL: user.avatar_url,
-      },
+      author: { name: user.login, url: user.html_url, iconURL: user.avatar_url },
       url: event.html_url,
       description:
         action === 'opened' || action === 'created' ? (event.body ? shorten(event.body, 500) : undefined) : undefined,
     });
+  }
+
+  private getMattermostBlock({
+    action,
+    repositoryName,
+    title,
+    user,
+    event,
+  }: {
+    action: string;
+    repositoryName: string;
+    title: string;
+    user: NonNullable<EmitterWebhookEvent<'pull_request'>['payload']['sender']>;
+    event: BaseEvent;
+  }) {
+    return {
+      type: 'container',
+      border: true,
+      accent_color: undefined as string | undefined,
+      gap: 'small',
+      content: [
+        {
+          type: 'container',
+          gap: 'small',
+          flow: 'horizontal',
+          content: [
+            {
+              type: 'image',
+              url: user.avatar_url,
+              alt_text: `${user.login}'s avatar`,
+              size: 'small',
+              image_style: 'person',
+              horizontal_alignment: 'left',
+              max_width: 26,
+            },
+            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true, size: 'small' },
+          ],
+        },
+        {
+          type: 'text',
+          text: `#### [[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}](${event.html_url})`,
+        },
+        (action === 'opened' || action === 'created') && event.body
+          ? { type: 'text', text: shorten(event.body, 500) }
+          : undefined,
+      ],
+    };
   }
 
   private getPrEmbedColor(dto: {
@@ -556,21 +731,30 @@ export class WebhookService {
       action === 'converted_to_draft' ||
       action === 'ready_for_review'
     ) {
-      const embed = this.getEmbed({
+      const embedProps = {
         action: getActionName(action, pull_request),
         repositoryName: repository.full_name,
         title: 'Pull request',
         user: sender,
         event: pull_request,
-      });
+      };
+      const embed = this.getEmbed(embedProps);
+      const mattermostBlock = this.getMattermostBlock(embedProps);
+
       const color = this.getPrEmbedColor({
         action,
         isDraft: pull_request.draft ?? false,
         isMerged: pull_request.merged,
       });
       embed.setColor(color);
+      mattermostBlock.accent_color = color ? asHexColor(Colors[color]) : undefined;
 
       await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
+      await this.mattermost.send({
+        channelId: Constants.Mattermost.Channels.GithubPullRequests,
+        message: '',
+        props: { mm_blocks: [mattermostBlock] },
+      });
     }
   }
 
@@ -581,16 +765,25 @@ export class WebhookService {
     issue,
   }: EmitterWebhookEvent<'issues' | 'issue_comment'>['payload']) {
     if (action === 'opened' || action === 'reopened' || action === 'closed') {
-      const embed = this.getEmbed({
+      const embedProps = {
         action,
         repositoryName: repository.full_name,
         title: 'Issue',
         user: sender,
         event: issue,
-      });
+      };
+      const embed = this.getEmbed(embedProps);
+      const mattermostBlock = this.getMattermostBlock(embedProps);
+
       embed.setColor(this.getIssueEmbedColor({ action }));
+      mattermostBlock.accent_color = asHexColor(Colors[this.getIssueEmbedColor({ action })]);
 
       await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+      await this.mattermost.send({
+        channelId: Constants.Mattermost.Channels.GithubPullRequests,
+        message: '',
+        props: { mm_blocks: [mattermostBlock] },
+      });
     }
   }
 
@@ -601,16 +794,25 @@ export class WebhookService {
     discussion,
   }: EmitterWebhookEvent<'discussion' | 'discussion_comment'>['payload']) {
     if (action === 'created' || action === 'reopened' || action === 'deleted' || action === 'answered') {
-      const embed = this.getEmbed({
+      const embedProps = {
         action,
         repositoryName: repository.full_name,
         title: 'Discussion',
         user: sender,
         event: discussion,
-      });
+      };
+      const embed = this.getEmbed(embedProps);
+      const mattermostBlock = this.getMattermostBlock(embedProps);
+
       embed.setColor(this.getDiscussionEmbedColor({ action }));
+      mattermostBlock.accent_color = asHexColor(Colors[this.getDiscussionEmbedColor({ action })]);
 
       await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
+      await this.mattermost.send({
+        channelId: Constants.Mattermost.Channels.GithubPullRequests,
+        message: '',
+        props: { mm_blocks: [mattermostBlock] },
+      });
     }
   }
 
@@ -638,6 +840,11 @@ export class WebhookService {
           embeds: [this.getReleaseEmbed(embedProps)],
         },
         crosspost: true,
+      }),
+      this.mattermost.send({
+        channelId: Constants.Mattermost.Channels.GithubReleases,
+        message: '',
+        props: { mm_blocks: [this.getReleaseMattermostBlock(embedProps)] },
       }),
     ];
 
