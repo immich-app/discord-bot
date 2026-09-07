@@ -179,7 +179,7 @@ export class WebhookService {
                 },
                 {
                   type: 'text',
-                  text: `#### [${dto.page.status_description}](${dto.incident.shortlink}))`,
+                  text: `#### [${dto.page.status_description}](${dto.incident.shortlink})`,
                 },
                 { type: 'text', text: `**${dto.incident.name}**` },
                 { type: 'text', text: dto.incident.incident_updates[0].body.replaceAll('<br />', '\n') },
@@ -482,7 +482,7 @@ export class WebhookService {
               },
               {
                 type: 'text',
-                text: `#### [${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased](${url}))`,
+                text: `#### [${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased](${url})`,
               },
               { type: 'text', text: `Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}` },
               { type: 'divider' },
