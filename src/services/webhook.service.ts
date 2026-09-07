@@ -179,7 +179,7 @@ export class WebhookService {
                 },
                 {
                   type: 'text',
-                  text: `#### [${dto.page.status_description}](${dto.incident.shortlink})`,
+                  text: `##### [${dto.page.status_description}](${dto.incident.shortlink})`,
                 },
                 { type: 'text', text: `**${dto.incident.name}**` },
                 { type: 'text', text: dto.incident.incident_updates[0].body.replaceAll('<br />', '\n') },
@@ -350,7 +350,7 @@ export class WebhookService {
               },
               {
                 type: 'text',
-                text: `#### [${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id})`,
+                text: `##### [${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id})`,
               },
               {
                 type: 'text',
@@ -482,7 +482,7 @@ export class WebhookService {
               },
               {
                 type: 'text',
-                text: `#### [${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased](${url})`,
+                text: `##### [${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased](${url})`,
               },
               { type: 'text', text: `Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}` },
               { type: 'divider' },
@@ -563,9 +563,9 @@ export class WebhookService {
         },
         {
           type: 'text',
-          text: `#### [[${repositoryName}] New release: ${name}](${url})`,
+          text: `##### [[${repositoryName}] New release: ${name}](${url})`,
         },
-        description ? { type: 'text', text: shorten(description, 500) } : undefined,
+        description ? { type: 'text', text: shorten(description, 500), size: 'small' } : undefined,
       ],
     };
   }
@@ -630,7 +630,8 @@ export class WebhookService {
         },
         {
           type: 'text',
-          text: `#### [[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}](${event.html_url})`,
+          text: `##### [[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}](${event.html_url})`,
+          size: 'small',
         },
         (action === 'opened' || action === 'created') && event.body
           ? { type: 'text', text: shorten(event.body, 500) }
@@ -780,7 +781,7 @@ export class WebhookService {
 
       await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
       await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubPullRequests,
+        channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions,
         message: '',
         props: { mm_blocks: [mattermostBlock] },
       });
@@ -809,7 +810,7 @@ export class WebhookService {
 
       await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
       await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubPullRequests,
+        channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions,
         message: '',
         props: { mm_blocks: [mattermostBlock] },
       });
