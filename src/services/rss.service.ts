@@ -87,7 +87,7 @@ export class RSSService {
             new EmbedBuilder()
               .setAuthor(feed.title ? { name: feed.title, iconURL: feed.profileImageUrl, url: url } : null)
               .setTitle(post.title ?? null)
-              .setDescription(post.summary ?? null)
+              .setDescription(post.summary ? shorten(post.summary, 4096) : null)
               .setTimestamp(post.pubDate ? new Date(post.pubDate) : null)
               .setURL(post.link ?? null),
           ],
