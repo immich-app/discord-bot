@@ -3,7 +3,7 @@ import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import { Request, Response } from 'express';
 import { GithubStatusComponent, GithubStatusIncident, StripeBase } from 'src/dtos/webhook.dto';
 import { FourthwallOrderCreateWebhook, FourthwallOrderUpdateWebhook } from 'src/interfaces/fourthwall.interface';
-import { CommandWebhookRequest } from 'src/interfaces/mattermost.interface';
+import { CommandWebhookRequest, DialogResponse } from 'src/interfaces/mattermost.interface';
 import { WebhookService } from 'src/services/webhook.service';
 
 @Injectable()
@@ -53,5 +53,11 @@ export class WebhookController {
   @HttpCode(200)
   async onMattermostCommand(@Body() dto: CommandWebhookRequest<never>, @Param('slug') slug: string) {
     return this.service.onMattermostCommand(dto, slug);
+  }
+
+  @Post('mattermost/dialog/:slug')
+  @HttpCode(200)
+  async onMattermostDialog(@Body() dto: DialogResponse, @Param('slug') slug: string) {
+    return this.service.onMattermostDialog(dto, slug);
   }
 }

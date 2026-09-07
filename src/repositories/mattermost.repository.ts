@@ -5,6 +5,9 @@ import {
   CommandCreate,
   CommandParameters,
   CommandWebhookRequest,
+  Dialog,
+  DialogData,
+  DialogResponse,
   IMattermostInterface,
   MattermostEvents,
   Post,
@@ -22,6 +25,7 @@ export class MattermostRepository implements IMattermostInterface {
     string,
     { parameters?: CommandParameters; handler: (data: CommandWebhookRequest<never>) => unknown }
   > = {};
+  #modalHandlers: Record<string, (data: DialogResponse) => void> = {};
 
   constructor() {
     const { mattermost } = getConfig();
@@ -232,5 +236,38 @@ export class MattermostRepository implements IMattermostInterface {
 
   async joinChannel(channelId: string) {
     await this.#client.addToChannel(this.#user.id, channelId);
+  }
+
+  async openDialog<const T extends Dialog>(triggerId: string, dialog: T) {
+    const id = crypto.randomUUID();
+    const { promise, reject, resolve } = Promise.withResolvers<DialogData<T>>();
+
+    this.#modalHandlers[id] = (response) => {
+      if (response.cancelled) {
+        resolve({ cancelled: true });
+      } else {
+        resolve({ ...response.submission, cancelled: false, file_ids: response.file_ids } as DialogData<T>);
+      }
+    };
+
+    try {
+      await fetch(`${this.#client.getUrl()}/api/v4/actions/dialogs/open`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.#client.getToken()}` },
+        body: JSON.stringify({
+          url: `https://discord-webhooks.immich.cloud/webhooks/mattermost/dialog/${id}`,
+          trigger_id: triggerId,
+          dialog: { ...dialog, notify_on_cancel: true },
+        }),
+      });
+    } catch (error) {
+      reject(error);
+    }
+
+    return promise;
+  }
+
+  submitDialog(dto: DialogResponse, slug: string) {
+    this.#modalHandlers[slug](dto);
   }
 }

@@ -214,12 +214,21 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
-  getScheduledMessages(): Promise<ScheduledMessage[]> {
-    return this.db.selectFrom('scheduled_message').selectAll().execute();
+  getScheduledMessages(service?: 'discord' | 'mattermost'): Promise<ScheduledMessage[]> {
+    return this.db
+      .selectFrom('scheduled_message')
+      .selectAll()
+      .$if(service !== undefined, (qb) => qb.where('service', '=', service!))
+      .execute();
   }
 
-  getScheduledMessage(name: string): Promise<ScheduledMessage | undefined> {
-    return this.db.selectFrom('scheduled_message').where('name', '=', name).selectAll().executeTakeFirst();
+  getScheduledMessage(name: string, service: 'discord' | 'mattermost'): Promise<ScheduledMessage | undefined> {
+    return this.db
+      .selectFrom('scheduled_message')
+      .where('name', '=', name)
+      .where('service', '=', service)
+      .selectAll()
+      .executeTakeFirst();
   }
 
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage> {
