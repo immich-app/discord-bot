@@ -42,7 +42,7 @@ export interface IMattermostInterface {
   registerEventListener: <T extends MattermostEvents>(event: T, listener: MattermostEventListener<T>) => void;
   send: (post: { channelId: string; message: string; props?: Record<string, unknown> }) => Promise<void>;
   reply: (reply: { channelId: string; rootId: string; message: string }) => Promise<void>;
-  updatePost: (post: { postId: string; message: string }) => Promise<void>;
+  updatePost: (post: Partial<Post> & { id: string }) => Promise<void>;
   createEmote: (name: string, emoteUrl: string) => Promise<void>;
   streamChannels: (
     teamId?: string,
