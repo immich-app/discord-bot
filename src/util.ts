@@ -36,13 +36,13 @@ export const getTotal = ({ server, client }: { server: number; client: number })
 export const makeLicenseFields = ({ server, client }: { server: number; client: number }) => {
   return [
     {
-      name: 'Server licenses',
-      value: `$${(server * 100).toLocaleString()} - ${server.toLocaleString()} licenses`,
+      name: 'Server keys',
+      value: `$${(server * 100).toLocaleString()} - ${server.toLocaleString()} keys`,
       inline: true,
     },
     {
-      name: 'Client licenses',
-      value: `$${(client * 25).toLocaleString()} - ${client.toLocaleString()} licenses`,
+      name: 'Client keys',
+      value: `$${(client * 25).toLocaleString()} - ${client.toLocaleString()} keys`,
       inline: true,
     },
   ];
@@ -86,3 +86,5 @@ export const makeIssueOrPRMessage = (dto: { type: string; title: string; link: s
 
   return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
 };
+
+export const asHexColor = (color: number) => `#${color.toString(16)}`;

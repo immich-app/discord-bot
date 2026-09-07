@@ -116,6 +116,11 @@ const outlineDocuments = {
 
 const mattermostChannels = {
   Purchases: 'ijh1ciffcp8fdyy4y5snxnornr',
+  BotSpam: 'xqjc3tfr5jbidni4awi1ibkdcw',
+  GithubStatus: '4ht6ooks83n3fq8t8kijbnyeww',
+  GithubIssuesAndDiscussions: 'zpn38kj84pyg3bmbj7d66kdnge',
+  GithubPullRequests: 'i1fbjrqj67n1ibx4f6isuioguc',
+  GithubReleases: '97d9ihrnb3rwbcoob6erhdfrcr',
 };
 
 const mattermostTeams = {
