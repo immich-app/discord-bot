@@ -7,6 +7,7 @@ import {
   CommandWebhookRequest,
   IMattermostInterface,
   MattermostEvents,
+  Post,
   UserProfile,
   type MattermostEventListener,
 } from 'src/interfaces/mattermost.interface';
@@ -182,8 +183,8 @@ export class MattermostRepository implements IMattermostInterface {
     await this.#client.createPost({ channel_id: channelId, root_id: rootId, message });
   }
 
-  async updatePost({ postId, message }: { postId: string; message: string }) {
-    await this.#client.patchPost({ id: postId, message, props: { remove_link_preview: 'true' } });
+  async updatePost(post: Partial<Post> & { id: string }) {
+    await this.#client.patchPost(post);
   }
 
   async createEmote(name: string, emoteUrl: string) {

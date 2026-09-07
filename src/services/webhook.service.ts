@@ -558,7 +558,7 @@ export class WebhookService {
               horizontal_alignment: 'left',
               max_width: 26,
             },
-            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true, size: 'small' },
+            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true },
           ],
         },
         {
@@ -625,7 +625,7 @@ export class WebhookService {
               horizontal_alignment: 'left',
               max_width: 26,
             },
-            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true, size: 'small' },
+            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true },
           ],
         },
         {

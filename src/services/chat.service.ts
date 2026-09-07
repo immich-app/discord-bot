@@ -97,6 +97,7 @@ export class ChatService {
 
     await this.mattermost.init();
     this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
+    this.mattermost.registerEventListener(WebSocketEvents.PostEdited, (msg) => this.onMattermostEdited(msg));
   }
 
   async onMattermostPosted(msg: MattermostEventMessage<WebSocketEvents.Posted>) {
@@ -115,9 +116,16 @@ export class ChatService {
 ---
 
 ${messageParts.join('\n')}`,
-        postId: post.id,
+        id: post.id,
+        props: { remove_link_preview: 'true' },
       });
     }
+    await this.suppressMattermostEmbeds(post);
+  }
+
+  async onMattermostEdited(msg: MattermostEventMessage<WebSocketEvents.PostEdited>) {
+    const post = JSON.parse(msg.data.post) as Post;
+    await this.suppressMattermostEmbeds(post);
   }
 
   @Cron(Constants.Cron.ImmichBirthday)
@@ -731,5 +739,15 @@ ${formattedCode}
       shipping: order.currentAmounts.shipping.value,
       tax: order.currentAmounts.tax.value,
     });
+  }
+
+  private async suppressMattermostEmbeds(post: Post) {
+    if (post.metadata.embeds.length === 0 || post.props.remove_link_preview === 'true') {
+      return;
+    }
+
+    if (this.hasBlacklistUrl(post.metadata.embeds.map(({ url }) => url))) {
+      await this.mattermost.updatePost({ id: post.id, props: { remove_link_preview: 'true' } });
+    }
   }
 }
