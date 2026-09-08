@@ -70,6 +70,16 @@ const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
+const defaultGithubOrg = {
+  [Constants.Mattermost.Teams.Immich]: GithubOrg.ImmichApp,
+  [Constants.Mattermost.Teams.FHS]: GithubOrg.FUTO,
+};
+
+const defaultGithubRepo = {
+  [Constants.Mattermost.Teams.Immich]: GithubRepo.Immich,
+  [Constants.Mattermost.Teams.FHS]: GithubRepo.FHSCore,
+};
+
 @Injectable()
 export class ChatService {
   private logger = new Logger(ChatService.name);
@@ -107,7 +117,10 @@ export class ChatService {
       return;
     }
 
-    const messageParts = await this.handleGithubReferences({ content: post.message }, true);
+    const messageParts = await this.handleGithubReferences(
+      { content: post.message, teamId: msg.broadcast.team_id },
+      true,
+    );
 
     if (messageParts.length !== 0) {
       await this.mattermost.updatePost({
@@ -315,11 +328,11 @@ ${messageParts.join('\n')}`,
   }
 
   async handleGithubReferences(
-    { content, channelParentId }: { content: string; channelParentId?: string | null },
+    { content, channelParentId, teamId }: { content: string; channelParentId?: string | null; teamId?: string },
     isPrivileged: boolean,
   ) {
     const codeSnippets = await this.handleGithubFileReferences(content, isPrivileged);
-    const links = await this.handleGithubThreadReferences({ content, channelParentId }, isPrivileged);
+    const links = await this.handleGithubThreadReferences({ content, channelParentId, teamId }, isPrivileged);
 
     return [...codeSnippets, ...links].filter((e) => e !== undefined);
   }
@@ -328,9 +341,11 @@ ${messageParts.join('\n')}`,
     {
       content,
       channelParentId,
+      teamId,
     }: {
       content: string;
       channelParentId?: string | null;
+      teamId?: string;
     },
     isPrivileged: boolean,
   ) {
@@ -360,8 +375,8 @@ ${messageParts.join('\n')}`,
 
       links.push({
         id,
-        org: org || orgPage || latestPr?.organization || GithubOrg.ImmichApp,
-        repo: repo || repoPage || latestPr?.repository || GithubRepo.Immich,
+        org: org || orgPage || latestPr?.organization || (teamId ? defaultGithubOrg[teamId] : GithubOrg.ImmichApp),
+        repo: repo || repoPage || latestPr?.repository || (teamId ? defaultGithubRepo[teamId] : GithubRepo.Immich),
         type: latestPr ? 'pull' : (category as LinkType),
         discordThreadId:
           channelParentId === undefined

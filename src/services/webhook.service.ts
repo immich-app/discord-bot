@@ -80,9 +80,10 @@ export class WebhookService {
       case 'pull_request_review_thread': {
         const { payload } = event;
         await this.upsertPullRequest(payload);
+        await this.handlePullRequestNotification(payload);
 
         if (!payload.repository.private) {
-          await Promise.all([this.handlePullRequestTeamUpdate(payload), this.handlePullRequestNotification(payload)]);
+          await this.handlePullRequestTeamUpdate(payload);
         }
         break;
       }
@@ -120,9 +121,7 @@ export class WebhookService {
 
       case 'release': {
         const { payload } = event;
-        if (!payload.repository.private) {
-          await Promise.all([this.handleReleaseNotification(payload), this.handleCreateReleaseNotes(payload)]);
-        }
+        await Promise.all([this.handleReleaseNotification(payload), this.handleCreateReleaseNotes(payload)]);
         break;
       }
     }
@@ -751,13 +750,24 @@ export class WebhookService {
       embed.setColor(color);
       mattermostBlock.accent_color = color ? asHexColor(Colors[color]) : undefined;
 
-      await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
-      await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubPullRequests,
-        message: '',
-        silent: true,
-        props: { mm_blocks: [mattermostBlock] },
-      });
+      if (repository.owner.login === GithubOrg.ImmichApp) {
+        if (!repository.private) {
+          await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
+        }
+        await this.mattermost.send({
+          channelId: Constants.Mattermost.Channels.GithubPullRequests,
+          message: '',
+          silent: true,
+          props: { mm_blocks: [mattermostBlock] },
+        });
+      } else if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
+        await this.mattermost.send({
+          channelId: Constants.Mattermost.Channels.FHSGithubPullRequests,
+          message: '',
+          silent: true,
+          props: { mm_blocks: [mattermostBlock] },
+        });
+      }
     }
   }
 
@@ -838,14 +848,28 @@ export class WebhookService {
       user: sender,
       description: isMainRepo(repository.full_name) ? _.sample(ReleaseMessages) : undefined,
     };
+
+    if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
+      await this.mattermost.send({
+        channelId: Constants.Mattermost.Channels.FHSGithubReleases,
+        message: '',
+        props: { mm_blocks: [this.getReleaseMattermostBlock(embedProps)] },
+      });
+      return;
+    }
+
     const messages = [
-      this.discord.sendMessage({
-        channelId: DiscordChannel.Releases,
-        message: {
-          embeds: [this.getReleaseEmbed(embedProps)],
-        },
-        crosspost: true,
-      }),
+      ...(repository.private
+        ? []
+        : [
+            this.discord.sendMessage({
+              channelId: DiscordChannel.Releases,
+              message: {
+                embeds: [this.getReleaseEmbed(embedProps)],
+              },
+              crosspost: true,
+            }),
+          ]),
       this.mattermost.send({
         channelId: Constants.Mattermost.Channels.GithubReleases,
         message: '',
