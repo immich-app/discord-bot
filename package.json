@@ -63,7 +63,7 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
-    "@octokit/graphql": "9.0.4",
+    "@octokit/graphql": "9.0.5",
     "@octokit/webhooks": "^14.2.0",
     "@swc/core": "^1.7.0",
     "@types/cors": "^2.8.17",
