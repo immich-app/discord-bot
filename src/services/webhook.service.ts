@@ -163,6 +163,7 @@ export class WebhookService {
       await this.mattermost.send({
         channelId: Constants.Mattermost.Channels.GithubStatus,
         message: '',
+        silent: true,
         props: {
           mm_blocks: [
             {
@@ -754,6 +755,7 @@ export class WebhookService {
       await this.mattermost.send({
         channelId: Constants.Mattermost.Channels.GithubPullRequests,
         message: '',
+        silent: true,
         props: { mm_blocks: [mattermostBlock] },
       });
     }
@@ -783,6 +785,7 @@ export class WebhookService {
       await this.mattermost.send({
         channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions,
         message: '',
+        silent: true,
         props: { mm_blocks: [mattermostBlock] },
       });
     }
@@ -812,6 +815,7 @@ export class WebhookService {
       await this.mattermost.send({
         channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions,
         message: '',
+        silent: true,
         props: { mm_blocks: [mattermostBlock] },
       });
     }
@@ -845,6 +849,7 @@ export class WebhookService {
       this.mattermost.send({
         channelId: Constants.Mattermost.Channels.GithubReleases,
         message: '',
+        silent: true,
         props: { mm_blocks: [this.getReleaseMattermostBlock(embedProps)] },
       }),
     ];

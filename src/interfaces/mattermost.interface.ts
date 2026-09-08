@@ -40,7 +40,12 @@ export type UserProfile = Awaited<ReturnType<Client4['getMe']>>;
 export interface IMattermostInterface {
   init: () => Promise<void>;
   registerEventListener: <T extends MattermostEvents>(event: T, listener: MattermostEventListener<T>) => void;
-  send: (post: { channelId: string; message: string; props?: Record<string, unknown> }) => Promise<void>;
+  send: (post: {
+    channelId: string;
+    message: string;
+    props?: Record<string, unknown>;
+    silent?: boolean;
+  }) => Promise<void>;
   reply: (reply: { channelId: string; rootId: string; message: string }) => Promise<void>;
   updatePost: (post: Partial<Post> & { id: string }) => Promise<void>;
   createEmote: (name: string, emoteUrl: string) => Promise<void>;
