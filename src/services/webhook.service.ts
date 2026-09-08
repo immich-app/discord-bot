@@ -309,25 +309,25 @@ export class WebhookService {
 
     const { revenue, profit } = await this.database.getTotalFourthwallOrders();
 
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}`,
-            )
-            .setURL(`https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id}`)
-            .setAuthor({ name: 'Fourthwall', url: 'https://fourthwall.com' })
-            .setDescription(
-              `Price: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
-            )
-            .setColor(dto.testMode ? Colors.Yellow : dtoOrder.status === 'CANCELLED' ? Colors.Red : Colors.DarkGreen)
-            .setFields(makeOrderFields({ revenue, profit, message: dtoOrder.message })),
-        ],
-        flags: [MessageFlags.SuppressNotifications],
-      },
-    });
+    // await this.discord.sendMessage({
+    //   channelId: DiscordChannel.Purchases,
+    //   message: {
+    //     embeds: [
+    //       new EmbedBuilder()
+    //         .setTitle(
+    //           `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}`,
+    //         )
+    //         .setURL(`https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id}`)
+    //         .setAuthor({ name: 'Fourthwall', url: 'https://fourthwall.com' })
+    //         .setDescription(
+    //           `Price: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
+    //         )
+    //         .setColor(dto.testMode ? Colors.Yellow : dtoOrder.status === 'CANCELLED' ? Colors.Red : Colors.DarkGreen)
+    //         .setFields(makeOrderFields({ revenue, profit, message: dtoOrder.message })),
+    //     ],
+    //     flags: [MessageFlags.SuppressNotifications],
+    //   },
+    // });
 
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
@@ -444,24 +444,24 @@ export class WebhookService {
         ? `https://dashboard.stripe.com/${livemode ? '' : 'test/'}payments/${id}`
         : `https://polar.sh/dashboard/${orgSlug}/sales/${id}`;
 
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
-            .setURL(url)
-            .setAuthor({
-              name: source === 'stripe' ? 'Stripe Payments' : 'Polar payments',
-              url: source === 'stripe' ? 'https://stripe.com' : 'https://polar.sh',
-            })
-            .setDescription(`Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`)
-            .setColor(livemode ? Colors.Green : Colors.Yellow)
-            .setFields(makeLicenseFields({ server, client })),
-        ],
-        flags: [MessageFlags.SuppressNotifications],
-      },
-    });
+    // await this.discord.sendMessage({
+    //   channelId: DiscordChannel.Purchases,
+    //   message: {
+    //     embeds: [
+    //       new EmbedBuilder()
+    //         .setTitle(`${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} license purchased`)
+    //         .setURL(url)
+    //         .setAuthor({
+    //           name: source === 'stripe' ? 'Stripe Payments' : 'Polar payments',
+    //           url: source === 'stripe' ? 'https://stripe.com' : 'https://polar.sh',
+    //         })
+    //         .setDescription(`Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`)
+    //         .setColor(livemode ? Colors.Green : Colors.Yellow)
+    //         .setFields(makeLicenseFields({ server, client })),
+    //     ],
+    //     flags: [MessageFlags.SuppressNotifications],
+    //   },
+    // });
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
       message: '',
