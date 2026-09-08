@@ -175,8 +175,21 @@ export class MattermostRepository implements IMattermostInterface {
     return handler({ ...data, parameters: parsedParameters });
   }
 
-  async send({ channelId, message, props }: { channelId: string; message: string; props?: Record<string, unknown> }) {
-    await this.#client.createPost({ channel_id: channelId, message, props });
+  async send({
+    channelId,
+    message,
+    props,
+    silent,
+  }: {
+    channelId: string;
+    message: string;
+    props?: Record<string, unknown>;
+    silent?: boolean;
+  }) {
+    await this.#client['doFetch'](`${this.#client.getPostsRoute()}?silent=${silent ?? false}`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_id: channelId, message, props } satisfies Parameters<Client4['createPost']>[0]),
+    });
   }
 
   async reply({ channelId, rootId, message }: { channelId: string; rootId: string; message: string }) {
