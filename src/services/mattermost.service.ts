@@ -15,5 +15,11 @@ export class MattermostService {
         await this.mattermost.joinChannel(channel.id);
       }
     }
+
+    for await (const channel of this.mattermost.streamChannels(Constants.Mattermost.Teams.FHS)) {
+      if (channel.create_at > DateTime.now().minus({ days: 1 }).toMillis()) {
+        await this.mattermost.joinChannel(channel.id);
+      }
+    }
   }
 }

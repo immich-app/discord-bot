@@ -22,10 +22,12 @@ export enum DiscordField {
 export enum GithubRepo {
   Immich = 'immich',
   StaticPages = 'static-pages',
+  FHSCore = 'fhs-core',
 }
 
 export enum GithubOrg {
   ImmichApp = 'immich-app',
+  FUTO = 'futo-org',
 }
 
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
@@ -121,10 +123,13 @@ const mattermostChannels = {
   GithubIssuesAndDiscussions: 'zpn38kj84pyg3bmbj7d66kdnge',
   GithubPullRequests: 'i1fbjrqj67n1ibx4f6isuioguc',
   GithubReleases: '97d9ihrnb3rwbcoob6erhdfrcr',
+  FHSGithubPullRequests: 'b3dajyaywffymb8updr8sb64ay',
+  FHSGithubReleases: 'ggnayby577f45reuin1j143xsc',
 };
 
 const mattermostTeams = {
   Immich: 'ejumard7n7budjfeayghjrr3or',
+  FHS: 'ewmb789rq3ya98sjkeqoon4y5y',
 };
 
 export const Constants = {
