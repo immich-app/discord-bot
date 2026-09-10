@@ -1,10 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { Colors, EmbedBuilder, roleMention } from 'discord.js';
+import { Colors, roleMention } from 'discord.js';
 import { DateTime } from 'luxon';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
-import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { getTotal, makeLicenseFields, makeOrderFields } from 'src/util';
@@ -23,32 +23,6 @@ export class ScheduleService {
     const endOfYesterday = DateTime.now().minus({ days: 1 }).endOf('day');
     const { server, client } = await this.database.getTotalLicenseCount({ day: endOfYesterday });
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ day: endOfYesterday });
-
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`Daily licenses report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`)
-            .setDescription(`Total: ${getTotal({ server, client })}`)
-            .setColor(Colors.Purple)
-            .setFields(makeLicenseFields({ server, client })),
-        ],
-      },
-    });
-
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`Daily orders report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`)
-            .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
-            .setColor(Colors.DarkPurple)
-            .setFields(makeOrderFields({ revenue, profit })),
-        ],
-      },
-    });
 
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
@@ -129,36 +103,6 @@ export class ScheduleService {
     const { server, client } = await this.database.getTotalLicenseCount({ week: endOfYesterday });
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ week: endOfYesterday });
 
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              `Weekly licenses report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-            )
-            .setDescription(`Total: ${getTotal({ server, client })}`)
-            .setColor(Colors.Purple)
-            .setFields(makeLicenseFields({ server, client })),
-        ],
-      },
-    });
-
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              `Weekly orders report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-            )
-            .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
-            .setColor(Colors.DarkPurple)
-            .setFields(makeOrderFields({ revenue, profit })),
-        ],
-      },
-    });
-
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
       message: '',
@@ -237,36 +181,6 @@ export class ScheduleService {
     const lastMonth = endOfYesterday.minus({ months: 1 });
     const { server, client } = await this.database.getTotalLicenseCount({ month: endOfYesterday });
     const { revenue, profit } = await this.database.getTotalFourthwallOrders({ month: endOfYesterday });
-
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              `Monthly licenses report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-            )
-            .setDescription(`Total: ${getTotal({ server, client })}`)
-            .setColor(Colors.Purple)
-            .setFields(makeLicenseFields({ server, client })),
-        ],
-      },
-    });
-
-    await this.discord.sendMessage({
-      channelId: DiscordChannel.Purchases,
-      message: {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              `Monthly orders report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-            )
-            .setDescription(`Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`)
-            .setColor(Colors.DarkPurple)
-            .setFields(makeOrderFields({ revenue, profit })),
-        ],
-      },
-    });
 
     await this.mattermost.send({
       channelId: Constants.Mattermost.Channels.Purchases,
