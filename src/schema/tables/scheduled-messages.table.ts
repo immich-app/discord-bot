@@ -1,8 +1,8 @@
-import { Column, CreateDateColumn, Generated, PrimaryGeneratedColumn, Table } from '@immich/sql-tools';
+import { Column, CreateDateColumn, Generated, GeneratedColumn, Table } from '@immich/sql-tools';
 
 @Table('scheduled_message')
 export class ScheduledMessageTable {
-  @PrimaryGeneratedColumn()
+  @GeneratedColumn({ primary: true })
   id!: Generated<string>;
 
   @Column()
@@ -23,7 +23,7 @@ export class ScheduledMessageTable {
   @Column({ unique: true })
   name!: string;
 
-  @Column({ default: 'discord' })
+  @Column({ default: 'discord', primary: true })
   service!: 'discord' | 'mattermost';
 
   @CreateDateColumn()

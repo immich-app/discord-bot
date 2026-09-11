@@ -83,11 +83,83 @@ export class ScheduledMessageService {
         parameters: [{ name: 'name', type: 'text', optional: false }],
       },
       async ({ parameters: { name } }) => {
-        const message = await this.removeScheduledMessage(name);
+        const message = await this.removeScheduledMessage(name, 'mattermost');
         return {
           response_type: 'in_channel',
           text: message,
         };
+      },
+    );
+
+    await this.mattermost.registerCommand(
+      {
+        trigger: 'schedule-list',
+        display_name: 'Schedule lists',
+        description: 'List all scheduled messages',
+        auto_complete: true,
+        team_id: Constants.Mattermost.Teams.Immich,
+      },
+      async () => {
+        const messages = await this.listScheduledMessages('mattermost');
+
+        if (messages.length === 0) {
+          return { text: 'No scheduled messages found.' };
+        }
+
+        return {
+          text: messages
+            .map(
+              (message) =>
+                `- **${message.name}**:  ${inlineCode(message.cronExpression)} in ~${message.channelId}: ${message.message}`,
+            )
+            .join('\n'),
+        };
+      },
+    );
+
+    await this.mattermost.registerCommand(
+      {
+        trigger: 'schedule-edit',
+        display_name: 'Edit schedule',
+        description: 'Edit an existing scheduled message',
+        team_id: Constants.Mattermost.Teams.Immich,
+        auto_complete: true,
+        auto_complete_desc: 'The name of the scheduled message to edit',
+        parameters: [{ name: 'name', type: 'text', optional: false }],
+      },
+      async ({ trigger_id, parameters: { name } }) => {
+        const message = await this.database.getScheduledMessage(name, 'mattermost');
+        if (!message) {
+          return 'Scheduled message not found';
+        }
+
+        void (async () => {
+          const response = await this.mattermost.openDialog(trigger_id, {
+            title: message.name,
+            elements: [
+              {
+                type: 'text',
+                display_name: 'Cron expression',
+                name: 'cronExpression',
+                default: message.cronExpression,
+              },
+              { type: 'textarea', display_name: 'Message', name: 'message', default: message.message },
+              {
+                type: 'bool',
+                display_name: 'Suppress embeds',
+                name: 'suppressEmbeds',
+                optional: true,
+                default: String(message.suppressEmbeds),
+              },
+            ],
+          });
+
+          if (response.cancelled) {
+            return;
+          }
+
+          await this.database.updateScheduledMessage({ name, ...response });
+        })();
       },
     );
   }
@@ -144,7 +216,7 @@ export class ScheduledMessageService {
   }
 
   async editScheduledMessage(name: string) {
-    const message = await this.database.getScheduledMessage(name);
+    const message = await this.database.getScheduledMessage(name, 'discord');
     if (!message) {
       return 'Scheduled message not found';
     }
@@ -202,8 +274,8 @@ export class ScheduledMessageService {
     await interaction.reply(`Successfully updated scheduled message ${inlineCode(updatedMessage.name)}`);
   }
 
-  async removeScheduledMessage(name: string) {
-    const message = await this.database.getScheduledMessage(name);
+  async removeScheduledMessage(name: string, service: 'discord' | 'mattermost') {
+    const message = await this.database.getScheduledMessage(name, service);
     if (!message) {
       return 'Scheduled message not found';
     }
@@ -219,7 +291,7 @@ export class ScheduledMessageService {
   }
 
   async getScheduledMessages(value?: string) {
-    let messages = await this.database.getScheduledMessages();
+    let messages = await this.database.getScheduledMessages('discord');
     if (value) {
       const query = value.toLowerCase();
       messages = messages.filter(({ name }) => name.toLowerCase().includes(query));
@@ -233,7 +305,7 @@ export class ScheduledMessageService {
       .slice(0, 25);
   }
 
-  async listScheduledMessages() {
-    return this.database.getScheduledMessages();
+  async listScheduledMessages(service: 'discord' | 'mattermost') {
+    return this.database.getScheduledMessages(service);
   }
 }

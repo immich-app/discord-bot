@@ -609,13 +609,13 @@ export class DiscordCommands {
       return interaction.respond(results);
     }
 
-    const message = await this.scheduledMessageService.removeScheduledMessage(name);
+    const message = await this.scheduledMessageService.removeScheduledMessage(name, 'discord');
     return interaction.reply(message);
   }
 
   @Slash({ name: 'schedule-list', description: 'List all scheduled messages' })
   async handleScheduleList(interaction: CommandInteraction) {
-    const messages = await this.scheduledMessageService.listScheduledMessages();
+    const messages = await this.scheduledMessageService.listScheduledMessages('discord');
 
     if (messages.length === 0) {
       return interaction.reply({ content: 'No scheduled messages found.', flags: [MessageFlags.Ephemeral] });

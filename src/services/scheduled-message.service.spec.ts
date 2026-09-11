@@ -38,6 +38,8 @@ const newMattermostMock = (): Mocked<IMattermostInterface> => ({
   send: vitest.fn(),
   streamChannels: vitest.fn(),
   updatePost: vitest.fn(),
+  openDialog: vitest.fn(),
+  submitDialog: vitest.fn(),
 });
 
 const makeScheduledMessage = (overrides: Partial<ScheduledMessage> = {}): ScheduledMessage => ({
@@ -117,7 +119,7 @@ describe('ScheduledMessageService', () => {
     it('should return not-found message when name does not exist', async () => {
       databaseMock.getScheduledMessage.mockResolvedValue(undefined);
 
-      const result = await sut.removeScheduledMessage('nonexistent');
+      const result = await sut.removeScheduledMessage('nonexistent', 'discord');
 
       expect(result).toEqual('Scheduled message not found');
       expect(databaseMock.removeScheduledMessage).not.toHaveBeenCalled();
@@ -127,7 +129,7 @@ describe('ScheduledMessageService', () => {
       const msg = makeScheduledMessage({ id: 'rm-1', name: 'to-remove' });
       databaseMock.getScheduledMessage.mockResolvedValue(msg);
 
-      const result = await sut.removeScheduledMessage('to-remove');
+      const result = await sut.removeScheduledMessage('to-remove', 'mattermost');
 
       expect(databaseMock.removeScheduledMessage).toHaveBeenCalledWith('rm-1');
       expect(result).toEqual('Removed scheduled message `to-remove`');
@@ -189,7 +191,7 @@ describe('ScheduledMessageService', () => {
       const messages = [makeScheduledMessage({ channelId: 'ch-1' }), makeScheduledMessage({ channelId: 'ch-2' })];
       databaseMock.getScheduledMessages.mockResolvedValue(messages);
 
-      const result = await sut.listScheduledMessages();
+      const result = await sut.listScheduledMessages('discord');
 
       expect(result).toHaveLength(2);
     });

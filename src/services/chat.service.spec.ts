@@ -95,6 +95,8 @@ const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
   joinChannel: vitest.fn(),
   registerCommand: vitest.fn() as any,
   runCommand: vitest.fn(),
+  openDialog: vitest.fn(),
+  submitDialog: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({

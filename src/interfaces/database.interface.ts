@@ -51,8 +51,8 @@ export interface IDatabaseRepository {
   getRSSFeeds(channelId?: string): Promise<RSSFeed[]>;
   removeRSSFeed(url: string, channelId: string): Promise<void>;
   updateRSSFeed(entity: UpdateRSSFeed): Promise<void>;
-  getScheduledMessages(): Promise<ScheduledMessage[]>;
-  getScheduledMessage(name: string): Promise<ScheduledMessage | undefined>;
+  getScheduledMessages(service?: 'discord' | 'mattermost'): Promise<ScheduledMessage[]>;
+  getScheduledMessage(name: string, service: 'discord' | 'mattermost'): Promise<ScheduledMessage | undefined>;
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
   updateScheduledMessage(entity: UpdateScheduledMessage & { name: string }): Promise<ScheduledMessage | undefined>;
   removeScheduledMessage(id: string): Promise<void>;
