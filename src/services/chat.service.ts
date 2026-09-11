@@ -761,7 +761,7 @@ ${formattedCode}
       return;
     }
 
-    if (this.hasBlacklistUrl(post.metadata.embeds.map(({ url }) => url))) {
+    if (this.hasBlacklistUrl(post.metadata.embeds.map(({ url }) => url).filter((url) => url))) {
       await this.mattermost.updatePost({ id: post.id, props: { remove_link_preview: 'true' } });
     }
   }
