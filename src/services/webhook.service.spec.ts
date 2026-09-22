@@ -2869,6 +2869,20 @@ describe(WebhookService.name, () => {
       );
       expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
     });
+
+    it('should fail the webhook when the Zulip announcement fails, after the other posts were made', async () => {
+      zulipMock.sendMessage.mockRejectedValue(
+        new Error('Zulip POST /api/v1/messages failed with 429 RATE_LIMIT_HIT: API usage exceeded rate limit'),
+      );
+
+      await expect(sut.onGithub(releaseEvent(makeRelease()), 'github-slug')).rejects.toThrow('RATE_LIMIT_HIT');
+
+      await vitest.waitFor(() => {
+        expect(discordMock.sendMessage).toHaveBeenCalledTimes(2);
+        expect(mattermostMock.send).toHaveBeenCalledOnce();
+      });
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+    });
   });
 
   describe('handleWorkflowRunFailure', () => {

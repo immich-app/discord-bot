@@ -1,57 +1,63 @@
-import { Logger } from '@nestjs/common';
 import { IZulipInterface, MessagePayload, type ZulipConfig } from 'src/interfaces/zulip.interface';
-// @ts-expect-error: that stupid sdk does not have types
-import zulip from 'zulip-js';
+import { createZulipClient, multipart, type ZulipClient } from 'src/repositories/zulip.client';
 
-type Zulip = {
-  messages: {
-    send: ({
-      to,
-      type,
-      topic,
-      content,
-    }: {
-      to: string | number;
-      type: 'stream' | 'channel' | 'direct';
-      topic?: string;
-      content: string;
-    }) => Promise<string>;
-  };
-  callEndpoint: (path: string, method: 'GET' | 'POST', params: object) => Promise<void>;
-  config: {
-    realm: string;
-    apiURL: string;
-    username: string;
-    apiKey: string;
-  };
+const IMAGE_TIMEOUT_MS = 30_000;
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/jpeg': 'jpg',
 };
 
 export class ZulipRepository implements IZulipInterface {
-  private logger = new Logger(ZulipRepository.name);
-  private zulip: Zulip = {} as Zulip;
-  private zulipUser: Zulip = {} as Zulip;
+  private clients?: { bot: ZulipClient; user: ZulipClient };
 
   async init({ realm, bot, user }: ZulipConfig) {
-    this.zulip = await zulip({ realm, ...bot });
-    this.zulipUser = await zulip({ realm, ...user });
+    this.clients = {
+      bot: createZulipClient({ realm, ...bot }),
+      user: createZulipClient({ realm, ...user }),
+    };
   }
 
-  async sendMessage({ stream, content, topic }: MessagePayload) {
-    const response = await this.zulip.messages.send({ to: stream, type: 'stream', topic, content });
-    this.logger.debug(response);
+  /** The bot account posts messages. */
+  private get bot() {
+    return this.client('bot');
+  }
+
+  /** The human account uploads emoji: Zulip answers `This endpoint does not accept bot requests` otherwise. */
+  private get user() {
+    return this.client('user');
+  }
+
+  private client(identity: 'bot' | 'user') {
+    if (!this.clients) {
+      throw new Error('Zulip client not initialised: call init() first');
+    }
+    return this.clients[identity];
+  }
+
+  async sendMessage({ stream, topic, content }: MessagePayload) {
+    const { data } = await this.bot.POST('/messages', { body: { type: 'channel', to: stream, topic, content } });
+    return { id: data!.id };
   }
 
   async createEmote(name: string, emoteUrl: string) {
-    const authentication = `Basic ${Buffer.from(`${this.zulipUser.config.username}:${this.zulipUser.config.apiKey}`).toString('base64')}`;
-    const emote = await fetch(emoteUrl).then((response) => response.blob());
+    const user = this.user;
+    const emojiName = name.toLowerCase();
 
-    const form = new FormData();
-    form.append('filename', emote);
+    const image = await fetch(emoteUrl, { signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
+    if (!image.ok) {
+      throw new Error(`Could not fetch emote image ${emoteUrl}: ${image.status}`);
+    }
 
-    await fetch(`${this.zulipUser.config.apiURL}/realm/emoji/${name.toLowerCase()}`, {
-      method: 'POST',
-      headers: { Authorization: authentication },
-      body: form,
+    // Zulip needs a real filename with an extension and the image's content type on the multipart part.
+    const contentType = image.headers.get('content-type')?.split(';')[0].trim() || 'application/octet-stream';
+    const extension = IMAGE_EXTENSIONS[contentType] ?? new URL(emoteUrl).pathname.match(/\.(\w+)$/)?.[1] ?? 'png';
+    const file = new File([await image.arrayBuffer()], `${emojiName}.${extension}`, { type: contentType });
+
+    await user.POST('/realm/emoji/{emoji_name}', {
+      params: { path: { emoji_name: emojiName } },
+      ...multipart({ filename: file }),
     });
   }
 }

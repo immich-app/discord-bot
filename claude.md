@@ -87,6 +87,21 @@ Rules that keep the seam clean:
 
 Nothing in `webhook.service.ts` or `schedule.service.ts` should change.
 
+### Zulip
+
+The bot talks to Zulip through a typed `openapi-fetch` client, not an SDK.
+
+- **Generated types**: `src/generated/zulip.ts` is generated from Zulip's OpenAPI spec and must never be edited by hand; it is excluded from prettier and eslint. Regenerate it with `npm run zulip:types`. That script in `package.json` is the only place the Zulip release tag is pinned; bump it there when the server is upgraded, rerun the script and commit the output.
+- **Transport**: `src/repositories/zulip.client.ts` builds a `Client<paths>` per identity (`createZulipClient`). Its rules, all covered by `zulip.client.spec.ts`:
+  - Base URL is `${ZULIP_DOMAIN}/api/v1`; a realm ending in `/` or `/api` is normalised.
+  - Every request body is sent `application/x-www-form-urlencoded`, which is what the spec declares for every endpoint we call (`POST /messages`, later `PATCH /messages/{id}` and `POST /register`). Strings go as they are; `number`, `boolean`, arrays and objects are `JSON.stringify`'d; `undefined` is omitted. Query strings follow the same rule, so an array such as `narrow` becomes one JSON value, never repeated keys. A parameter the spec declares as a JSON-encoded *string* (`narrow` and `message_ids` on `GET /messages` are typed `string`) is passed already stringified.
+  - Multipart (`POST /realm/emoji/{emoji_name}`): spread `multipart({ field: file })` into the call. Every part is a `File`, so it carries a filename with an extension and a content type; `fetch` sets the boundary. Do not set `Content-Type` yourself.
+  - Every call rejects with `ZulipApiError` (`status`, `code`, `msg`) on a non-2xx response or a `result: "error"` body, so `data` is always set when a call resolves. Network errors and timeouts reject too; every request has a timeout.
+  - A `429` is retried after the body's `retry-after` (falling back to the `Retry-After` header), with a bounded attempt count and a bounded maximum wait; the retried request re-sends its body. Nothing else is retried: a 429 was not processed, but retrying a 5xx on `POST /messages` could double-post.
+  - Credentials and the `Authorization` header are never logged.
+- **Two identities**: `ZulipRepository` holds a `bot` client (posts messages) and a `user` client (uploads emoji) because Zulip only lets human accounts upload emoji (`This endpoint does not accept bot requests`). Config keeps `zulip.bot` and `zulip.user` for that reason. Both are created once, in `ZulipService.init` (skipped with the `dev` sentinel keys); calling a repository method before that throws `Zulip client not initialised`.
+- **Endpoints**: `ZulipRepository` exposes only what the bot uses today (`sendMessage`, which resolves to the new message's `{ id }`, and `createEmote`). Each phase adds only the endpoints it needs, a few lines each thanks to the generated types; do not add unused methods.
+
 ## Commands
 
 ```
@@ -96,6 +111,7 @@ npm run lint         # ESLint
 npm run format       # Prettier check
 npm run test         # Vitest
 npm run check:all    # format + lint + check + test:cov
+npm run zulip:types  # Regenerate src/generated/zulip.ts from the pinned Zulip OpenAPI spec
 ```
 
 ## Key Files
@@ -114,3 +130,5 @@ npm run check:all    # format + lint + check + test:cov
 - `src/interfaces/notification.interface.ts` - Platform-neutral `Notification` model (`kind`, `accent`, `author`, `title`, `url`, `body`, `fields`)
 - `src/services/notification.service.ts` - Destination-to-platform fan-out for notifications
 - `src/renderers/` - Per-platform `Notification` renderers and the shared accent palette
+- `src/generated/zulip.ts` - Generated Zulip API types (`npm run zulip:types`), never edited by hand
+- `src/repositories/zulip.client.ts` - Typed Zulip transport: form/JSON encoding, multipart, errors, 429 retry, timeout

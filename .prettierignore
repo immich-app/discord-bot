@@ -13,3 +13,6 @@ package-lock.json
 yarn.lock
 
 src/schema/migrations
+
+# generated
+src/generated
