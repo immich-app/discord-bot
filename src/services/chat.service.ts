@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo } from 'src/constants';
+import { shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -15,7 +16,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
-import { formatCommand, logError, makeIssueOrPRMessage, makeLink, shorten } from 'src/util';
+import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };

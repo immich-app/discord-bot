@@ -67,10 +67,6 @@ export const makeOrderFields = ({
   return fields;
 };
 
-export const shorten = (text: string, maxLength: number = 100) => {
-  return text.length > maxLength ? `${text.substring(0, maxLength - 3)}...` : text;
-};
-
 export const formatCommand = (name: string, ...args: string[]) => {
   return `\n\`\`\`\n/${name} ${args.join(' ')}\n\`\`\``;
 };
@@ -86,5 +82,3 @@ export const makeIssueOrPRMessage = (dto: { type: string; title: string; link: s
 
   return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
 };
-
-export const asHexColor = (color: number) => `#${color.toString(16)}`;

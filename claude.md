@@ -19,6 +19,7 @@ Immich Discord bot built with NestJS, discordx, and PostgreSQL (Kysely ORM).
 2. **Service layer** (`src/services/`) - Business logic. Injected into discord layer. Services use `@Inject(ITokenName)` for repository dependencies.
 3. **Repository layer** (`src/repositories/`) - External integrations (database, Discord API, GitHub, Zulip, RSS, etc). Each has an interface in `src/interfaces/` with a string token (`export const IFoo = 'IFoo'`).
 4. **Interface layer** (`src/interfaces/`) - Defines repository contracts and Kysely table types. The `Database` type in `database.interface.ts` maps table names to their column types.
+5. **Renderer layer** (`src/renderers/`) - Pure functions, no DI, one module per chat platform. Each turns a platform-neutral `Notification` into that platform's wire shape (`toDiscordEmbed`, `toMattermostBlock`). Consumed only by `NotificationService`; services never import a renderer, and no renderer imports another.
 
 ### Dependency Injection
 
@@ -62,6 +63,30 @@ Legacy commands use `authGuard()` to restrict to allowed channels (BotSpam, Supp
 
 Use `@Cron(expression)` decorator from `@nestjs/schedule`. Cron expressions stored in `Constants.Cron`.
 
+### Notifications
+
+Anything posted to a chat channel as a card (GitHub events, GitHub status incidents, purchases, reports, release alerts) goes through one seam. A service never names a platform in a notification path.
+
+1. The service builds a `Notification` (`src/interfaces/notification.interface.ts`): a required `kind` (`feed`, `release`, `incident`, `purchase`, `report`, `alert`), an optional domain-namespaced `accent` (`pr.merged`, `issue.closed`, `order.cancelled`, ...), plus `author`, `title`, `url`, `body` and `fields`.
+2. The service calls `NotificationService.notify(destination, notification)` with a logical destination such as `community.releases` or `team.purchases`. Destinations are audience-scoped: `community.*` is public, `team.*` is internal. Business rules like "a private repo skips the community" are expressed by choosing destinations, not platforms.
+3. `NotificationRoutes` in `src/constants.ts` maps every destination to the platforms and channels it reaches, including per-route `silent` (Mattermost) and `crosspost` (Discord). A destination with no route for a platform simply does not post there. The whole matrix is reviewable in that one table.
+4. `NotificationService` (`src/services/notification.service.ts`) renders the notification once per routed platform with that platform's renderer and sends it, Discord first, one platform at a time.
+
+Rules that keep the seam clean:
+
+- Renderers derive every layout decision (title size, whether a body slot exists, truncation, fields layout, author style, whether the title links) from `kind`, never from which keys a notification has or what its values are: a feed title links even when its `url` is `''`. Services never pass render options. Only whether an existing slot is *filled* depends on the data: a `feed` always has a body slot, which renders empty when there is no body.
+- Truncation that applies on every platform is content and belongs in the service (feed bodies are shortened to 500 before rendering). Truncation that applies on one platform is presentation and belongs in that renderer (release descriptions are shortened to 500 on Mattermost only).
+- An accent token names the event at its call site, never a colour. `src/renderers/palette.ts` maps tokens to RGB numbers; both renderers read it. Several tokens sharing a colour is expected.
+- `webhook.service.ts` and `schedule.service.ts` never call `discord.sendMessage` or `mattermost.send` for a notification. The Zulip release announcement in `handleReleaseNotification` is a bespoke plain-text message, not a `Notification`, and stays a direct call.
+
+### Adding a New Notification Platform
+
+1. Add `src/renderers/{platform}.renderer.ts`: a pure `to{Platform}Message(notification: Notification)` that switches on `kind` for layout and maps `accent` to the platform's affordance (read `Palette` for a colour, or keep a token-to-emoji table for a platform without colours). Do not import another renderer or `discord.js`, directly or through `src/util` (which depends on it); string helpers such as `shorten` and `asHexColor` come from `src/format.ts`.
+2. Add an optional `{platform}` entry to `NotificationRoute` and fill in the routes in `NotificationRoutes` (`src/constants.ts`). Destinations that share a channel today (issues and discussions, purchases and reports) are separate on purpose so they can land in different places.
+3. Inject the platform's repository interface into `NotificationService` and send in `notify` when the destination has a route for it.
+
+Nothing in `webhook.service.ts` or `schedule.service.ts` should change.
+
 ## Commands
 
 ```
@@ -78,9 +103,14 @@ npm run check:all    # format + lint + check + test:cov
 - `src/app.module.ts` - Root NestJS module
 - `src/main.ts` - Bootstrap, Discord client init
 - `src/config.ts` - Environment variable loading
-- `src/constants.ts` - Enums, channel IDs, role IDs, cron expressions
+- `src/constants.ts` - Enums, channel IDs, role IDs, cron expressions, notification route table (`NotificationRoutes`)
+- `src/format.ts` - Platform-free string helpers (`shorten`, `asHexColor`); the only helper module renderers may import
+- `src/util.ts` - Discord-aware helpers (error logging to bot-spam, hyperlinks, report field builders)
 - `src/discord/commands.ts` - All slash commands
 - `src/discord/events.ts` - Discord event handlers
 - `src/services/discord.service.ts` - Core bot logic
 - `src/interfaces/database.interface.ts` - DB schema types + repository interface
 - `src/repositories/database.repository.ts` - Kysely DB queries
+- `src/interfaces/notification.interface.ts` - Platform-neutral `Notification` model (`kind`, `accent`, `author`, `title`, `url`, `body`, `fields`)
+- `src/services/notification.service.ts` - Destination-to-platform fan-out for notifications
+- `src/renderers/` - Per-platform `Notification` renderers and the shared accent palette

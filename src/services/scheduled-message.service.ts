@@ -14,11 +14,11 @@ import {
 } from 'discord.js';
 import { Discord, ModalComponent } from 'discordx';
 import { Constants, DiscordModal } from 'src/constants';
+import { shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { NewScheduledMessage } from 'src/schema';
-import { shorten } from 'src/util';
 
 @Discord()
 @Injectable()

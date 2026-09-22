@@ -1,10 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { EmbedBuilder } from 'discord.js';
+import { shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { FeedItem, IRSSInterface, PostItem } from 'src/interfaces/rss.interface';
-import { shorten } from 'src/util';
 
 @Injectable()
 export class RSSService {

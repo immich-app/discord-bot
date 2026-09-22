@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, RawBodyRequest, UnauthorizedException } fro
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks.js';
-import { Colors, EmbedBuilder, MessageFlags, roleMention } from 'discord.js';
+import { MessageFlags, roleMention } from 'discord.js';
 import { Request, Response } from 'express';
 import _ from 'lodash';
 import { DateTime } from 'luxon';
@@ -10,8 +10,9 @@ import semver from 'semver';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
+import { shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
-import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import {
   FourthwallOrderCreateWebhook,
   FourthwallOrderUpdateWebhook,
@@ -19,10 +20,12 @@ import {
 } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { CommandWebhookRequest, DialogResponse, IMattermostInterface } from 'src/interfaces/mattermost.interface';
+import { Notification, NotificationAccent, NotificationAuthor } from 'src/interfaces/notification.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
-import { asHexColor, makeLicenseFields, makeOrderFields, shorten, withErrorLogging } from 'src/util';
+import { NotificationService } from 'src/services/notification.service';
+import { makeLicenseFields, makeOrderFields, withErrorLogging } from 'src/util';
 
 const isIncidentUpdate = (dto: GithubStatusComponent | GithubStatusIncident): dto is GithubStatusIncident => {
   return !!(dto as GithubStatusIncident).incident;
@@ -53,6 +56,96 @@ type BaseEvent = {
   body: string | null;
 };
 
+type GithubUser = { login: string; html_url: string; avatar_url: string };
+
+const toAuthor = ({ login, html_url, avatar_url }: GithubUser): NotificationAuthor => ({
+  name: login,
+  url: html_url,
+  iconUrl: avatar_url,
+});
+
+const getEventNotification = ({
+  action,
+  repositoryName,
+  title,
+  user,
+  event,
+  accent,
+}: {
+  action: string;
+  repositoryName: string;
+  title: string;
+  user: GithubUser;
+  event: BaseEvent;
+  accent?: NotificationAccent;
+}): Notification => ({
+  kind: 'feed',
+  accent,
+  author: toAuthor(user),
+  title: `[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}`,
+  url: event.html_url,
+  body: (action === 'opened' || action === 'created') && event.body ? shorten(event.body, 500) : undefined,
+});
+
+const getIncidentAccent = ({ status, impact }: { status: string; impact: string }): NotificationAccent => {
+  if (status === 'resolved') {
+    return 'incident.resolved';
+  }
+
+  switch (impact) {
+    case 'minor': {
+      return 'incident.minor';
+    }
+    case 'major': {
+      return 'incident.major';
+    }
+    default: {
+      return 'incident.unknown';
+    }
+  }
+};
+
+const getPullRequestAccent = (
+  dto: {
+    action: 'opened' | 'closed' | 'converted_to_draft' | 'ready_for_review';
+    isDraft: boolean;
+    isMerged: boolean | null;
+  },
+  logger: Logger,
+): NotificationAccent | undefined => {
+  switch (dto.action) {
+    case 'opened': {
+      return dto.isDraft ? 'pr.draft' : 'pr.opened';
+    }
+    case 'closed': {
+      if (dto.isMerged === null) {
+        logger.error('Closed PR should have isMerged set.');
+        return undefined;
+      }
+      return dto.isMerged ? 'pr.merged' : 'pr.closed';
+    }
+    case 'converted_to_draft': {
+      return 'pr.draft';
+    }
+    case 'ready_for_review': {
+      return 'pr.opened';
+    }
+  }
+};
+
+const IssueAccents: Record<'opened' | 'reopened' | 'closed', NotificationAccent> = {
+  opened: 'issue.opened',
+  reopened: 'issue.reopened',
+  closed: 'issue.closed',
+};
+
+const DiscussionAccents: Record<'created' | 'reopened' | 'deleted' | 'answered', NotificationAccent> = {
+  created: 'discussion.created',
+  reopened: 'discussion.reopened',
+  deleted: 'discussion.deleted',
+  answered: 'discussion.answered',
+};
+
 @Injectable()
 export class WebhookService {
   private logger = new Logger(WebhookService.name);
@@ -65,6 +158,7 @@ export class WebhookService {
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
+    private notifications: NotificationService,
   ) {}
 
   async onGithub(event: EmitterWebhookEvent, slug: string) {
@@ -136,58 +230,17 @@ export class WebhookService {
     this.logger.debug(dto);
 
     if (isIncidentUpdate(dto)) {
-      const embed = new EmbedBuilder({
-        title: dto.page.status_description,
+      const notification: Notification = {
+        kind: 'incident',
+        accent: getIncidentAccent(dto.incident),
         author: { name: 'GitHub Status', url: 'https://githubstatus.com' },
+        title: dto.page.status_description,
         url: dto.incident.shortlink,
         fields: [{ name: dto.incident.name, value: dto.incident.incident_updates[0].body.replaceAll('<br />', '\n') }],
-      });
+      };
 
-      if (dto.incident.status === 'resolved') {
-        embed.setColor('Green');
-      } else {
-        switch (dto.incident.impact) {
-          case 'minor':
-            embed.setColor('Orange');
-            break;
-          case 'major':
-            embed.setColor('Red');
-            break;
-          default:
-            embed.setColor('Grey');
-        }
-      }
-
-      await this.discord.sendMessage({ channelId: DiscordChannel.GithubStatus, message: { embeds: [embed] } });
-      await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubStatus,
-        message: '',
-        silent: true,
-        props: {
-          mm_blocks: [
-            {
-              type: 'container',
-              accent_color: embed.data.color ? asHexColor(embed.data.color) : undefined,
-              border: true,
-              gap: 'small',
-              content: [
-                {
-                  type: 'text',
-                  text: '[GitHub Status](https://githubstatus.com)',
-                  is_subtle: true,
-                  size: 'small',
-                },
-                {
-                  type: 'text',
-                  text: `##### [${dto.page.status_description}](${dto.incident.shortlink})`,
-                },
-                { type: 'text', text: `**${dto.incident.name}**` },
-                { type: 'text', text: dto.incident.incident_updates[0].body.replaceAll('<br />', '\n') },
-              ],
-            },
-          ],
-        },
-      });
+      await this.notifications.notify('community.github-status', notification);
+      await this.notifications.notify('team.github-status', notification);
     }
   }
 
@@ -333,49 +386,14 @@ export class WebhookService {
     //   },
     // });
 
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: asHexColor(
-              dto.testMode ? Colors.Yellow : dtoOrder.status === 'CANCELLED' ? Colors.Red : Colors.DarkGreen,
-            ),
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: '[Fourthwall](https://fourthwall.com)',
-                is_subtle: true,
-                size: 'small',
-              },
-              {
-                type: 'text',
-                text: `##### [${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id})`,
-              },
-              {
-                type: 'text',
-                text: `Price: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
-              },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeOrderFields({ revenue, profit, message: dtoOrder.message }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
+    await this.notifications.notify('team.purchases', {
+      kind: 'purchase',
+      accent: dto.testMode ? 'order.test' : dtoOrder.status === 'CANCELLED' ? 'order.cancelled' : 'order.placed',
+      author: { name: 'Fourthwall', url: 'https://fourthwall.com' },
+      title: `${dto.testMode ? 'TEST ORDER - ' : ''}Immich merch ${dto.type === 'ORDER_PLACED' ? 'purchased' : 'order updated'}`,
+      url: `https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/${dtoOrder.id}`,
+      body: `Price: ${dtoOrder.amounts.subtotal.value.toLocaleString()} USD; Profit: ${order.profit.value.toLocaleString()} USD`,
+      fields: makeOrderFields({ revenue, profit, message: dtoOrder.message }),
     });
   }
 
@@ -466,238 +484,18 @@ export class WebhookService {
     //     flags: [MessageFlags.SuppressNotifications],
     //   },
     // });
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: asHexColor(livemode ? Colors.Green : Colors.Yellow),
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text:
-                  source === 'stripe' ? '[Stripe payments](https://stripe.com)' : '[Polar Payments](https://polar.sh)',
-                is_subtle: true,
-                size: 'small',
-              },
-              {
-                type: 'text',
-                text: `##### [${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased](${url})`,
-              },
-              { type: 'text', text: `Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}` },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
-    });
-  }
-
-  private getReleaseEmbed({
-    repositoryName,
-    name,
-    user,
-    url,
-    description,
-  }: {
-    repositoryName: string;
-    name: string;
-    user: NonNullable<EmitterWebhookEvent<'release'>['payload']['sender']>;
-    url: string;
-    description?: string;
-  }) {
-    return new EmbedBuilder({
-      title: `[${repositoryName}] New release: ${name}`,
-      author: { name: user.login, url: user.html_url, iconURL: user.avatar_url },
+    await this.notifications.notify('team.purchases', {
+      kind: 'purchase',
+      accent: livemode ? 'purchase.live' : 'purchase.test',
+      author:
+        source === 'stripe'
+          ? { name: 'Stripe payments', url: 'https://stripe.com' }
+          : { name: 'Polar Payments', url: 'https://polar.sh' },
+      title: `${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased`,
       url,
-      description,
+      body: `Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`,
+      fields: makeLicenseFields({ server, client }),
     });
-  }
-
-  private getReleaseMattermostBlock({
-    repositoryName,
-    name,
-    user,
-    url,
-    description,
-  }: {
-    repositoryName: string;
-    name: string;
-    user: NonNullable<EmitterWebhookEvent<'release'>['payload']['sender']>;
-    url: string;
-    description?: string;
-  }) {
-    return {
-      type: 'container',
-      border: true,
-      accent_color: undefined as string | undefined,
-      gap: 'small',
-      content: [
-        {
-          type: 'container',
-          gap: 'small',
-          flow: 'horizontal',
-          content: [
-            {
-              type: 'image',
-              url: user.avatar_url,
-              alt_text: `${user.login}'s avatar`,
-              size: 'small',
-              image_style: 'person',
-              horizontal_alignment: 'left',
-              max_width: 26,
-            },
-            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true },
-          ],
-        },
-        {
-          type: 'text',
-          text: `##### [[${repositoryName}] New release: ${name}](${url})`,
-        },
-        description ? { type: 'text', text: shorten(description, 500), size: 'small' } : undefined,
-      ],
-    };
-  }
-
-  private getEmbed({
-    action,
-    repositoryName,
-    title,
-    user,
-    event,
-  }: {
-    action: string;
-    repositoryName: string;
-    title: string;
-    user: NonNullable<EmitterWebhookEvent<'pull_request'>['payload']['sender']>;
-    event: BaseEvent;
-  }) {
-    return new EmbedBuilder({
-      title: `[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}`,
-      author: { name: user.login, url: user.html_url, iconURL: user.avatar_url },
-      url: event.html_url,
-      description:
-        action === 'opened' || action === 'created' ? (event.body ? shorten(event.body, 500) : undefined) : undefined,
-    });
-  }
-
-  private getMattermostBlock({
-    action,
-    repositoryName,
-    title,
-    user,
-    event,
-  }: {
-    action: string;
-    repositoryName: string;
-    title: string;
-    user: NonNullable<EmitterWebhookEvent<'pull_request'>['payload']['sender']>;
-    event: BaseEvent;
-  }) {
-    return {
-      type: 'container',
-      border: true,
-      accent_color: undefined as string | undefined,
-      gap: 'small',
-      content: [
-        {
-          type: 'container',
-          gap: 'small',
-          flow: 'horizontal',
-          content: [
-            {
-              type: 'image',
-              url: user.avatar_url,
-              alt_text: `${user.login}'s avatar`,
-              size: 'small',
-              image_style: 'person',
-              horizontal_alignment: 'left',
-              max_width: 26,
-            },
-            { type: 'text', text: `[${user.login}](${user.html_url})`, is_subtle: true },
-          ],
-        },
-        {
-          type: 'text',
-          text: `##### [[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}](${event.html_url})`,
-          size: 'small',
-        },
-        (action === 'opened' || action === 'created') && event.body
-          ? { type: 'text', text: shorten(event.body, 500) }
-          : undefined,
-      ],
-    };
-  }
-
-  private getPrEmbedColor(dto: {
-    action: 'opened' | 'closed' | 'converted_to_draft' | 'ready_for_review';
-    isDraft: boolean;
-    isMerged: boolean | null;
-  }) {
-    switch (dto.action) {
-      case 'opened': {
-        return dto.isDraft ? 'Grey' : 'Green';
-      }
-      case 'closed': {
-        if (dto.isMerged === null) {
-          this.logger.error('Closed PR should have isMerged set.');
-          return null;
-        }
-        return dto.isMerged ? 'Purple' : 'Red';
-      }
-      case 'converted_to_draft': {
-        return 'Grey';
-      }
-      case 'ready_for_review': {
-        return 'Green';
-      }
-    }
-  }
-
-  private getIssueEmbedColor(dto: { action: 'opened' | 'reopened' | 'closed' }) {
-    switch (dto.action) {
-      case 'opened': {
-        return 'Green';
-      }
-      case 'reopened': {
-        return 'DarkGreen';
-      }
-      case 'closed': {
-        return 'NotQuiteBlack';
-      }
-    }
-  }
-
-  private getDiscussionEmbedColor(dto: { action: 'created' | 'reopened' | 'deleted' | 'answered' }) {
-    switch (dto.action) {
-      case 'created': {
-        return 'Orange';
-      }
-      case 'reopened': {
-        return 'DarkOrange';
-      }
-      case 'deleted': {
-        return 'NotQuiteBlack';
-      }
-      case 'answered': {
-        return 'Green';
-      }
-    }
   }
 
   private async handleWorkflowRunFailure(event: EmitterWebhookEvent<'workflow_run.completed'>['payload']) {
@@ -713,15 +511,11 @@ export class WebhookService {
       const latestRelease = await this.github.getLatestReleaseTag(repository.owner.login, repository.name);
 
       if (checkSuiteTrigger === latestRelease) {
-        const embed = new EmbedBuilder({
-          title: 'Release Workflow Failed <a:peepoAlert:1367804942638776423>',
-          description: `[${workflow_run.display_title}](${workflow_run.html_url})`,
-          color: Colors.Red,
-        });
-
-        await this.discord.sendMessage({
-          channelId: Constants.Discord.Channels.TeamAlerts,
-          message: { embeds: [embed] },
+        await this.notifications.notify('team.release-alerts', {
+          kind: 'alert',
+          accent: 'release.failed',
+          title: 'Release Workflow Failed',
+          body: `[${workflow_run.display_title}](${workflow_run.html_url})`,
         });
       }
     } catch (error) {
@@ -736,41 +530,25 @@ export class WebhookService {
       action === 'converted_to_draft' ||
       action === 'ready_for_review'
     ) {
-      const embedProps = {
+      const notification = getEventNotification({
         action: getActionName(action, pull_request),
         repositoryName: repository.full_name,
         title: 'Pull request',
         user: sender,
         event: pull_request,
-      };
-      const embed = this.getEmbed(embedProps);
-      const mattermostBlock = this.getMattermostBlock(embedProps);
-
-      const color = this.getPrEmbedColor({
-        action,
-        isDraft: pull_request.draft ?? false,
-        isMerged: pull_request.merged,
+        accent: getPullRequestAccent(
+          { action, isDraft: pull_request.draft ?? false, isMerged: pull_request.merged },
+          this.logger,
+        ),
       });
-      embed.setColor(color);
-      mattermostBlock.accent_color = color ? asHexColor(Colors[color]) : undefined;
 
       if (repository.owner.login === GithubOrg.ImmichApp) {
         if (!repository.private) {
-          await this.discord.sendMessage({ channelId: DiscordChannel.PullRequests, message: { embeds: [embed] } });
+          await this.notifications.notify('community.pull-requests', notification);
         }
-        await this.mattermost.send({
-          channelId: Constants.Mattermost.Channels.GithubPullRequests,
-          message: '',
-          silent: true,
-          props: { mm_blocks: [mattermostBlock] },
-        });
+        await this.notifications.notify('team.pull-requests', notification);
       } else if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
-        await this.mattermost.send({
-          channelId: Constants.Mattermost.Channels.FHSGithubPullRequests,
-          message: '',
-          silent: true,
-          props: { mm_blocks: [mattermostBlock] },
-        });
+        await this.notifications.notify('team.fhs-pull-requests', notification);
       }
     }
   }
@@ -782,26 +560,17 @@ export class WebhookService {
     issue,
   }: EmitterWebhookEvent<'issues' | 'issue_comment'>['payload']) {
     if (action === 'opened' || action === 'reopened' || action === 'closed') {
-      const embedProps = {
+      const notification = getEventNotification({
         action,
         repositoryName: repository.full_name,
         title: 'Issue',
         user: sender,
         event: issue,
-      };
-      const embed = this.getEmbed(embedProps);
-      const mattermostBlock = this.getMattermostBlock(embedProps);
-
-      embed.setColor(this.getIssueEmbedColor({ action }));
-      mattermostBlock.accent_color = asHexColor(Colors[this.getIssueEmbedColor({ action })]);
-
-      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
-      await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions,
-        message: '',
-        silent: true,
-        props: { mm_blocks: [mattermostBlock] },
+        accent: IssueAccents[action],
       });
+
+      await this.notifications.notify('community.issues', notification);
+      await this.notifications.notify('team.issues', notification);
     }
   }
 
@@ -812,26 +581,17 @@ export class WebhookService {
     discussion,
   }: EmitterWebhookEvent<'discussion' | 'discussion_comment'>['payload']) {
     if (action === 'created' || action === 'reopened' || action === 'deleted' || action === 'answered') {
-      const embedProps = {
+      const notification = getEventNotification({
         action,
         repositoryName: repository.full_name,
         title: 'Discussion',
         user: sender,
         event: discussion,
-      };
-      const embed = this.getEmbed(embedProps);
-      const mattermostBlock = this.getMattermostBlock(embedProps);
-
-      embed.setColor(this.getDiscussionEmbedColor({ action }));
-      mattermostBlock.accent_color = asHexColor(Colors[this.getDiscussionEmbedColor({ action })]);
-
-      await this.discord.sendMessage({ channelId: DiscordChannel.IssuesAndDiscussions, message: { embeds: [embed] } });
-      await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions,
-        message: '',
-        silent: true,
-        props: { mm_blocks: [mattermostBlock] },
+        accent: DiscussionAccents[action],
       });
+
+      await this.notifications.notify('community.discussions', notification);
+      await this.notifications.notify('team.discussions', notification);
     }
   }
 
@@ -845,61 +605,36 @@ export class WebhookService {
       return;
     }
 
-    const embedProps = {
-      repositoryName: repository.full_name,
-      name: release.name ?? release.tag_name,
+    const description = isMainRepo(repository.full_name) ? _.sample(ReleaseMessages) : undefined;
+    const notification: Notification = {
+      kind: 'release',
+      author: toAuthor(sender),
+      title: `[${repository.full_name}] New release: ${release.name ?? release.tag_name}`,
       url: release.html_url,
-      user: sender,
-      description: isMainRepo(repository.full_name) ? _.sample(ReleaseMessages) : undefined,
+      body: description,
     };
 
     if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
-      await this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.FHSGithubReleases,
-        message: '',
-        props: { mm_blocks: [this.getReleaseMattermostBlock(embedProps)] },
-      });
+      await this.notifications.notify('team.fhs-releases', notification);
       return;
     }
 
     const messages = [
-      ...(repository.private
-        ? []
-        : [
-            this.discord.sendMessage({
-              channelId: DiscordChannel.Releases,
-              message: {
-                embeds: [this.getReleaseEmbed(embedProps)],
-              },
-              crosspost: true,
-            }),
-          ]),
-      this.mattermost.send({
-        channelId: Constants.Mattermost.Channels.GithubReleases,
-        message: '',
-        silent: true,
-        props: { mm_blocks: [this.getReleaseMattermostBlock(embedProps)] },
-      }),
+      ...(repository.private ? [] : [this.notifications.notify('community.releases', notification)]),
+      this.notifications.notify('team.releases', notification),
     ];
 
     if (isMainRepo(repository.full_name)) {
       if (semver.patch(release.tag_name) === 0 && semver.prerelease(release.tag_name) === null) {
-        messages.push(
-          this.discord.sendMessage({
-            channelId: DiscordChannel.Announcements,
-            message: {
-              embeds: [this.getReleaseEmbed(embedProps)],
-            },
-            crosspost: true,
-          }),
-        );
+        messages.push(this.notifications.notify('community.announcements', notification));
       }
 
+      // A bespoke plain-text public announcement, not a `Notification`; routing it through the model would change it.
       messages.push(
         this.zulip.sendMessage({
           stream: Constants.Zulip.Streams.Immich,
           topic: Constants.Zulip.Topics.ImmichRelease,
-          content: `${embedProps.description!} ${release.html_url}`,
+          content: `${description!} ${release.html_url}`,
         }),
       );
     }
