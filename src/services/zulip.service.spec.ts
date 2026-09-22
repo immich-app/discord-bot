@@ -29,6 +29,7 @@ const newHolidaysMock = (): Mocked<IHolidaysInterface> => ({
 
 const newZulipMock = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
+  isInitialised: vitest.fn(),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
 });

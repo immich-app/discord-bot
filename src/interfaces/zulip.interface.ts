@@ -9,6 +9,7 @@ export type MessagePayload = { stream: string | number; topic?: string; content:
 
 export interface IZulipInterface {
   init(config: ZulipConfig): Promise<void>;
+  isInitialised(): boolean;
   /** Resolves to the new message's ID; rejects on any Zulip error. */
   sendMessage(payload: MessagePayload): Promise<{ id: number }>;
   createEmote(name: string, emoteUrl: string): Promise<void>;

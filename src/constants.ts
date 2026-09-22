@@ -134,6 +134,13 @@ const mattermostTeams = {
   FHS: 'ewmb789rq3ya98sjkeqoon4y5y',
 };
 
+const zulipStreams = {
+  Immich: 54,
+  FUTOStaff: 2,
+  ImmichThirdParties: 111,
+  ImmichAlerts: 113,
+};
+
 /**
  * Where a notification destination is posted on each platform. A destination is an audience
  * (`community.*` is public, `team.*` is internal) plus a subject; services pick destinations and
@@ -145,27 +152,52 @@ const mattermostTeams = {
 export type NotificationRoute = {
   discord?: { channelId: DiscordChannel | string; crosspost?: boolean };
   mattermost?: { channelId: string; silent?: boolean };
+  zulip?: { stream: number; topic: string };
 };
 
 export const NotificationRoutes = {
   'community.github-status': { discord: { channelId: DiscordChannel.GithubStatus } },
-  'team.github-status': { mattermost: { channelId: mattermostChannels.GithubStatus, silent: true } },
+  'team.github-status': {
+    mattermost: { channelId: mattermostChannels.GithubStatus, silent: true },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'github status' },
+  },
   'community.pull-requests': { discord: { channelId: DiscordChannel.PullRequests } },
-  'team.pull-requests': { mattermost: { channelId: mattermostChannels.GithubPullRequests, silent: true } },
+  'team.pull-requests': {
+    mattermost: { channelId: mattermostChannels.GithubPullRequests, silent: true },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'pull requests' },
+  },
+  // FHS has its own pull request setup for now, so the FHS destinations stay on Mattermost only.
   'team.fhs-pull-requests': { mattermost: { channelId: mattermostChannels.FHSGithubPullRequests, silent: true } },
-  // Issues and discussions share channels today but are separate destinations: Zulip will give them separate topics.
   'community.issues': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
-  'team.issues': { mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true } },
+  'team.issues': {
+    mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'issues' },
+  },
   'community.discussions': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
-  'team.discussions': { mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true } },
+  'team.discussions': {
+    mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'discussions' },
+  },
   'community.releases': { discord: { channelId: DiscordChannel.Releases, crosspost: true } },
   'community.announcements': { discord: { channelId: DiscordChannel.Announcements, crosspost: true } },
-  'team.releases': { mattermost: { channelId: mattermostChannels.GithubReleases, silent: true } },
+  'team.releases': {
+    mattermost: { channelId: mattermostChannels.GithubReleases, silent: true },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'releases' },
+  },
   'team.fhs-releases': { mattermost: { channelId: mattermostChannels.FHSGithubReleases } },
   // Purchases and reports share a channel today but are separate destinations, like issues and discussions.
-  'team.purchases': { mattermost: { channelId: mattermostChannels.Purchases } },
-  'team.reports': { mattermost: { channelId: mattermostChannels.Purchases } },
-  'team.release-alerts': { discord: { channelId: discordChannels.TeamAlerts } },
+  'team.purchases': {
+    mattermost: { channelId: mattermostChannels.Purchases },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'purchases' },
+  },
+  'team.reports': {
+    mattermost: { channelId: mattermostChannels.Purchases },
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'reports' },
+  },
+  'team.release-alerts': {
+    discord: { channelId: discordChannels.TeamAlerts },
+    zulip: { stream: zulipStreams.ImmichAlerts, topic: 'release workflow' },
+  },
 } satisfies Record<string, NotificationRoute>;
 
 export type NotificationDestination = keyof typeof NotificationRoutes;
@@ -199,7 +231,7 @@ export const Constants = {
     Teams: mattermostTeams,
   },
   Zulip: {
-    Streams: { Immich: 54, FUTOStaff: 2 },
+    Streams: zulipStreams,
     Topics: { ImmichRelease: 'release' },
   },
 };

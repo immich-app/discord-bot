@@ -19,7 +19,7 @@ Immich Discord bot built with NestJS, discordx, and PostgreSQL (Kysely ORM).
 2. **Service layer** (`src/services/`) - Business logic. Injected into discord layer. Services use `@Inject(ITokenName)` for repository dependencies.
 3. **Repository layer** (`src/repositories/`) - External integrations (database, Discord API, GitHub, Zulip, RSS, etc). Each has an interface in `src/interfaces/` with a string token (`export const IFoo = 'IFoo'`).
 4. **Interface layer** (`src/interfaces/`) - Defines repository contracts and Kysely table types. The `Database` type in `database.interface.ts` maps table names to their column types.
-5. **Renderer layer** (`src/renderers/`) - Pure functions, no DI, one module per chat platform. Each turns a platform-neutral `Notification` into that platform's wire shape (`toDiscordEmbed`, `toMattermostBlock`). Consumed only by `NotificationService`; services never import a renderer, and no renderer imports another.
+5. **Renderer layer** (`src/renderers/`) - Pure functions, no DI, one module per chat platform. Each turns a platform-neutral `Notification` into that platform's wire shape (`toDiscordEmbed`, `toMattermostBlock`, `toZulipMessage`). Consumed only by `NotificationService`; services never import a renderer, and no renderer imports another.
 
 ### Dependency Injection
 
@@ -69,21 +69,29 @@ Anything posted to a chat channel as a card (GitHub events, GitHub status incide
 
 1. The service builds a `Notification` (`src/interfaces/notification.interface.ts`): a required `kind` (`feed`, `release`, `incident`, `purchase`, `report`, `alert`), an optional domain-namespaced `accent` (`pr.merged`, `issue.closed`, `order.cancelled`, ...), plus `author`, `title`, `url`, `body` and `fields`.
 2. The service calls `NotificationService.notify(destination, notification)` with a logical destination such as `community.releases` or `team.purchases`. Destinations are audience-scoped: `community.*` is public, `team.*` is internal. Business rules like "a private repo skips the community" are expressed by choosing destinations, not platforms.
-3. `NotificationRoutes` in `src/constants.ts` maps every destination to the platforms and channels it reaches, including per-route `silent` (Mattermost) and `crosspost` (Discord). A destination with no route for a platform simply does not post there. The whole matrix is reviewable in that one table.
-4. `NotificationService` (`src/services/notification.service.ts`) renders the notification once per routed platform with that platform's renderer and sends it, Discord first, one platform at a time.
+3. `NotificationRoutes` in `src/constants.ts` maps every destination to the platforms and channels it reaches, including per-route `silent` (Mattermost), `crosspost` (Discord) and `topic` (Zulip). A destination with no route for a platform simply does not post there. The whole matrix is reviewable in that one table. Today every `team.*` destination except the FHS ones reaches Zulip (stream `ImmichThirdParties`, one topic per subject; `team.release-alerts` goes to `ImmichAlerts`); `community.*` destinations are Discord only.
+4. `NotificationService` (`src/services/notification.service.ts`) renders the notification once per routed platform with that platform's renderer and sends it, Discord first, then Mattermost, then Zulip, one platform at a time.
+
+Delivery policy, covered by `notification.service.spec.ts`:
+
+- **Unconfigured platforms are skipped.** A Zulip route is attempted only when `zulip.isInitialised()` (the same notion `ZulipRepository` throws on: `init` never ran because the `dev` sentinel keys skipped it). Local dev therefore never throws on team notifications. Discord and Mattermost are always configured.
+- **A platform outage never rejects.** A platform that fails does not stop the ones after it, and `notify` resolves even when every attempted platform failed. Each failure is logged as an `error` with the destination and platform; when no platform took the notification, one `fatal` line (`Could not notify <destination> on any platform: notification dropped`) says so. `src/main.ts` enables the `fatal` level for that reason.
+  - The trade-off: a webhook now answers success even if every chat post failed, and the log is the only place a dropped notification shows.
+  - The alternative, rejecting on a total failure, silences Zulip whenever Discord is down. The handlers post one event to several destinations in sequence (`await notify('community.pull-requests')`, then `await notify('team.pull-requests')`), and `community.*` destinations route to Discord alone, so the first call's rejection would skip the team post and Zulip with it. That is worse now that Zulip is the team's primary platform, and it cannot be fixed in the services, which this seam keeps unchanged.
+- **Rendering is not a platform failure.** Each platform's payload is rendered immediately before that platform's own send, in platform order and outside the isolation above. A renderer bug propagates to the caller as the programming error it is instead of being logged as an outage, and a bug in a later platform's renderer cannot undo the posts already made before it. Nothing is rendered for a skipped platform.
 
 Rules that keep the seam clean:
 
 - Renderers derive every layout decision (title size, whether a body slot exists, truncation, fields layout, author style, whether the title links) from `kind`, never from which keys a notification has or what its values are: a feed title links even when its `url` is `''`. Services never pass render options. Only whether an existing slot is *filled* depends on the data: a `feed` always has a body slot, which renders empty when there is no body.
 - Truncation that applies on every platform is content and belongs in the service (feed bodies are shortened to 500 before rendering). Truncation that applies on one platform is presentation and belongs in that renderer (release descriptions are shortened to 500 on Mattermost only).
-- An accent token names the event at its call site, never a colour. `src/renderers/palette.ts` maps tokens to RGB numbers; both renderers read it. Several tokens sharing a colour is expected.
+- An accent token names the event at its call site, never a colour. `src/renderers/palette.ts` maps tokens to RGB numbers; the Discord and Mattermost renderers read it. Zulip has no colours, so `src/renderers/zulip.renderer.ts` keeps its own token-to-emoji table (`Emoji`) chosen by what the token means, not by the colour it shares. Several tokens sharing a colour or an emoji is expected.
 - `webhook.service.ts` and `schedule.service.ts` never call `discord.sendMessage` or `mattermost.send` for a notification. The Zulip release announcement in `handleReleaseNotification` is a bespoke plain-text message, not a `Notification`, and stays a direct call.
 
 ### Adding a New Notification Platform
 
 1. Add `src/renderers/{platform}.renderer.ts`: a pure `to{Platform}Message(notification: Notification)` that switches on `kind` for layout and maps `accent` to the platform's affordance (read `Palette` for a colour, or keep a token-to-emoji table for a platform without colours). Do not import another renderer or `discord.js`, directly or through `src/util` (which depends on it); string helpers such as `shorten` and `asHexColor` come from `src/format.ts`.
-2. Add an optional `{platform}` entry to `NotificationRoute` and fill in the routes in `NotificationRoutes` (`src/constants.ts`). Destinations that share a channel today (issues and discussions, purchases and reports) are separate on purpose so they can land in different places.
-3. Inject the platform's repository interface into `NotificationService` and send in `notify` when the destination has a route for it.
+2. Add an optional `{platform}` entry to `NotificationRoute` and fill in the routes in `NotificationRoutes` (`src/constants.ts`). Destinations that share a channel today (issues and discussions, purchases and reports) are separate on purpose so they can land in different places; on Zulip they already are.
+3. Inject the platform's repository interface into `NotificationService` and add a `deliver` call in `notify`, after the platforms already there, when the destination has a route for it (and the platform is configured, if it can be unconfigured). `deliver` takes a render thunk and a send and handles the lazy rendering, logging and failure isolation.
 
 Nothing in `webhook.service.ts` or `schedule.service.ts` should change.
 
@@ -100,7 +108,18 @@ The bot talks to Zulip through a typed `openapi-fetch` client, not an SDK.
   - A `429` is retried after the body's `retry-after` (falling back to the `Retry-After` header), with a bounded attempt count and a bounded maximum wait; the retried request re-sends its body. Nothing else is retried: a 429 was not processed, but retrying a 5xx on `POST /messages` could double-post.
   - Credentials and the `Authorization` header are never logged.
 - **Two identities**: `ZulipRepository` holds a `bot` client (posts messages) and a `user` client (uploads emoji) because Zulip only lets human accounts upload emoji (`This endpoint does not accept bot requests`). Config keeps `zulip.bot` and `zulip.user` for that reason. Both are created once, in `ZulipService.init` (skipped with the `dev` sentinel keys); calling a repository method before that throws `Zulip client not initialised`.
-- **Endpoints**: `ZulipRepository` exposes only what the bot uses today (`sendMessage`, which resolves to the new message's `{ id }`, and `createEmote`). Each phase adds only the endpoints it needs, a few lines each thanks to the generated types; do not add unused methods.
+- **Endpoints**: `ZulipRepository` exposes only what the bot uses today (`sendMessage`, which resolves to the new message's `{ id }`, `createEmote`, and `isInitialised`, which `NotificationService` checks before routing to Zulip). Each phase adds only the endpoints it needs, a few lines each thanks to the generated types; do not add unused methods.
+- **Streams**: `Constants.Zulip.Streams` holds channels by numeric ID, named after the channel (`ImmichThirdParties: 111` carries every team notification, `ImmichAlerts: 113` the release workflow alerts). IDs survive a rename; the dev server mirrors the names but not the IDs. Topic strings live in `NotificationRoutes`, not here.
+- **Renderer**: `toZulipMessage` (`src/renderers/zulip.renderer.ts`) flattens a `Notification` into one message of Zulip markdown. `zulip.renderer.spec.ts` pins all of the following.
+  - *Shape*: `{emoji} **[title](url)** — [author](url)`, then the body, then the fields. A `line` field (every kind but `incident`) is one `**name:** value` line; a `block` field (`incident`) is a bold name line with the value quoted beneath it.
+  - *Feed bodies are quoted*: a GitHub markdown body goes inside a tilde quote fence so its headings and lists stay subordinate to the title. Zulip closes a fence on a line equal to the opening one, so the fence is always one tilde longer than the longest tilde run inside it and no line can close it; a backtick fence or a shorter tilde run just opens a nested block inside the quote. An incident field value is multi-line prose and gets the same quote.
+  - *Release bodies are inline*: a release body is one of the one-line `ReleaseMessages` slogans or nothing, never the release notes. Its 500-character cap mirrors Mattermost's and is insurance that never fires today.
+  - *Zulip markdown only*: Zulip renders only `*`/`**` emphasis (no `_` forms), treats a single newline as a line break and shows an unknown `:name:` literally, so the renderer emits Unicode emoji characters and nothing Discord-only.
+  - *Nothing in a notification was written for Zulip*: titles and bodies come from any GitHub user, order messages from any buyer, incident text from GitHub Status, and Zulip has no backslash escaping. So the renderer neutralises instead of escaping, with a zero-width space where a character must be broken up (it renders invisibly and matches no Zulip syntax) and with containment where a value must stay in its slot:
+    - `neutraliseMentions` puts a zero-width space after the sigil of every `@**user**`, `@_**user**`, `@*group*` and `#**stream**` in every interpolated string, quoted body included. Nobody can ping the channel through a notification.
+    - `neutraliseLabel` also runs over the title and author name, which are interpolated into the heading's `[label](url)`. Python-Markdown accepts a link only when `(` or `[` directly follows the closing `]`, so it puts a zero-width space between exactly those pairs, `](` and `][`, and touches no other `]`. An issue titled `Crash](https://evil) [` degrades the heading to plain text instead of repointing its link, while `[owner/repo]` and `Fix [BUG] thumbnails` read, copy and search as written. Bodies and field values are not link labels and keep their `](`, so an alert body's own `[text](url)` still links.
+    - A field value cannot leave its slot. A `line` value shares a line with its name, so its line breaks become spaces (a field name's too, in either layout): nothing in a merch order message ever starts a line, so it can open no fence, heading or list and cannot pose as the next field. A `block` value is quoted like a feed body, with the same fence rule.
+    - Other markup in those strings renders as markdown, which can only garble a heading or a line, never notify anyone, forge a link or escape a slot.
 
 ## Commands
 
@@ -129,6 +148,6 @@ npm run zulip:types  # Regenerate src/generated/zulip.ts from the pinned Zulip O
 - `src/repositories/database.repository.ts` - Kysely DB queries
 - `src/interfaces/notification.interface.ts` - Platform-neutral `Notification` model (`kind`, `accent`, `author`, `title`, `url`, `body`, `fields`)
 - `src/services/notification.service.ts` - Destination-to-platform fan-out for notifications
-- `src/renderers/` - Per-platform `Notification` renderers and the shared accent palette
+- `src/renderers/` - Per-platform `Notification` renderers (`discord`, `mattermost`, `zulip`) and the shared accent palette
 - `src/generated/zulip.ts` - Generated Zulip API types (`npm run zulip:types`), never edited by hand
 - `src/repositories/zulip.client.ts` - Typed Zulip transport: form/JSON encoding, multipart, errors, 429 retry, timeout

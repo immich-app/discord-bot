@@ -19,6 +19,10 @@ export class ZulipRepository implements IZulipInterface {
     };
   }
 
+  isInitialised() {
+    return this.clients !== undefined;
+  }
+
   /** The bot account posts messages. */
   private get bot() {
     return this.client('bot');
