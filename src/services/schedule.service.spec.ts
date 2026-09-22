@@ -4,6 +4,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
+import { NotificationService } from 'src/services/notification.service';
 import { ScheduleService } from 'src/services/schedule.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -70,7 +71,12 @@ describe('ScheduleService', () => {
     discordMock = newDiscordMock();
     outlineMock = newOutlineMock();
     mattermostMock = newMattermostMock();
-    sut = new ScheduleService(databaseMock as unknown as IDatabaseRepository, discordMock, outlineMock, mattermostMock);
+    sut = new ScheduleService(
+      databaseMock as unknown as IDatabaseRepository,
+      discordMock,
+      outlineMock,
+      new NotificationService(discordMock, mattermostMock),
+    );
   });
 
   afterEach(() => {

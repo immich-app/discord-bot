@@ -16,6 +16,7 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
+import { NotificationService } from 'src/services/notification.service';
 import { WebhookService } from 'src/services/webhook.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -359,6 +360,7 @@ describe(WebhookService.name, () => {
       outlineMock,
       mattermostMock,
       zulipMock,
+      new NotificationService(discordMock, mattermostMock),
     );
   });
 

@@ -1,0 +1,96 @@
+import { Colors } from 'discord.js';
+import { toDiscordEmbed } from 'src/renderers/discord.renderer';
+import { describe, expect, it } from 'vitest';
+
+describe('toDiscordEmbed', () => {
+  it('should render the title, link, author and colour', () => {
+    const embed = toDiscordEmbed({
+      kind: 'feed',
+      accent: 'pr.merged',
+      author: { name: 'octocat', url: 'https://github.com/octocat', iconUrl: 'https://example.com/a.png' },
+      title: 'Pull request merged',
+      url: 'https://github.com/immich-app/immich/pull/1',
+      body: 'Body',
+    });
+
+    expect(embed.toJSON()).toEqual({
+      title: 'Pull request merged',
+      url: 'https://github.com/immich-app/immich/pull/1',
+      author: { name: 'octocat', url: 'https://github.com/octocat', icon_url: 'https://example.com/a.png' },
+      description: 'Body',
+      color: Colors.Purple,
+    });
+  });
+
+  it('should keep the author url and icon_url keys when they are empty', () => {
+    const embed = toDiscordEmbed({ kind: 'feed', author: { name: 'x', url: '', iconUrl: '' }, title: 'T' });
+    expect(embed.toJSON().author).toStrictEqual({ name: 'x', url: '', icon_url: '' });
+  });
+
+  it('should not carry an icon_url on an incident or purchase author', () => {
+    for (const kind of ['incident', 'purchase'] as const) {
+      const embed = toDiscordEmbed({ kind, author: { name: 'x', url: 'https://example.com' }, title: 'T' });
+      expect(embed.toJSON().author, kind).toStrictEqual({ name: 'x', url: 'https://example.com' });
+    }
+  });
+
+  it('should keep the url key on a linked kind even when the url is empty or missing', () => {
+    for (const kind of ['feed', 'release', 'incident', 'purchase'] as const) {
+      expect(toDiscordEmbed({ kind, title: 'T', url: '' }).toJSON(), kind).toHaveProperty('url', '');
+      expect(toDiscordEmbed({ kind, title: 'T' }).toJSON(), kind).toHaveProperty('url', undefined);
+    }
+  });
+
+  it('should never set a url on a report or alert', () => {
+    for (const kind of ['report', 'alert'] as const) {
+      expect(toDiscordEmbed({ kind, title: 'T', url: 'https://example.com' }).toJSON(), kind).not.toHaveProperty('url');
+    }
+  });
+
+  it('should keep the description slot on a feed item without a body', () => {
+    const embed = toDiscordEmbed({ kind: 'feed', title: 'Issue closed' });
+    expect(embed.toJSON()).toHaveProperty('description', undefined);
+  });
+
+  it('should keep the description slot on a release without a body', () => {
+    const embed = toDiscordEmbed({ kind: 'release', title: 'New release' });
+    expect(embed.toJSON()).toHaveProperty('description', undefined);
+  });
+
+  it('should not have a description slot on an incident', () => {
+    const embed = toDiscordEmbed({ kind: 'incident', title: 'Outage', body: 'ignored' });
+    expect(embed.toJSON()).not.toHaveProperty('description');
+  });
+
+  it('should append the alert emoji to an alert title', () => {
+    const embed = toDiscordEmbed({ kind: 'alert', accent: 'release.failed', title: 'Release Workflow Failed' });
+    expect(embed.toJSON().title).toBe('Release Workflow Failed <a:peepoAlert:1367804942638776423>');
+  });
+
+  it('should not decorate the title of a non-alert kind', () => {
+    const embed = toDiscordEmbed({ kind: 'release', title: 'New release' });
+    expect(embed.toJSON().title).toBe('New release');
+  });
+
+  it('should leave the colour unset without an accent', () => {
+    const embed = toDiscordEmbed({ kind: 'feed', title: 'Closed' });
+    expect(embed.toJSON()).not.toHaveProperty('color');
+  });
+
+  it('should pass inline fields through and leave inline unset otherwise', () => {
+    const embed = toDiscordEmbed({
+      kind: 'purchase',
+      title: 'Purchase',
+      fields: [
+        { name: 'Revenue', value: '1 USD', inline: true },
+        { name: 'Note', value: 'stacked' },
+      ],
+    });
+
+    expect(embed.toJSON().fields).toEqual([
+      { name: 'Revenue', value: '1 USD', inline: true },
+      { name: 'Note', value: 'stacked' },
+    ]);
+    expect(embed.toJSON().fields?.[1]).not.toHaveProperty('inline');
+  });
+});

@@ -1,3 +1,5 @@
+import { DiscordChannel } from 'src/interfaces/discord.interface';
+
 export enum DiscordModal {
   Env = 'envModal',
   Logs = 'logsModal',
@@ -131,6 +133,42 @@ const mattermostTeams = {
   Immich: 'ejumard7n7budjfeayghjrr3or',
   FHS: 'ewmb789rq3ya98sjkeqoon4y5y',
 };
+
+/**
+ * Where a notification destination is posted on each platform. A destination is an audience
+ * (`community.*` is public, `team.*` is internal) plus a subject; services pick destinations and
+ * this table alone decides which platforms and channels each one reaches. A destination with no
+ * route for a platform simply does not post there. `silent` and `crosspost` live here so the whole
+ * matrix is reviewable in one place. Adding a platform means adding a key to `NotificationRoute`
+ * and filling it in below; no service changes.
+ */
+export type NotificationRoute = {
+  discord?: { channelId: DiscordChannel | string; crosspost?: boolean };
+  mattermost?: { channelId: string; silent?: boolean };
+};
+
+export const NotificationRoutes = {
+  'community.github-status': { discord: { channelId: DiscordChannel.GithubStatus } },
+  'team.github-status': { mattermost: { channelId: mattermostChannels.GithubStatus, silent: true } },
+  'community.pull-requests': { discord: { channelId: DiscordChannel.PullRequests } },
+  'team.pull-requests': { mattermost: { channelId: mattermostChannels.GithubPullRequests, silent: true } },
+  'team.fhs-pull-requests': { mattermost: { channelId: mattermostChannels.FHSGithubPullRequests, silent: true } },
+  // Issues and discussions share channels today but are separate destinations: Zulip will give them separate topics.
+  'community.issues': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
+  'team.issues': { mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true } },
+  'community.discussions': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
+  'team.discussions': { mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true } },
+  'community.releases': { discord: { channelId: DiscordChannel.Releases, crosspost: true } },
+  'community.announcements': { discord: { channelId: DiscordChannel.Announcements, crosspost: true } },
+  'team.releases': { mattermost: { channelId: mattermostChannels.GithubReleases, silent: true } },
+  'team.fhs-releases': { mattermost: { channelId: mattermostChannels.FHSGithubReleases } },
+  // Purchases and reports share a channel today but are separate destinations, like issues and discussions.
+  'team.purchases': { mattermost: { channelId: mattermostChannels.Purchases } },
+  'team.reports': { mattermost: { channelId: mattermostChannels.Purchases } },
+  'team.release-alerts': { discord: { channelId: discordChannels.TeamAlerts } },
+} satisfies Record<string, NotificationRoute>;
+
+export type NotificationDestination = keyof typeof NotificationRoutes;
 
 export const Constants = {
   Urls: {

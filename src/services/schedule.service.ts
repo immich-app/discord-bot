@@ -1,13 +1,20 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { Colors, roleMention } from 'discord.js';
+import { roleMention } from 'discord.js';
 import { DateTime } from 'luxon';
 import { Constants } from 'src/constants';
-import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IDatabaseRepository, ReportOptions } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
+import { NotificationService } from 'src/services/notification.service';
 import { getTotal, makeLicenseFields, makeOrderFields } from 'src/util';
+
+type ReportCadence = 'Daily' | 'Weekly' | 'Monthly';
+
+const getEndOfYesterday = () => DateTime.now().minus({ days: 1 }).endOf('day');
+
+/** `September 16 - September 23`: how the weekly and monthly report titles print their range. */
+const formatRange = (start: DateTime, end: DateTime) => `${start.toFormat('MMMM dd')} - ${end.toFormat('MMMM dd')}`;
 
 @Injectable()
 export class ScheduleService {
@@ -15,242 +22,72 @@ export class ScheduleService {
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
-    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
+    private notifications: NotificationService,
   ) {}
 
   @Cron(Constants.Cron.DailyReport)
   async onDailyReport() {
-    const endOfYesterday = DateTime.now().minus({ days: 1 }).endOf('day');
-    const { server, client } = await this.database.getTotalLicenseCount({ day: endOfYesterday });
-    const { revenue, profit } = await this.database.getTotalFourthwallOrders({ day: endOfYesterday });
+    const endOfYesterday = getEndOfYesterday();
 
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: `#${Colors.Purple.toString(16)}`,
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: `Daily product keys report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`,
-              },
-              { type: 'text', text: `Total: ${getTotal({ server, client })}` },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: `#${Colors.DarkPurple.toString(16)}`,
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: `Daily orders report for ${endOfYesterday.toLocaleString(DateTime.DATE_FULL)}`,
-              },
-              {
-                type: 'text',
-                text: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
-              },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeOrderFields({ revenue, profit }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
+    await this.sendReports({
+      cadence: 'Daily',
+      period: endOfYesterday.toLocaleString(DateTime.DATE_FULL),
+      options: { day: endOfYesterday },
     });
   }
 
   @Cron(Constants.Cron.WeeklyReport)
   async onWeeklyReport() {
-    const endOfYesterday = DateTime.now().minus({ days: 1 }).endOf('day');
-    const lastWeek = endOfYesterday.minus({ weeks: 1 });
-    const { server, client } = await this.database.getTotalLicenseCount({ week: endOfYesterday });
-    const { revenue, profit } = await this.database.getTotalFourthwallOrders({ week: endOfYesterday });
+    const endOfYesterday = getEndOfYesterday();
 
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: `#${Colors.Purple.toString(16)}`,
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: `Weekly licenses report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-              },
-              { type: 'text', text: `Total: ${getTotal({ server, client })}` },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: `#${Colors.DarkPurple.toString(16)}`,
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: `Weekly orders report for ${lastWeek.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-              },
-              {
-                type: 'text',
-                text: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
-              },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeOrderFields({ revenue, profit }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
+    await this.sendReports({
+      cadence: 'Weekly',
+      period: formatRange(endOfYesterday.minus({ weeks: 1 }), endOfYesterday),
+      options: { week: endOfYesterday },
     });
   }
 
   @Cron(Constants.Cron.MonthlyReport)
   async onMonthlyReport() {
-    const endOfYesterday = DateTime.now().minus({ days: 1 }).endOf('day');
-    const lastMonth = endOfYesterday.minus({ months: 1 });
-    const { server, client } = await this.database.getTotalLicenseCount({ month: endOfYesterday });
-    const { revenue, profit } = await this.database.getTotalFourthwallOrders({ month: endOfYesterday });
+    const endOfYesterday = getEndOfYesterday();
 
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: `#${Colors.Purple.toString(16)}`,
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: `Monthly licenses report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-              },
-              { type: 'text', text: `Total: ${getTotal({ server, client })}` },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeLicenseFields({ server, client }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
+    await this.sendReports({
+      cadence: 'Monthly',
+      period: formatRange(endOfYesterday.minus({ months: 1 }), endOfYesterday),
+      options: { month: endOfYesterday },
+    });
+  }
+
+  /** Posts a licences report followed by an orders report for the period. */
+  private async sendReports({
+    cadence,
+    period,
+    options,
+  }: {
+    cadence: ReportCadence;
+    period: string;
+    options: ReportOptions;
+  }) {
+    const { server, client } = await this.database.getTotalLicenseCount(options);
+    const { revenue, profit } = await this.database.getTotalFourthwallOrders(options);
+
+    // The daily report has always said "product keys" where the weekly and monthly ones say "licenses".
+    const licensesSubject = cadence === 'Daily' ? 'product keys' : 'licenses';
+
+    await this.notifications.notify('team.reports', {
+      kind: 'report',
+      accent: 'report.licenses',
+      title: `${cadence} ${licensesSubject} report for ${period}`,
+      body: `Total: ${getTotal({ server, client })}`,
+      fields: makeLicenseFields({ server, client }),
     });
 
-    await this.mattermost.send({
-      channelId: Constants.Mattermost.Channels.Purchases,
-      message: '',
-      props: {
-        mm_blocks: [
-          {
-            type: 'container',
-            accent_color: `#${Colors.DarkPurple.toString(16)}`,
-            border: true,
-            gap: 'small',
-            content: [
-              {
-                type: 'text',
-                text: `Monthly orders report for ${lastMonth.toFormat('MMMM dd')} - ${endOfYesterday.toFormat('MMMM dd')}`,
-              },
-              {
-                type: 'text',
-                text: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
-              },
-              { type: 'divider' },
-              {
-                type: 'column_set',
-                columns: makeOrderFields({ revenue, profit }).map(({ name, value }) => ({
-                  type: 'column',
-                  gap: 'small',
-                  items: [
-                    { type: 'text', text: `**${name}**` },
-                    { type: 'text', text: value },
-                  ],
-                })),
-              },
-            ],
-          },
-        ],
-      },
+    await this.notifications.notify('team.reports', {
+      kind: 'report',
+      accent: 'report.orders',
+      title: `${cadence} orders report for ${period}`,
+      body: `Revenue: ${revenue.toLocaleString()} USD; Profit: ${profit.toLocaleString()} USD`,
+      fields: makeOrderFields({ revenue, profit }),
     });
   }
 
