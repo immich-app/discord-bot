@@ -17,6 +17,10 @@ export class PullRequestTable {
   @Column({ nullable: true })
   discordThreadId!: string | null;
 
+  /** Zulip topics have no ID, so the topic is found again through its first message. */
+  @Column({ type: 'integer', nullable: true })
+  zulipMessageId!: number | null;
+
   @UpdateDateColumn()
   updatedAt!: Timestamp;
 

@@ -56,6 +56,16 @@ describe('ZulipRepository', () => {
       );
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it.each([
+      { method: 'getMessage', call: () => sut.getMessage(1) },
+      { method: 'updateMessage', call: () => sut.updateMessage(1, { content: 'x' }) },
+      { method: 'listEmoji', call: () => sut.listEmoji() },
+      { method: 'getSubscriptions', call: () => sut.getSubscriptions() },
+    ])('should throw a clear error from $method', async ({ call }) => {
+      await expect(call()).rejects.toThrow('Zulip client not initialised');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('sendMessage', () => {
@@ -102,6 +112,175 @@ describe('ZulipRepository', () => {
 
       await expect(promise).rejects.toBeInstanceOf(ZulipApiError);
       await expect(promise).rejects.toMatchObject({ status: 400, code: 'STREAM_DOES_NOT_EXIST' });
+    });
+  });
+
+  describe('getMessage', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should fetch the message as the bot and return its ID and current topic', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          raw_content: 'hello',
+          message: { id: 42, subject: '#1234: feat: add thing', content: '<p>hello</p>', type: 'stream' },
+        }),
+      );
+
+      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '#1234: feat: add thing' });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/messages/42?allow_empty_topic_name=true');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+    });
+
+    it('should return the empty topic as an empty string, not the realm\'s "general chat" display name', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', message: { id: 42, subject: '' } }));
+
+      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '' });
+    });
+
+    it('should return the topic a human gave the message since, resolved prefix included', async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'success', msg: '', message: { id: 42, subject: '✔ #1234: something else' } }),
+      );
+
+      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '✔ #1234: something else' });
+    });
+
+    it('should throw on a Zulip error instead of resolving', async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'error', code: 'BAD_REQUEST', msg: 'Invalid message(s)' }, { status: 400 }),
+      );
+
+      const promise = sut.getMessage(42);
+
+      await expect(promise).rejects.toBeInstanceOf(ZulipApiError);
+      await expect(promise).rejects.toMatchObject({ status: 400, code: 'BAD_REQUEST', msg: 'Invalid message(s)' });
+    });
+  });
+
+  describe('updateMessage', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '' }));
+    });
+
+    it('should PATCH the message as the bot, form-encoded', async () => {
+      await sut.updateMessage(42, { content: 'edited' });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('PATCH');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/messages/42');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
+      expect(await request(0).text()).toBe('content=edited');
+    });
+
+    it('should move a whole topic with propagate_mode=change_all and send nothing else', async () => {
+      await sut.updateMessage(42, { topic: '✔ #1234: feat: add thing', propagateMode: 'change_all' });
+
+      expect(await request(0).text()).toBe('topic=%E2%9C%94+%231234%3A+feat%3A+add+thing&propagate_mode=change_all');
+    });
+
+    it('should throw with the code Zulip answers when a move exceeds the time limit', async () => {
+      fetchMock.mockResolvedValue(
+        json(
+          {
+            result: 'error',
+            code: 'MOVE_MESSAGES_TIME_LIMIT_EXCEEDED',
+            msg: 'You only have permission to move the 2/5 most recent messages in this topic.',
+            first_message_id_allowed_to_move: 123,
+            total_messages_allowed_to_move: 2,
+            total_messages_in_topic: 5,
+          },
+          { status: 400 },
+        ),
+      );
+
+      const promise = sut.updateMessage(42, { topic: 'renamed', propagateMode: 'change_all' });
+
+      await expect(promise).rejects.toBeInstanceOf(ZulipApiError);
+      await expect(promise).rejects.toMatchObject({ status: 400, code: 'MOVE_MESSAGES_TIME_LIMIT_EXCEEDED' });
+    });
+
+    it('should throw with BAD_REQUEST when an edit is refused', async () => {
+      fetchMock.mockResolvedValue(
+        json(
+          { result: 'error', code: 'BAD_REQUEST', msg: 'The time limit for editing this message has past' },
+          { status: 400 },
+        ),
+      );
+
+      await expect(sut.updateMessage(42, { content: 'edited' })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        msg: 'The time limit for editing this message has past',
+      });
+    });
+  });
+
+  describe('listEmoji', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should list every realm emoji as the bot, deactivated ones included', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          emoji: {
+            '1': { id: '1', name: 'green_tick', source_url: '/x/1.png', deactivated: false, author_id: 5 },
+            '2': { id: '2', name: 'old', source_url: '/x/2.png', deactivated: true, author_id: 5 },
+          },
+        }),
+      );
+
+      await expect(sut.listEmoji()).resolves.toEqual([
+        { name: 'green_tick', deactivated: false },
+        { name: 'old', deactivated: true },
+      ]);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/realm/emoji');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+    });
+
+    it('should return an empty list for a realm without custom emoji', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', emoji: {} }));
+
+      await expect(sut.listEmoji()).resolves.toEqual([]);
+    });
+  });
+
+  describe('getSubscriptions', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it("should list the bot's subscriptions by stream ID", async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          subscriptions: [
+            { stream_id: 111, name: 'ImmichThirdParties', color: '#e79ab5' },
+            { stream_id: 113, name: 'ImmichAlerts', color: '#bfd56f' },
+          ],
+        }),
+      );
+
+      await expect(sut.getSubscriptions()).resolves.toEqual([{ streamId: 111 }, { streamId: 113 }]);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/users/me/subscriptions');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
     });
   });
 

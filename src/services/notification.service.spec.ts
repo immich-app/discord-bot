@@ -44,6 +44,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   isInitialised: vitest.fn().mockReturnValue(true),
   sendMessage: vitest.fn().mockResolvedValue({ id: 1 }),
   createEmote: vitest.fn(),
+  getMessage: vitest.fn(),
+  updateMessage: vitest.fn(),
+  listEmoji: vitest.fn(),
+  getSubscriptions: vitest.fn(),
 });
 
 const { ImmichThirdParties, ImmichAlerts } = Constants.Zulip.Streams;
@@ -197,7 +201,13 @@ describe(NotificationService.name, () => {
     });
 
     it('should send team notifications to the third parties channel and alerts to the alerts channel', () => {
-      expect(Constants.Zulip.Streams).toEqual({ Immich: 54, FUTOStaff: 2, ImmichThirdParties: 111, ImmichAlerts: 113 });
+      expect(Constants.Zulip.Streams).toEqual({
+        Immich: 54,
+        FUTOStaff: 2,
+        ImmichThirdParties: 111,
+        ImmichPullRequests: 112,
+        ImmichAlerts: 113,
+      });
       for (const destination of destinations) {
         const { zulip } = NotificationRoutes[destination] as { zulip?: { stream: number } };
         if (zulip) {

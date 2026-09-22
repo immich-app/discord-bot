@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { Logger, UnauthorizedException } from '@nestjs/common';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
 import { EmbedBuilder } from 'discord.js';
@@ -16,6 +16,7 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
+import { ZulipApiError } from 'src/repositories/zulip.client';
 import { NotificationService } from 'src/services/notification.service';
 import { WebhookService } from 'src/services/webhook.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
@@ -131,6 +132,10 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   isInitialised: vitest.fn().mockReturnValue(false),
   createEmote: vitest.fn(),
   sendMessage: vitest.fn(),
+  getMessage: vitest.fn(),
+  updateMessage: vitest.fn(),
+  listEmoji: vitest.fn(),
+  getSubscriptions: vitest.fn(),
 });
 
 // --- fixtures -------------------------------------------------------------------------------
@@ -2950,6 +2955,887 @@ describe(WebhookService.name, () => {
 
       await expect(sut.onGithub(workflowRunEvent('timed_out'), 'github-slug')).resolves.toBeUndefined();
       expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+    });
+  });
+  describe('handlePullRequestZulipTopic', () => {
+    const PR_STREAM = 112;
+    const TOPIC = '#1234: feat: add thing';
+    const FIRST_MESSAGE = 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nThis PR adds a thing.\n~~~';
+
+    const storedPullRequest = (overrides: Record<string, unknown> = {}) =>
+      ({
+        nodeId: 'PR_node_1234',
+        organization: 'immich-app',
+        repository: 'immich',
+        number: 1234,
+        discordThreadId: 'thread-1',
+        zulipMessageId: 42,
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+        closedAt: null,
+        ...overrides,
+      }) as any;
+
+    const event = (
+      action: string,
+      overrides: Record<string, unknown> = {},
+      extra: Record<string, unknown> = {},
+      name: EmitterWebhookEvent['name'] = 'pull_request',
+    ) =>
+      githubEvent(name, { action, sender, repository: immichRepo, pull_request: makePullRequest(overrides), ...extra });
+
+    const refusal = (code: string, msg: string) => new ZulipApiError(400, code, msg, 'PATCH /api/v1/messages/42');
+    const noPermission = () => refusal('BAD_REQUEST', "You don't have permission to edit this message");
+    const timeLimit = () =>
+      refusal(
+        'MOVE_MESSAGES_TIME_LIMIT_EXCEEDED',
+        'You only have permission to move the 2/5 most recent messages in this topic.',
+      );
+    const noResolvePermission = () =>
+      refusal('BAD_REQUEST', "You don't have permission to resolve topics in this channel.");
+    const noMovePermission = () => refusal('BAD_REQUEST', "You don't have permission to move this message");
+    const topicTimeLimit = () => refusal('BAD_REQUEST', "The time limit for editing this message's topic has passed.");
+    const translated = () => refusal('BAD_REQUEST', 'Sie haben keine Berechtigung, Themen in diesem Kanal zu lösen.');
+
+    const topicPosts = () =>
+      zulipMock.sendMessage.mock.calls.map(([payload]) => payload).filter(({ stream }) => stream === PR_STREAM);
+
+    beforeEach(() => {
+      zulipMock.isInitialised.mockReturnValue(true);
+      zulipMock.sendMessage.mockResolvedValue({ id: 500 });
+      zulipMock.getMessage.mockResolvedValue({ id: 42, topic: TOPIC });
+      zulipMock.updateMessage.mockResolvedValue();
+      databaseMock.getPullRequestById.mockResolvedValue(storedPullRequest());
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    });
+
+    describe('opened', () => {
+      beforeEach(() => {
+        databaseMock.getPullRequestById.mockResolvedValue(storedPullRequest({ zulipMessageId: null }));
+      });
+
+      it('should open a topic with the link and the quoted body, and store the message ID', async () => {
+        await sut.onGithub(event('opened'), 'github-slug');
+
+        expect(topicPosts()).toEqual([{ stream: PR_STREAM, topic: TOPIC, content: FIRST_MESSAGE }]);
+        expect(databaseMock.updatePullRequest).toHaveBeenCalledWith({ nodeId: 'PR_node_1234', zulipMessageId: 500 });
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      });
+
+      it('should post only the link when the PR has no body', async () => {
+        await sut.onGithub(event('opened', { body: null }), 'github-slug');
+
+        expect(topicPosts()).toEqual([
+          { stream: PR_STREAM, topic: TOPIC, content: 'https://github.com/immich-app/immich/pull/1234' },
+        ]);
+      });
+
+      it('should neutralise mentions in the body and keep its fences inside the quote', async () => {
+        await sut.onGithub(event('opened', { body: 'cc @**all** and #**general**\n~~~\ncode\n~~~' }), 'github-slug');
+
+        expect(topicPosts()[0].content).toBe(
+          'https://github.com/immich-app/immich/pull/1234\n\n~~~~ quote\ncc @\u200B**all** and #\u200B**general**\n~~~\ncode\n~~~\n~~~~',
+        );
+      });
+
+      it('should cap the body at 2000 code points', async () => {
+        await sut.onGithub(event('opened', { body: 'x'.repeat(2001) }), 'github-slug');
+
+        expect(topicPosts()[0].content).toBe(
+          `https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\n${'x'.repeat(1997)}...\n~~~`,
+        );
+      });
+
+      it('should ignore a PR opened by a bot, as Discord does', async () => {
+        await sut.onGithub(event('opened', {}, { sender: { ...sender, type: 'Bot' } }), 'github-slug');
+
+        expect(topicPosts()).toEqual([]);
+        expect(databaseMock.updatePullRequest).not.toHaveBeenCalledWith(
+          expect.objectContaining({ zulipMessageId: 500 }),
+        );
+      });
+
+      it('should do nothing for another action on a PR without a topic', async () => {
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(topicPosts()).toEqual([]);
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      });
+
+      it('should still open the topic and store the ID when the Discord path rejects, then rethrow that error', async () => {
+        databaseMock.getPullRequestById.mockResolvedValue(
+          storedPullRequest({ zulipMessageId: null, discordThreadId: null }),
+        );
+        const discordError = new Error('Missing Access');
+        discordMock.createThread.mockRejectedValue(discordError);
+
+        await expect(sut.onGithub(event('opened'), 'github-slug')).rejects.toBe(discordError);
+
+        expect(topicPosts()).toEqual([{ stream: PR_STREAM, topic: TOPIC, content: FIRST_MESSAGE }]);
+        expect(databaseMock.updatePullRequest).toHaveBeenCalledWith({ nodeId: 'PR_node_1234', zulipMessageId: 500 });
+        const topicPost = zulipMock.sendMessage.mock.calls.findIndex(([{ stream }]) => stream === PR_STREAM);
+        expect(discordMock.createThread.mock.invocationCallOrder[0]).toBeLessThan(
+          zulipMock.sendMessage.mock.invocationCallOrder[topicPost],
+        );
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
+
+      it('should log and carry on when the topic cannot be opened, without storing an ID', async () => {
+        zulipMock.sendMessage.mockRejectedValue(
+          new ZulipApiError(503, 'UNKNOWN_ERROR', 'Service Unavailable', 'POST /api/v1/messages'),
+        );
+
+        await expect(sut.onGithub(event('opened'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(databaseMock.updatePullRequest).not.toHaveBeenCalledWith(
+          expect.objectContaining({ zulipMessageId: expect.anything() }),
+        );
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Zulip failed while updating the topic of pull request #1234',
+          expect.any(ZulipApiError),
+        );
+      });
+
+      it('should log a failure that is not Zulip as an unexpected error, so that a bug is not read as an outage', async () => {
+        databaseMock.updatePullRequest.mockRejectedValue(new Error('relation "pull_request" does not exist'));
+
+        await expect(sut.onGithub(event('opened'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(Logger.prototype.error).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Unexpected error while updating the Zulip topic of pull request #1234',
+          expect.any(Error),
+        );
+      });
+    });
+
+    describe('topic name', () => {
+      beforeEach(() => {
+        databaseMock.getPullRequestById.mockResolvedValue(storedPullRequest({ zulipMessageId: null }));
+      });
+
+      it("should cut the name to 58 characters, Zulip's 60 less the resolved prefix, not the 100 Discord allows", async () => {
+        const title = 'feat(server): a title that goes on well past the sixty character mark of Zulip';
+
+        await sut.onGithub(event('opened', { title }), 'github-slug');
+
+        const [{ topic }] = topicPosts();
+        expect(topic).toBe('#1234: feat(server): a title that goes on well past the...');
+        expect(topic).toHaveLength(58);
+        expect(discordMock.updateThread).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ name: `#1234: ${title}` }),
+        );
+      });
+
+      it('should count multibyte characters as one each and never cut one in half', async () => {
+        const fits = '🎉'.repeat(51);
+        await sut.onGithub(event('opened', { title: fits }), 'github-slug');
+        expect(topicPosts()[0].topic).toBe(`#1234: ${fits}`);
+        expect([...topicPosts()[0].topic!]).toHaveLength(58);
+
+        zulipMock.sendMessage.mockClear();
+        await sut.onGithub(event('opened', { title: '🎉'.repeat(52) }), 'github-slug');
+        expect(topicPosts()[0].topic).toBe(`#1234: ${'🎉'.repeat(48)}...`);
+        expect([...topicPosts()[0].topic!]).toHaveLength(58);
+        expect(topicPosts()[0].topic!.isWellFormed()).toBe(true);
+      });
+
+      it('should trim trailing whitespace, as Zulip does before storing a name', async () => {
+        await sut.onGithub(event('opened', { title: 'x'.repeat(48) + '   ' }), 'github-slug');
+
+        expect(topicPosts()[0].topic).toBe(`#1234: ${'x'.repeat(48)}`);
+      });
+    });
+
+    describe('closed', () => {
+      it('should post the merge notice in the current topic, then resolve the whole topic', async () => {
+        await sut.onGithub(event('closed', { merged: true, merged_at: '2026-01-02T00:00:00Z' }), 'github-slug');
+
+        expect(zulipMock.getMessage).toHaveBeenCalledWith(42);
+        expect(topicPosts()).toEqual([
+          {
+            stream: PR_STREAM,
+            topic: TOPIC,
+            content: 'Pull request has been merged by [@alextran1502](https://github.com/alextran1502)',
+          },
+        ]);
+        expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, { topic: `✔ ${TOPIC}`, propagateMode: 'change_all' });
+        expect(zulipMock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
+          zulipMock.updateMessage.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('should say "closed" when the PR was not merged', async () => {
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(topicPosts()[0].content).toBe(
+          'Pull request has been closed by [@alextran1502](https://github.com/alextran1502)',
+        );
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, { topic: `✔ ${TOPIC}`, propagateMode: 'change_all' });
+      });
+
+      it('should follow a human rename: post there and resolve that name, not the stored title', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: '#1234: the thing we discussed' });
+
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(topicPosts()[0].topic).toBe('#1234: the thing we discussed');
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
+          topic: '✔ #1234: the thing we discussed',
+          propagateMode: 'change_all',
+        });
+      });
+
+      it('should not resolve a topic a human already resolved', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: `✔ ${TOPIC}` });
+
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(topicPosts()[0].topic).toBe(`✔ ${TOPIC}`);
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      });
+
+      it('should resolve a maximal name the bot gave, multibyte characters included, within the 60 of Zulip', async () => {
+        databaseMock.getPullRequestById.mockResolvedValue(storedPullRequest({ zulipMessageId: null }));
+        await sut.onGithub(event('opened', { title: '🎉'.repeat(60) }), 'github-slug');
+        const [{ topic }] = topicPosts();
+        expect([...topic!]).toHaveLength(58);
+
+        databaseMock.getPullRequestById.mockResolvedValue(storedPullRequest());
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: topic! });
+        zulipMock.sendMessage.mockClear();
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        const [, { topic: resolved }] = zulipMock.updateMessage.mock.calls[0];
+        expect(resolved).toBe(`✔ ${topic}`);
+        expect([...resolved!]).toHaveLength(60);
+        expect(resolved!.isWellFormed()).toBe(true);
+      });
+
+      it('should send the full "✔ " + name past 60 for a topic a human renamed to the full 60, and let Zulip truncate', async () => {
+        const topic = `#1234: ${'x'.repeat(53)}`;
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic });
+
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        const [, { topic: resolved }] = zulipMock.updateMessage.mock.calls[0];
+        expect(resolved).toBe(`✔ ${topic}`);
+        expect([...resolved!]).toHaveLength(62);
+      });
+
+      it('should still post the notice and resolve the topic when the Discord path rejects, then rethrow that error', async () => {
+        const discordError = new Error('You are being rate limited.');
+        discordMock.sendMessage.mockRejectedValue(discordError);
+
+        await expect(
+          sut.onGithub(event('closed', { merged: true, merged_at: '2026-01-02T00:00:00Z' }), 'github-slug'),
+        ).rejects.toBe(discordError);
+
+        expect(topicPosts().map(({ content }) => content)).toEqual([
+          'Pull request has been merged by [@alextran1502](https://github.com/alextran1502)',
+        ]);
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, { topic: `✔ ${TOPIC}`, propagateMode: 'change_all' });
+        expect(Logger.prototype.error).not.toHaveBeenCalledWith(
+          expect.stringContaining('pull request #1234'),
+          expect.anything(),
+        );
+      });
+
+      it('should run the Discord path first and leave it unchanged', async () => {
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(discordMock.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-1' }));
+        expect(discordMock.setThreadArchived).toHaveBeenCalledWith(
+          { channelId: expect.any(String), threadId: 'thread-1' },
+          true,
+        );
+        expect(discordMock.setThreadArchived.mock.invocationCallOrder[0]).toBeLessThan(
+          zulipMock.getMessage.mock.invocationCallOrder[0],
+        );
+      });
+    });
+
+    describe('reopened', () => {
+      it('should post the notice in the resolved topic, then unresolve it', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: `✔ ${TOPIC}` });
+
+        await sut.onGithub(event('reopened'), 'github-slug');
+
+        expect(topicPosts()).toEqual([
+          {
+            stream: PR_STREAM,
+            topic: `✔ ${TOPIC}`,
+            content: 'Pull request has been reopened by [@alextran1502](https://github.com/alextran1502)',
+          },
+        ]);
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, { topic: TOPIC, propagateMode: 'change_all' });
+      });
+
+      it('should not rename a topic that is not resolved', async () => {
+        await sut.onGithub(event('reopened'), 'github-slug');
+
+        expect(topicPosts()).toHaveLength(1);
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      });
+    });
+
+    it('should post the draft notice and nothing else on converted_to_draft', async () => {
+      await sut.onGithub(event('converted_to_draft'), 'github-slug');
+
+      expect(topicPosts()).toEqual([
+        { stream: PR_STREAM, topic: TOPIC, content: 'Pull request has been converted to draft' },
+      ]);
+      expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+    });
+
+    describe('edited', () => {
+      it('should rename the topic when the title changed', async () => {
+        await sut.onGithub(
+          event('edited', { title: 'feat: add the thing' }, { changes: { title: { from: 'feat: add thing' } } }),
+          'github-slug',
+        );
+
+        expect(zulipMock.getMessage).toHaveBeenCalledWith(42);
+        expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
+          topic: '#1234: feat: add the thing',
+          propagateMode: 'change_all',
+        });
+        expect(topicPosts()).toEqual([]);
+      });
+
+      it('should keep a resolved topic resolved when renaming it', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: `✔ ${TOPIC}` });
+
+        await sut.onGithub(
+          event('edited', { title: 'feat: add the thing' }, { changes: { title: { from: 'feat: add thing' } } }),
+          'github-slug',
+        );
+
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
+          topic: '✔ #1234: feat: add the thing',
+          propagateMode: 'change_all',
+        });
+      });
+
+      it('should edit the first message when the body changed', async () => {
+        await sut.onGithub(
+          event('edited', { body: 'Now with tests.' }, { changes: { body: { from: 'This PR adds a thing.' } } }),
+          'github-slug',
+        );
+
+        expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
+          content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+        });
+      });
+
+      it('should rename and edit in two separate requests when both changed', async () => {
+        await sut.onGithub(
+          event(
+            'edited',
+            { title: 'feat: add the thing', body: 'Now with tests.' },
+            { changes: { title: { from: 'feat: add thing' }, body: { from: 'This PR adds a thing.' } } },
+          ),
+          'github-slug',
+        );
+
+        expect(zulipMock.updateMessage.mock.calls).toEqual([
+          [42, { topic: '#1234: feat: add the thing', propagateMode: 'change_all' }],
+          [42, { content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~' }],
+        ]);
+      });
+
+      it('should leave a human rename alone, without reading the topic, when neither title nor body changed', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: '#1234: the thing we discussed' });
+
+        await sut.onGithub(
+          event('edited', {}, { changes: { base: { ref: { from: 'main' }, sha: { from: 'abc' } } } }),
+          'github-slug',
+        );
+
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      });
+
+      it.each(['synchronize', 'ready_for_review', 'labeled', 'assigned'])(
+        'should not rename the topic on %s even when the title drifted: only a title edit renames, by decision',
+        async (action) => {
+          zulipMock.getMessage.mockResolvedValue({ id: 42, topic: '#1234: STALE NAME' });
+
+          await sut.onGithub(event(action, { title: 'feat: the current title' }), 'github-slug');
+
+          expect(zulipMock.getMessage).not.toHaveBeenCalled();
+          expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+          expect(topicPosts()).toEqual([]);
+          expect(discordMock.updateThread).toHaveBeenLastCalledWith(
+            expect.anything(),
+            expect.objectContaining({ name: '#1234: feat: the current title' }),
+          );
+        },
+      );
+
+      it.each([
+        {
+          what: 'review',
+          name: 'pull_request_review' as const,
+          extra: { review: { id: 1, body: 'LGTM' }, changes: { body: { from: 'LGTM?' } } },
+        },
+        {
+          what: 'review comment',
+          name: 'pull_request_review_comment' as const,
+          extra: { comment: { id: 1, body: 'nit' }, changes: { body: { from: 'nitpick' } } },
+        },
+      ])(
+        'should ignore an edited $what, whose changes are about itself, without reading the topic',
+        async ({ name, extra }) => {
+          await sut.onGithub(event('edited', {}, extra, name), 'github-slug');
+
+          expect(zulipMock.getMessage).not.toHaveBeenCalled();
+          expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+          expect(topicPosts()).toEqual([]);
+        },
+      );
+    });
+
+    it('should not read the topic for a review, which is not echoed there', async () => {
+      await sut.onGithub(
+        event('submitted', {}, { review: { id: 1, state: 'approved' } }, 'pull_request_review'),
+        'github-slug',
+      );
+
+      expect(zulipMock.getMessage).not.toHaveBeenCalled();
+      expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      expect(topicPosts()).toEqual([]);
+    });
+
+    describe('skipped', () => {
+      it('should do nothing when Zulip is not initialised', async () => {
+        zulipMock.isInitialised.mockReturnValue(false);
+
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+      });
+
+      it('should do nothing for a PR the database does not know', async () => {
+        databaseMock.getPullRequestById.mockResolvedValue(undefined);
+
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(topicPosts()).toEqual([]);
+      });
+
+      it('should do nothing for another immich-app repository', async () => {
+        await sut.onGithub(
+          githubEvent('pull_request', {
+            action: 'closed',
+            sender,
+            repository: immichOtherRepo,
+            pull_request: makePullRequest(),
+          }),
+          'github-slug',
+        );
+
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(topicPosts()).toEqual([]);
+      });
+
+      it('should do nothing for a private repository', async () => {
+        await sut.onGithub(
+          githubEvent('pull_request', {
+            action: 'closed',
+            sender,
+            repository: immichPrivateRepo,
+            pull_request: makePullRequest(),
+          }),
+          'github-slug',
+        );
+
+        expect(zulipMock.getMessage).not.toHaveBeenCalled();
+        expect(topicPosts()).toEqual([]);
+      });
+    });
+
+    describe('degrading without permissions', () => {
+      it.each([
+        { reason: 'edit permission', error: noPermission },
+        { reason: 'move time limit code', error: timeLimit },
+        { reason: 'can_resolve_topics_group', error: noResolvePermission },
+        { reason: 'can_move_messages_between_topics_group', error: noMovePermission },
+        { reason: 'move_messages_within_stream_limit_seconds', error: topicTimeLimit },
+        { reason: 'translated message', error: translated },
+      ])('should post a plain message and carry on when the resolve is refused ($reason)', async ({ error }) => {
+        zulipMock.updateMessage.mockRejectedValue(error());
+
+        await expect(
+          sut.onGithub(event('closed', { merged: true, merged_at: '2026-01-02T00:00:00Z' }), 'github-slug'),
+        ).resolves.toBeUndefined();
+
+        expect(topicPosts()).toEqual([
+          {
+            stream: PR_STREAM,
+            topic: TOPIC,
+            content: 'Pull request has been merged by [@alextran1502](https://github.com/alextran1502)',
+          },
+          { stream: PR_STREAM, topic: TOPIC, content: `The topic could not be resolved automatically: ${error().msg}` },
+        ]);
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          `Zulip refused to rename topic "${TOPIC}" to "✔ ${TOPIC}": ${error().message}`,
+        );
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+        expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+        expect(databaseMock.updatePullRequest).toHaveBeenCalledWith({
+          nodeId: 'PR_node_1234',
+          closedAt: expect.any(Date),
+        });
+      });
+
+      it('should post a plain message and carry on when the unresolve is refused', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: `✔ ${TOPIC}` });
+        zulipMock.updateMessage.mockRejectedValue(timeLimit());
+
+        await expect(sut.onGithub(event('reopened'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(topicPosts().map(({ content }) => content)).toEqual([
+          'Pull request has been reopened by [@alextran1502](https://github.com/alextran1502)',
+          'The topic could not be unresolved automatically: You only have permission to move the 2/5 most recent messages in this topic.',
+        ]);
+        expect(topicPosts().every(({ topic }) => topic === `✔ ${TOPIC}`)).toBe(true);
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+      });
+
+      it('should post the new title as a plain message when the rename is refused', async () => {
+        zulipMock.updateMessage.mockRejectedValue(timeLimit());
+
+        await expect(
+          sut.onGithub(
+            event('edited', { title: 'feat: add the thing' }, { changes: { title: { from: 'feat: add thing' } } }),
+            'github-slug',
+          ),
+        ).resolves.toBeUndefined();
+
+        expect(topicPosts()).toEqual([
+          { stream: PR_STREAM, topic: TOPIC, content: 'Pull request has been renamed to: #1234: feat: add the thing' },
+        ]);
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+      });
+
+      it('should neutralise mentions in the title when it is posted as a message after a refused rename', async () => {
+        zulipMock.updateMessage.mockRejectedValue(timeLimit());
+
+        await sut.onGithub(
+          event('edited', { title: 'ping @**all** and #**general**' }, { changes: { title: { from: 'x' } } }),
+          'github-slug',
+        );
+
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
+          topic: '#1234: ping @**all** and #**general**',
+          propagateMode: 'change_all',
+        });
+        expect(topicPosts().map(({ content }) => content)).toEqual([
+          'Pull request has been renamed to: #1234: ping @​**all** and #​**general**',
+        ]);
+      });
+
+      it('should post the name the topic would have had, within the topic limit, after a refused rename', async () => {
+        zulipMock.updateMessage.mockRejectedValue(timeLimit());
+        const title = 'feat(server): a title that goes on well past the sixty character mark of Zulip';
+
+        await sut.onGithub(event('edited', { title }, { changes: { title: { from: 'x' } } }), 'github-slug');
+
+        expect(topicPosts().map(({ content }) => content)).toEqual([
+          'Pull request has been renamed to: #1234: feat(server): a title that goes on well past the...',
+        ]);
+      });
+
+      it('should log and carry on when the fallback message itself cannot be posted', async () => {
+        zulipMock.updateMessage.mockRejectedValue(timeLimit());
+        zulipMock.sendMessage.mockImplementation(async ({ content }) => {
+          if (content.startsWith('The topic could not be resolved')) {
+            throw new ZulipApiError(502, 'UNKNOWN_ERROR', 'Bad Gateway', 'POST /api/v1/messages');
+          }
+          return { id: 500 };
+        });
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(topicPosts().map(({ content }) => content)).toEqual([
+          'Pull request has been closed by [@alextran1502](https://github.com/alextran1502)',
+          `The topic could not be resolved automatically: ${timeLimit().msg}`,
+        ]);
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          `Could not post the fallback message in Zulip topic "${TOPIC}" after the refused rename`,
+          expect.any(ZulipApiError),
+        );
+        expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+      });
+
+      it.each([
+        { reason: 'a programming error', error: () => refusal('BAD_REQUEST', 'Nothing to change') },
+        { reason: 'an empty topic', error: () => refusal('BAD_REQUEST', "Topic can't be empty") },
+        { reason: 'a deleted message', error: () => refusal('BAD_REQUEST', 'Invalid message(s)') },
+        { reason: 'a bad parameter', error: () => refusal('REQUEST_VARIABLE_INVALID', 'Invalid propagate_mode') },
+        {
+          reason: 'a server error',
+          error: () => new ZulipApiError(500, 'INTERNAL_ERROR', 'Internal server error', 'PATCH /api/v1/messages/42'),
+        },
+      ])('should treat $reason on the rename as an outage: an error and no fallback message', async ({ error }) => {
+        zulipMock.updateMessage.mockRejectedValue(error());
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(topicPosts()).toHaveLength(1);
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+        expect(Logger.prototype.error).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          `Could not rename Zulip topic "${TOPIC}" to "✔ ${TOPIC}"`,
+          expect.any(ZulipApiError),
+        );
+      });
+
+      it('should post the notice in the empty "general chat" topic and not try to resolve it', async () => {
+        zulipMock.getMessage.mockResolvedValue({ id: 42, topic: '' });
+
+        await sut.onGithub(event('closed'), 'github-slug');
+
+        expect(topicPosts()).toEqual([
+          {
+            stream: PR_STREAM,
+            topic: '',
+            content: 'Pull request has been closed by [@alextran1502](https://github.com/alextran1502)',
+          },
+        ]);
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        'The time limit for editing this message has passed',
+        'The time limit for editing this message has past',
+        'Your organization has turned off message editing',
+      ])('should log and carry on, with no fallback, when the edit is refused (%s)', async (msg) => {
+        zulipMock.updateMessage.mockRejectedValue(refusal('BAD_REQUEST', msg));
+
+        await expect(
+          sut.onGithub(
+            event('edited', { body: 'Now with tests.' }, { changes: { body: { from: 'This PR adds a thing.' } } }),
+            'github-slug',
+          ),
+        ).resolves.toBeUndefined();
+
+        expect(topicPosts()).toEqual([]);
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          `Zulip refused to edit message 42: Zulip PATCH /api/v1/messages/42 failed with 400 BAD_REQUEST: ${msg}`,
+        );
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
+
+      it('should still edit the body after a refused rename', async () => {
+        zulipMock.updateMessage.mockRejectedValueOnce(noPermission()).mockResolvedValueOnce();
+
+        await sut.onGithub(
+          event(
+            'edited',
+            { title: 'feat: add the thing', body: 'Now with tests.' },
+            { changes: { title: { from: 'feat: add thing' }, body: { from: 'This PR adds a thing.' } } },
+          ),
+          'github-slug',
+        );
+
+        expect(zulipMock.updateMessage).toHaveBeenCalledTimes(2);
+        expect(zulipMock.updateMessage).toHaveBeenLastCalledWith(42, {
+          content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+        });
+        expect(topicPosts().map(({ content }) => content)).toEqual([
+          'Pull request has been renamed to: #1234: feat: add the thing',
+        ]);
+      });
+
+      it.each([
+        {
+          reason: 'a 5xx',
+          error: () => new ZulipApiError(502, 'UNKNOWN_ERROR', 'Bad Gateway', 'PATCH /api/v1/messages/42'),
+        },
+        {
+          reason: 'a rate limit that outlasted the retries',
+          error: () =>
+            new ZulipApiError(429, 'RATE_LIMIT_HIT', 'API usage exceeded rate limit', 'PATCH /api/v1/messages/42'),
+        },
+        {
+          reason: 'a timeout',
+          error: () => new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        },
+      ])('should log an outage ($reason) on a move as an error, with no fallback message', async ({ error }) => {
+        zulipMock.updateMessage.mockRejectedValue(error());
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(topicPosts()).toHaveLength(1);
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+        expect(Logger.prototype.error).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          `Could not rename Zulip topic "${TOPIC}" to "✔ ${TOPIC}"`,
+          expect.anything(),
+        );
+      });
+
+      it('should log an outage on an edit as an error', async () => {
+        zulipMock.updateMessage.mockRejectedValue(new Error('fetch failed'));
+
+        await expect(
+          sut.onGithub(
+            event('edited', { body: 'Now with tests.' }, { changes: { body: { from: 'This PR adds a thing.' } } }),
+            'github-slug',
+          ),
+        ).resolves.toBeUndefined();
+
+        expect(Logger.prototype.error).toHaveBeenCalledWith('Could not edit Zulip message 42', expect.any(Error));
+        expect(topicPosts()).toEqual([]);
+      });
+
+      it('should never fail the webhook when the topic cannot even be read', async () => {
+        zulipMock.getMessage.mockRejectedValue(new TypeError('fetch failed'));
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(topicPosts()).toEqual([]);
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Zulip failed while updating the topic of pull request #1234',
+          expect.any(TypeError),
+        );
+        expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+      });
+
+      it('should never fail the webhook when the notice cannot be posted', async () => {
+        zulipMock.sendMessage.mockRejectedValue(new Error('fetch failed'));
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        {
+          reason: 'any other BAD_REQUEST',
+          error: () => new ZulipApiError(400, 'BAD_REQUEST', 'Malformed request', 'GET /api/v1/messages/42'),
+        },
+        {
+          reason: 'a 5xx',
+          error: () => new ZulipApiError(502, 'UNKNOWN_ERROR', 'Bad Gateway', 'GET /api/v1/messages/42'),
+        },
+        { reason: 'a network failure', error: () => new TypeError('fetch failed') },
+        {
+          reason: 'a timeout',
+          error: () => new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        },
+      ])('should log $reason on the read as a Zulip failure and not rebuild the topic', async ({ error }) => {
+        zulipMock.getMessage.mockRejectedValue(error());
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(topicPosts()).toEqual([]);
+        expect(zulipMock.updateMessage).not.toHaveBeenCalled();
+        expect(databaseMock.updatePullRequest).not.toHaveBeenCalledWith(
+          expect.objectContaining({ zulipMessageId: expect.anything() }),
+        );
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+        expect(Logger.prototype.error).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Zulip failed while updating the topic of pull request #1234',
+          expect.anything(),
+        );
+      });
+    });
+
+    describe('first message deleted', () => {
+      const gone = () => new ZulipApiError(400, 'BAD_REQUEST', 'Invalid message(s)', 'GET /api/v1/messages/42');
+
+      beforeEach(() => {
+        zulipMock.getMessage.mockRejectedValue(gone());
+        let next = 500;
+        zulipMock.sendMessage.mockImplementation(async ({ stream }) => ({ id: stream === PR_STREAM ? next++ : 1 }));
+      });
+
+      it('should rebuild the topic under the current title, store the new ID, then post and resolve there', async () => {
+        await expect(
+          sut.onGithub(event('closed', { merged: true, merged_at: '2026-01-02T00:00:00Z' }), 'github-slug'),
+        ).resolves.toBeUndefined();
+
+        expect(zulipMock.getMessage).toHaveBeenCalledOnce();
+        expect(topicPosts()).toEqual([
+          { stream: PR_STREAM, topic: TOPIC, content: FIRST_MESSAGE },
+          {
+            stream: PR_STREAM,
+            topic: TOPIC,
+            content: 'Pull request has been merged by [@alextran1502](https://github.com/alextran1502)',
+          },
+        ]);
+        expect(databaseMock.updatePullRequest).toHaveBeenCalledWith({ nodeId: 'PR_node_1234', zulipMessageId: 500 });
+        expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(500, {
+          topic: `✔ ${TOPIC}`,
+          propagateMode: 'change_all',
+        });
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          'Zulip message 42 of pull request #1234 is gone (Invalid message(s)), recreating the topic',
+        );
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+        expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+      });
+
+      it('should rebuild with the current title and body on an edit, then apply the edit to the new message', async () => {
+        await sut.onGithub(
+          event(
+            'edited',
+            { title: 'feat: add the thing', body: 'Now with tests.' },
+            { changes: { body: { from: 'This PR adds a thing.' } } },
+          ),
+          'github-slug',
+        );
+
+        expect(topicPosts()).toEqual([
+          {
+            stream: PR_STREAM,
+            topic: '#1234: feat: add the thing',
+            content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+          },
+        ]);
+        expect(databaseMock.updatePullRequest).toHaveBeenCalledWith({ nodeId: 'PR_node_1234', zulipMessageId: 500 });
+        expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
+        expect(zulipMock.updateMessage).toHaveBeenCalledWith(500, {
+          content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+        });
+      });
+
+      it('should log and carry on, keeping the dead ID, when the rebuild itself fails', async () => {
+        zulipMock.sendMessage.mockReset().mockRejectedValue(new TypeError('fetch failed'));
+
+        await expect(sut.onGithub(event('closed'), 'github-slug')).resolves.toBeUndefined();
+
+        expect(databaseMock.updatePullRequest).not.toHaveBeenCalledWith(
+          expect.objectContaining({ zulipMessageId: expect.anything() }),
+        );
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Zulip failed while updating the topic of pull request #1234',
+          expect.any(TypeError),
+        );
+        expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+      });
     });
   });
 });
