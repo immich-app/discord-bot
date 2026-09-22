@@ -148,13 +148,16 @@ export const createZulipClient = ({
 }: ZulipClientOptions): ZulipClient => {
   const logger = new Logger('ZulipClient');
 
+  /** `fetch(request, init)` replaces the request's signal with `init.signal` rather than combining them. */
+  const attemptSignal = (request: Request) => AbortSignal.any([AbortSignal.timeout(timeoutMs), request.signal]);
+
   /**
    * Retries 429 only: a rate-limited request was not processed, whereas retrying a 5xx on `POST /messages` could
    * double-post. `Request` bodies are single-use streams, so each attempt sends a clone of the original.
    */
   const fetchWithRetry = async (request: Request) => {
     for (let attempt = 1; ; attempt++) {
-      const response = await fetch(request.clone(), { signal: AbortSignal.timeout(timeoutMs) });
+      const response = await fetch(request.clone(), { signal: attemptSignal(request) });
       if (response.status !== 429) {
         return response;
       }

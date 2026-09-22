@@ -48,6 +48,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   updateMessage: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
+  getOwnUser: vitest.fn(),
+  registerQueue: vitest.fn(),
+  getEvents: vitest.fn(),
+  deleteQueue: vitest.fn(),
 });
 
 const { ImmichThirdParties, ImmichAlerts } = Constants.Zulip.Streams;

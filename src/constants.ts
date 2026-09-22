@@ -142,6 +142,14 @@ const zulipStreams = {
   ImmichAlerts: 113,
 };
 
+/** Private team streams only: the GitHub expander runs privileged here and shows private repository code. */
+const zulipTeamStreams = {
+  ImmichGeneral: 107,
+  ImmichMobile: 109,
+  ImmichFocusTopic: 110,
+  ImmichPullRequests: zulipStreams.ImmichPullRequests,
+};
+
 /**
  * Where a notification destination is posted on each platform. A destination is an audience
  * (`community.*` is public, `team.*` is internal) plus a subject; services pick destinations and
@@ -240,6 +248,11 @@ export const Constants = {
       zulipStreams.ImmichPullRequests,
       zulipStreams.ImmichAlerts,
     ],
+    Expanders: {
+      GithubReferences: Object.values(zulipTeamStreams),
+      TwitterMirror: Object.values(zulipTeamStreams),
+    },
+    TeamStreams: zulipTeamStreams,
   },
 };
 

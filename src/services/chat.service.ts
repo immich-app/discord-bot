@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo } from 'src/constants';
-import { shorten } from 'src/format';
+import { neutraliseZulipMentions, shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -15,7 +15,8 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
-import { IZulipInterface } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { ZulipService, describeZulipStream } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
@@ -120,6 +121,7 @@ export class ChatService {
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
+    private zulipService: ZulipService,
   ) {}
 
   async init() {
@@ -132,6 +134,7 @@ export class ChatService {
     await this.mattermost.init();
     this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
     this.mattermost.registerEventListener(WebSocketEvents.PostEdited, (msg) => this.onMattermostEdited(msg));
+    this.zulipService.onMessage((message) => this.onZulipMessage(message));
   }
 
   async onMattermostPosted(msg: MattermostEventMessage<WebSocketEvents.Posted>) {
@@ -158,6 +161,34 @@ ${messageParts.join('\n')}`,
       });
     }
     await this.suppressMattermostEmbeds(post);
+  }
+
+  async onZulipMessage({ type, streamId, topic, content }: ZulipReceivedMessage) {
+    if (type !== 'stream' || streamId === undefined) {
+      return;
+    }
+
+    const parts: string[] = [];
+    if (Constants.Zulip.Expanders.GithubReferences.includes(streamId)) {
+      if (this.zulipService.isPrivateStream(streamId)) {
+        // Snippets are not neutralised: Zulip renders no mention inside a code fence,
+        // and a zero-width space would corrupt the code.
+        const snippets = await this.handleGithubFileReferences(content, true);
+        const links = await this.handleGithubThreadReferences({ content }, true);
+        parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
+      } else {
+        this.logger.warn(
+          `Not expanding GitHub references in Zulip stream ${describeZulipStream(streamId)}: it is allowlisted, but the server does not report it as private, and the expander would show private repository titles and code there`,
+        );
+      }
+    }
+    if (Constants.Zulip.Expanders.TwitterMirror.includes(streamId)) {
+      parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
+    }
+
+    if (parts.length !== 0) {
+      await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });
+    }
   }
 
   async onMattermostEdited(msg: MattermostEventMessage<WebSocketEvents.PostEdited>) {

@@ -364,6 +364,39 @@ describe('ZulipClient', () => {
       expect(signal(1).aborted).toBe(false);
       expect(signal(0)).not.toBe(signal(1));
     });
+
+    it("should abort the attempt when the request's own signal aborts, with its reason", async () => {
+      fetchMock.mockImplementation(
+        (_, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))),
+      );
+      const controller = new AbortController();
+
+      const promise = newClient().GET('/events', {
+        params: { query: { queue_id: 'q1', last_event_id: -1 } },
+        signal: controller.signal,
+      });
+      await vitest.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error('shutting down'));
+
+      await expect(promise).rejects.toThrow('shutting down');
+      expect(signal().aborted).toBe(true);
+      expect(signal().reason).toBeInstanceOf(Error);
+    });
+
+    it('should still time out a request whose own signal is live', async () => {
+      fetchMock.mockImplementation(
+        (_, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))),
+      );
+      const controller = new AbortController();
+
+      const promise = newClient({ timeoutMs: 20 }).GET('/events', {
+        params: { query: { queue_id: 'q1', last_event_id: -1 } },
+        signal: controller.signal,
+      });
+
+      await expect(promise).rejects.toMatchObject({ name: 'TimeoutError' });
+      expect(controller.signal.aborted).toBe(false);
+    });
   });
 
   describe('timeout against a real server', () => {

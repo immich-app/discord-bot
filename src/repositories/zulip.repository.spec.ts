@@ -1,7 +1,12 @@
 import { ZulipConfig } from 'src/interfaces/zulip.interface';
-import { ZulipApiError } from 'src/repositories/zulip.client';
-import { ZulipRepository } from 'src/repositories/zulip.repository';
+import { ZulipApiError, createZulipClient } from 'src/repositories/zulip.client';
+import { ZulipRepository, longpollTimeoutMs } from 'src/repositories/zulip.repository';
 import { Mock, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
+
+vitest.mock('src/repositories/zulip.client', async (importActual) => {
+  const actual = await importActual<typeof import('src/repositories/zulip.client')>();
+  return { ...actual, createZulipClient: vitest.fn(actual.createZulipClient) };
+});
 
 const config: ZulipConfig = {
   realm: 'https://zulip.example.com',
@@ -18,6 +23,8 @@ const json = (body: unknown, init: ResponseInit = {}) =>
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 const image = (type = 'image/png') => new Response(PNG, { status: 200, headers: { 'content-type': type } });
 
+const live = () => new AbortController().signal;
+
 describe('ZulipRepository', () => {
   let sut: ZulipRepository;
   let fetchMock: Mock<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>;
@@ -31,6 +38,7 @@ describe('ZulipRepository', () => {
   beforeEach(() => {
     fetchMock = vitest.fn();
     vitest.stubGlobal('fetch', fetchMock);
+    vitest.mocked(createZulipClient).mockClear();
     sut = new ZulipRepository();
   });
 
@@ -62,6 +70,10 @@ describe('ZulipRepository', () => {
       { method: 'updateMessage', call: () => sut.updateMessage(1, { content: 'x' }) },
       { method: 'listEmoji', call: () => sut.listEmoji() },
       { method: 'getSubscriptions', call: () => sut.getSubscriptions() },
+      { method: 'getOwnUser', call: () => sut.getOwnUser() },
+      { method: 'registerQueue', call: () => sut.registerQueue() },
+      { method: 'getEvents', call: () => sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live()) },
+      { method: 'deleteQueue', call: () => sut.deleteQueue('q1') },
     ])('should throw a clear error from $method', async ({ call }) => {
       await expect(call()).rejects.toThrow('Zulip client not initialised');
       expect(fetchMock).not.toHaveBeenCalled();
@@ -281,6 +293,291 @@ describe('ZulipRepository', () => {
       expect(request(0).method).toBe('GET');
       expect(request(0).url).toBe('https://zulip.example.com/api/v1/users/me/subscriptions');
       expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+    });
+  });
+
+  describe('getOwnUser', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it("should return the bot's own user ID", async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'success', msg: '', user_id: 7, email: 'bot@example.com', full_name: 'Immich', is_bot: true }),
+      );
+
+      await expect(sut.getOwnUser()).resolves.toEqual({ userId: 7 });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/users/me');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+    });
+
+    it('should throw when the answer has no user ID, rather than resolve with none', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', email: 'bot@example.com', is_bot: true }));
+
+      await expect(sut.getOwnUser()).rejects.toThrow('Zulip returned no user ID for the bot');
+    });
+  });
+
+  describe('registerQueue', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should register a queue for message events only, as raw markdown, and return its ID, cursor and streams with their privacy', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          queue_id: 'q1',
+          last_event_id: -1,
+          event_queue_longpoll_timeout_seconds: 90,
+          subscriptions: [
+            { stream_id: 107, name: 'immich-general', invite_only: true },
+            { stream_id: 54, name: 'immich', invite_only: false },
+          ],
+        }),
+      );
+
+      await expect(sut.registerQueue()).resolves.toEqual({
+        queue: { queueId: 'q1', lastEventId: -1 },
+        streams: [
+          { streamId: 107, isPrivate: true },
+          { streamId: 54, isPrivate: false },
+        ],
+      });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('POST');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/register');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
+      expect(await request(0).text()).toBe(
+        'event_types=%5B%22message%22%5D&apply_markdown=false&fetch_event_types=%5B%22subscription%22%5D',
+      );
+    });
+
+    it('should carry no streams when the answer lists no subscriptions', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: 'q1', last_event_id: 3 }));
+
+      await expect(sut.registerQueue()).resolves.toEqual({ queue: { queueId: 'q1', lastEventId: 3 }, streams: [] });
+    });
+
+    it('should not take a stream to be private when the answer does not say so', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          queue_id: 'q1',
+          last_event_id: -1,
+          subscriptions: [{ stream_id: 107, name: 'immich-general' }],
+        }),
+      );
+
+      await expect(sut.registerQueue()).resolves.toMatchObject({ streams: [{ streamId: 107, isPrivate: false }] });
+    });
+
+    it('should not ask for every public stream of the realm', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: 'q1', last_event_id: -1 }));
+
+      await sut.registerQueue();
+
+      expect(await request(0).text()).not.toContain('all_public_streams');
+    });
+
+    it('should throw when the server registers no queue', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: null, last_event_id: -1 }));
+
+      await expect(sut.registerQueue()).rejects.toThrow('Zulip registered no event queue');
+    });
+
+    it('should throw on a Zulip error instead of resolving', async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'error', code: 'BAD_REQUEST', msg: 'Invalid event_types' }, { status: 400 }),
+      );
+
+      await expect(sut.registerQueue()).rejects.toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+    });
+  });
+
+  describe('getEvents', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should long-poll the queue from the cursor as the bot', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', events: [] }));
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: 41 }, live())).resolves.toEqual([]);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/events?queue_id=q1&last_event_id=41');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+    });
+
+    it('should return a message event with the fields a handler needs and any other event by ID and type', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          events: [
+            { id: 3, type: 'heartbeat' },
+            {
+              id: 4,
+              type: 'message',
+              flags: [],
+              message: {
+                id: 500,
+                sender_id: 12,
+                sender_email: 'alice@example.com',
+                sender_full_name: 'Alice',
+                type: 'stream',
+                stream_id: 107,
+                display_recipient: 'immich-general',
+                subject: 'thumbnails',
+                content: 'see #4242',
+                timestamp: 1_700_000_000,
+                client: 'website',
+              },
+            },
+            {
+              id: 5,
+              type: 'message',
+              flags: [],
+              message: { id: 501, sender_id: 12, type: 'private', display_recipient: [], subject: '', content: 'hi' },
+            },
+          ],
+        }),
+      );
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live())).resolves.toEqual([
+        { id: 3, type: 'heartbeat' },
+        {
+          id: 4,
+          type: 'message',
+          message: {
+            id: 500,
+            senderId: 12,
+            senderEmail: 'alice@example.com',
+            type: 'stream',
+            streamId: 107,
+            topic: 'thumbnails',
+            content: 'see #4242',
+          },
+        },
+        {
+          id: 5,
+          type: 'message',
+          message: {
+            id: 501,
+            senderId: 12,
+            senderEmail: '',
+            type: 'private',
+            streamId: undefined,
+            topic: '',
+            content: 'hi',
+          },
+        },
+      ]);
+    });
+
+    it('should reject with the BAD_EVENT_QUEUE_ID code when the queue is gone', async () => {
+      fetchMock.mockResolvedValue(
+        json(
+          { result: 'error', code: 'BAD_EVENT_QUEUE_ID', msg: 'Bad event queue ID: q1', queue_id: 'q1' },
+          { status: 400 },
+        ),
+      );
+
+      const promise = sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live());
+
+      await expect(promise).rejects.toBeInstanceOf(ZulipApiError);
+      await expect(promise).rejects.toMatchObject({ status: 400, code: 'BAD_EVENT_QUEUE_ID' });
+    });
+
+    it('should cancel the poll in flight when its signal aborts, rejecting with the reason', async () => {
+      fetchMock.mockImplementation(
+        (_, init) =>
+          new Promise((_, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason))),
+      );
+      const controller = new AbortController();
+
+      const promise = sut.getEvents({ queueId: 'q1', lastEventId: -1 }, controller.signal);
+      await vitest.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error('shutting down'));
+
+      await expect(promise).rejects.toThrow('shutting down');
+      expect(fetchMock.mock.calls[0][1]!.signal!.aborted).toBe(true);
+    });
+
+    describe('long-poll timeout', () => {
+      const timeouts = () => vitest.mocked(createZulipClient).mock.calls.map(([{ timeoutMs }]) => timeoutMs);
+      const eventsClient = () => vitest.mocked(createZulipClient).mock.calls.at(-1)![0];
+
+      it("should allow a margin over the server's long-poll timeout, so a quiet poll is answered by its heartbeat", () => {
+        expect(longpollTimeoutMs(90)).toBe(120_000);
+        expect(longpollTimeoutMs(600)).toBe(630_000);
+      });
+
+      it("should build the events client at init with Zulip's default long-poll timeout and the margin", () => {
+        expect(timeouts()).toEqual([undefined, undefined, 120_000]);
+        expect(eventsClient()).toMatchObject({ realm: config.realm, ...config.bot });
+      });
+
+      it("should rebuild the events client with the server's long-poll timeout and the margin", async () => {
+        fetchMock.mockResolvedValue(
+          json({
+            result: 'success',
+            msg: '',
+            queue_id: 'q1',
+            last_event_id: -1,
+            event_queue_longpoll_timeout_seconds: 600,
+          }),
+        );
+
+        await sut.registerQueue();
+
+        expect(timeouts()).toEqual([undefined, undefined, 120_000, 630_000]);
+        expect(eventsClient()).toMatchObject({ realm: config.realm, ...config.bot });
+      });
+
+      it('should keep the default when the server does not say', async () => {
+        fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: 'q1', last_event_id: -1 }));
+
+        await sut.registerQueue();
+
+        expect(timeouts()).toEqual([undefined, undefined, 120_000]);
+      });
+    });
+  });
+
+  describe('deleteQueue', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should delete the queue as the bot', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '' }));
+
+      await expect(sut.deleteQueue('q1')).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('DELETE');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/events');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
+      expect(await request(0).text()).toBe('queue_id=q1');
+    });
+
+    it('should reject when the queue is already gone', async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'error', code: 'BAD_EVENT_QUEUE_ID', msg: 'Bad event queue ID: q1' }, { status: 400 }),
+      );
+
+      await expect(sut.deleteQueue('q1')).rejects.toMatchObject({ code: 'BAD_EVENT_QUEUE_ID' });
     });
   });
 

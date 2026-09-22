@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
+import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -7,8 +8,9 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
-import { IZulipInterface } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ChatService } from 'src/services/chat.service';
+import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 vitest.mock('src/config', () => ({
@@ -116,6 +118,11 @@ const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
   getOrder: vitest.fn(),
 });
 
+const newZulipServiceMock = () => ({
+  onMessage: vitest.fn<(handler: ZulipMessageHandler) => void>(),
+  isPrivateStream: vitest.fn<(streamId: number) => boolean>().mockReturnValue(true),
+});
+
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
   isInitialised: vitest.fn(),
@@ -125,6 +132,10 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   updateMessage: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
+  getOwnUser: vitest.fn(),
+  registerQueue: vitest.fn(),
+  getEvents: vitest.fn(),
+  deleteQueue: vitest.fn(),
 });
 
 const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
@@ -142,6 +153,7 @@ describe('Bot test', () => {
   let databaseMock: Mocked<IDatabaseRepository>;
   let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
+  let zulipServiceMock: ReturnType<typeof newZulipServiceMock>;
   let fetchMock: ReturnType<typeof vitest.fn>;
 
   beforeEach(() => {
@@ -153,6 +165,7 @@ describe('Bot test', () => {
     databaseMock = newDatabaseMockRepository();
     mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
+    zulipServiceMock = newZulipServiceMock();
     // 7TV and BTTV lookups go through the global fetch.
     fetchMock = vitest.fn();
     vitest.stubGlobal('fetch', fetchMock);
@@ -166,6 +179,7 @@ describe('Bot test', () => {
       outlineMock,
       mattermostMock,
       zulipMock,
+      zulipServiceMock as unknown as ZulipService,
     );
   });
 
@@ -965,6 +979,236 @@ describe('Bot test', () => {
 
       expect(zulipMock.init).not.toHaveBeenCalled();
       expect(mattermostMock.init).toHaveBeenCalledOnce();
+    });
+
+    it('should subscribe the Zulip expanders to the event loop', async () => {
+      await sut.init();
+
+      expect(zulipServiceMock.onMessage).toHaveBeenCalledOnce();
+      const [handler] = zulipServiceMock.onMessage.mock.calls[0];
+      await handler(zulipMessage({ content: 'see #4242' }));
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+    });
+  });
+
+  const zulipMessage = (overrides: Partial<ZulipReceivedMessage> = {}): ZulipReceivedMessage => ({
+    id: 900,
+    senderId: 12,
+    senderEmail: 'alice@example.com',
+    type: 'stream',
+    streamId: Constants.Zulip.TeamStreams.ImmichGeneral,
+    topic: 'thumbnails',
+    content: 'hello',
+    ...overrides,
+  });
+
+  describe('onZulipMessage', () => {
+    beforeEach(() => {
+      zulipMock.sendMessage.mockResolvedValue({ id: 901 });
+    });
+
+    it('should run in exactly the team working streams, and not in the notification digest', () => {
+      expect(Constants.Zulip.Expanders.GithubReferences).toEqual([107, 109, 110, 112]);
+      expect(Constants.Zulip.Expanders.TwitterMirror).toEqual([107, 109, 110, 112]);
+      expect(Constants.Zulip.Expanders.GithubReferences).not.toContain(Constants.Zulip.Streams.ImmichThirdParties);
+      expect(Constants.Zulip.Expanders.TwitterMirror).not.toContain(Constants.Zulip.Streams.ImmichThirdParties);
+    });
+
+    it('should reply with the expanded GitHub references in the same stream and topic', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: 'see #4242 and #6969' }));
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).toHaveBeenCalledWith({
+        stream: 107,
+        topic: 'thumbnails',
+        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://github.com/immich-app/immich/issues/6969',
+      });
+    });
+
+    it('should ask GitHub as a privileged caller, since every allowlisted stream is a private team channel (checked below)', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: '#4242' }));
+
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledOnce();
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledWith('immich-app', 'immich', 4242, undefined, true);
+    });
+
+    it('should reply with a code snippet for a GitHub file permalink', async () => {
+      githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2']);
+
+      await sut.onZulipMessage(
+        zulipMessage({ content: 'https://github.com/immich-app/immich/blob/main/src/test.js#L1-L2' }),
+      );
+
+      expect(githubMock.getRepositoryFileContent).toHaveBeenCalledWith(
+        'immich-app',
+        'immich',
+        'main',
+        'src/test.js',
+        true,
+      );
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).toHaveBeenCalledWith({
+        stream: 107,
+        topic: 'thumbnails',
+        content: '```js\nline 1\nline 2\n```',
+      });
+    });
+
+    it('should reply with a nitter mirror for an x.com link', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: 'look https://x.com/immich/status/1' }));
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).toHaveBeenCalledWith({
+        stream: 107,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should put every expansion of one message in one reply, GitHub first', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe(
+        'https://github.com/immich-app/immich/pull/4242\nhttps://nitter.net/immich/status/1',
+      );
+    });
+
+    it('should neutralise mentions in what GitHub returned, so a title cannot ping the stream', async () => {
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Issue] please @**all** look (immich-app/immich#4242)');
+
+      await sut.onZulipMessage(zulipMessage({ content: '#4242' }));
+
+      expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe(
+        '[Issue] please @\u200B**all** look (immich-app/immich#4242)',
+      );
+    });
+
+    it('should leave a code snippet as GitHub has it, since a neutralised sigil inside the fence would corrupt the code', async () => {
+      githubMock.getRepositoryFileContent.mockResolvedValueOnce(['name="${path#*/}"', 'echo "@**${name}**"']);
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Issue] please @**all** look (immich-app/immich#4242)');
+
+      await sut.onZulipMessage(
+        zulipMessage({ content: 'https://github.com/immich-app/immich/blob/main/build.sh#L1-L2 for #4242' }),
+      );
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe(
+        '```sh\nname="${path#*/}"\necho "@**${name}**"\n```\n[Issue] please @\u200B**all** look (immich-app/immich#4242)',
+      );
+    });
+
+    it('should neutralise mentions in a nitter mirror, which is built from whatever the sender typed', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/@**all**/status/1' }));
+
+      expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe('https://nitter.net/@\u200B**all**/status/1');
+    });
+
+    describe('privacy', () => {
+      beforeEach(() => {
+        vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      });
+
+      afterEach(() => {
+        vitest.restoreAllMocks();
+      });
+
+      it('should expand GitHub references in an allowlisted stream the server reports as private', async () => {
+        await sut.onZulipMessage(zulipMessage({ content: '#4242' }));
+
+        expect(zulipServiceMock.isPrivateStream).toHaveBeenCalledWith(107);
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledWith('immich-app', 'immich', 4242, undefined, true);
+        expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+      });
+
+      it('should refuse to expand GitHub references, and say so, in an allowlisted stream the server does not report as private', async () => {
+        zulipServiceMock.isPrivateStream.mockReturnValue(false);
+        githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1']);
+
+        await sut.onZulipMessage(
+          zulipMessage({ content: '#4242 and https://github.com/immich-app/immich/blob/main/src/test.js#L1' }),
+        );
+
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          'Not expanding GitHub references in Zulip stream 107 (ImmichGeneral): it is allowlisted, but the server does not report it as private, and the expander would show private repository titles and code there',
+        );
+      });
+
+      it('should still mirror an x.com link in such a stream, since that shows nothing private', async () => {
+        zulipServiceMock.isPrivateStream.mockReturnValue(false);
+
+        await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+        expect(zulipMock.sendMessage).toHaveBeenCalledWith({
+          stream: 107,
+          topic: 'thumbnails',
+          content: 'https://nitter.net/immich/status/1',
+        });
+      });
+
+      it('should not ask about privacy in a stream that is not allowlisted', async () => {
+        await sut.onZulipMessage(
+          zulipMessage({ streamId: Constants.Zulip.Streams.ImmichThirdParties, content: '#4242' }),
+        );
+
+        expect(zulipServiceMock.isPrivateStream).not.toHaveBeenCalled();
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it('should reply in whichever allowlisted stream and topic the message was in', async () => {
+      await sut.onZulipMessage(
+        zulipMessage({
+          streamId: Constants.Zulip.TeamStreams.ImmichPullRequests,
+          topic: '#4242: feat',
+          content: '#6969',
+        }),
+      );
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledWith({
+        stream: 112,
+        topic: '#4242: feat',
+        content: 'https://github.com/immich-app/immich/issues/6969',
+      });
+    });
+
+    it.each([
+      { name: 'the notification digest', streamId: Constants.Zulip.Streams.ImmichThirdParties },
+      { name: 'the alerts stream', streamId: Constants.Zulip.Streams.ImmichAlerts },
+      { name: 'FUTO staff', streamId: Constants.Zulip.Streams.FUTOStaff },
+      { name: 'an unknown stream', streamId: 999 },
+    ])('should do nothing in $name', async ({ streamId }) => {
+      await sut.onZulipMessage(zulipMessage({ streamId, content: '#4242 https://x.com/immich/status/1' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should do nothing for a direct message', async () => {
+      await sut.onZulipMessage(
+        zulipMessage({ type: 'private', streamId: undefined, content: '#4242 https://x.com/immich/status/1' }),
+      );
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should send nothing when there is nothing to expand', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: 'just chatting about #123' }));
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should send nothing when the reference is only in a code block', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: '```\n#4242\n```' }));
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
   });
 });
