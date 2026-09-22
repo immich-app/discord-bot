@@ -619,7 +619,7 @@ export class WebhookService {
       return;
     }
 
-    const messages = [
+    const messages: Promise<unknown>[] = [
       ...(repository.private ? [] : [this.notifications.notify('community.releases', notification)]),
       this.notifications.notify('team.releases', notification),
     ];

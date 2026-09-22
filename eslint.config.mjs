@@ -21,6 +21,7 @@ export default [
       '**/pnpm-lock.yaml',
       '**/package-lock.json',
       '**/yarn.lock',
+      'src/generated',
     ],
   },
   js.configs.recommended,

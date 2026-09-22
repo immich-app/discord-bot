@@ -97,15 +97,12 @@ export class ChatService {
   ) {}
 
   async init() {
-    const { bot, zulip } = getConfig();
+    const { bot } = getConfig();
     if (bot.token !== 'dev') {
       await this.discord.login(bot.token);
     }
 
-    if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {
-      await this.zulip.init(zulip);
-    }
-
+    // The Zulip clients are initialised once, by ZulipService.
     await this.mattermost.init();
     this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
     this.mattermost.registerEventListener(WebSocketEvents.PostEdited, (msg) => this.onMattermostEdited(msg));
@@ -547,8 +544,8 @@ ${formattedCode}
 
     try {
       await this.zulip.createEmote(name, emote);
-    } catch {
-      this.logger.error(`Could not create emote ${name} - ${emote} on Zulip`);
+    } catch (error) {
+      this.logger.error(`Could not create emote ${name} - ${emote} on Zulip`, error);
     }
     return this.discord.createEmote(name, emote, guildId);
   }
@@ -683,13 +680,36 @@ ${formattedCode}
 
     const deferredInteraction = await interaction.deferReply();
 
+    const failed: string[] = [];
     for (const emote of await this.discord.getEmotes(interaction.guildId)) {
+      const name = emote.name ?? emote.identifier;
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
-      await this.zulip.createEmote(emote.name ?? emote.identifier, url);
-      await this.mattermost.createEmote(emote.name ?? emote.identifier, url);
+      // One bad emote, or one platform being down, must not abort the rest of the sync.
+      const zulipSynced = await this.syncEmote('Zulip', name, url, () => this.zulip.createEmote(name, url));
+      const mattermostSynced = await this.syncEmote('Mattermost', name, url, () =>
+        this.mattermost.createEmote(name, url),
+      );
+      if (!zulipSynced || !mattermostSynced) {
+        failed.push(name);
+      }
     }
 
-    await deferredInteraction.edit('Done syncing');
+    // A systemic failure (a bot account cannot upload emoji) lists every emote; Discord caps a message at 2000.
+    await deferredInteraction.edit(
+      failed.length === 0
+        ? 'Done syncing'
+        : shorten(`Done syncing, ${failed.length} failed: ${failed.join(', ')}`, 2000),
+    );
+  }
+
+  private async syncEmote(platform: string, name: string, url: string, upload: () => Promise<void>) {
+    try {
+      await upload();
+      return true;
+    } catch (error) {
+      this.logger.error(`Could not sync emote ${name} - ${url} to ${platform}`, error);
+      return false;
+    }
   }
 
   async pruneMessagesInChannel(channel: SendableChannels, userId: string, deleteAfter: DateTime) {
