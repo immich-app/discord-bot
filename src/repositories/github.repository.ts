@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { GraphqlResponseError } from '@octokit/graphql';
 import { App, Octokit } from 'octokit';
-import { IGithubInterface, PullRequest } from 'src/interfaces/github.interface';
+import { IGithubInterface, PullRequest, PullRequestState } from 'src/interfaces/github.interface';
 import { makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const handleGraphqlError = (error: unknown) => {
@@ -13,6 +13,22 @@ const handleGraphqlError = (error: unknown) => {
     throw error;
   }
 };
+
+const PULL_REQUEST_FIELDS = `
+  repository {
+    nameWithOwner
+  }
+  id
+  fullDatabaseId
+  number
+  title
+  body
+  url
+  state
+  author {
+    __typename
+  }
+`;
 
 export class GithubRepository implements IGithubInterface {
   private logger = new Logger(GithubRepository.name);
@@ -241,7 +257,7 @@ export class GithubRepository implements IGithubInterface {
 
   async *getPullRequests(
     { org, repo }: { org: string; repo: string },
-    { states = [] }: { states?: Array<'OPEN' | 'CLOSED' | 'MERGED'> } = {},
+    { states = [] }: { states?: PullRequestState[] } = {},
   ) {
     let hasNextPage = true;
     let after: string = '';
@@ -265,18 +281,7 @@ export class GithubRepository implements IGithubInterface {
               endCursor
             }
             nodes {
-              repository {
-                nameWithOwner
-              }
-              id
-              fullDatabaseId
-              number
-              title
-              body
-              url
-              author {
-                __typename
-              }
+              ${PULL_REQUEST_FIELDS}
             }
           }
         }
@@ -288,6 +293,27 @@ export class GithubRepository implements IGithubInterface {
       after = hasNextPage ? pageInfo.endCursor : '';
 
       yield nodes;
+    }
+  }
+
+  async getPullRequest({ org, repo, number }: { org: string; repo: string; number: number }) {
+    try {
+      const { repository } = await this.octokit.graphql<{ repository: { pullRequest: PullRequest } }>(
+        `
+      query getPullRequest($org: String!, $repo: String!, $number: Int!) {
+        repository(owner: $org, name: $repo) {
+          pullRequest(number: $number) {
+            ${PULL_REQUEST_FIELDS}
+          }
+        }
+      }
+      `,
+        { org, repo, number },
+      );
+      return repository.pullRequest;
+    } catch (error) {
+      handleGraphqlError(error);
+      this.logger.log(`Could not fetch pull request #${number}`);
     }
   }
 }

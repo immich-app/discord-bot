@@ -10,7 +10,7 @@ import semver from 'semver';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
-import { neutraliseZulipMentions, shorten, shortenCodePoints, toZulipQuote } from 'src/format';
+import { neutraliseZulipMentions, plural, shorten, shortenCodePoints, toZulipQuote } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import {
@@ -18,7 +18,7 @@ import {
   FourthwallOrderUpdateWebhook,
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
-import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { CommandWebhookRequest, DialogResponse, IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { Notification, NotificationAccent, NotificationAuthor } from 'src/interfaces/notification.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
@@ -51,6 +51,41 @@ type PullRequestEvent = EmitterWebhookEvent<
 >['payload'];
 
 type PullRequestEditedEvent = EmitterWebhookEvent<'pull_request.edited'>['payload'];
+
+export type BackfillPlatforms = { discord: boolean; zulip: boolean };
+
+export type BackfillSkipReason = 'not tracked' | 'opened by a bot' | 'already complete';
+
+export type BackfillReport = {
+  total: number;
+  threads?: number[];
+  topics?: number[];
+  skipped: { number: number; reason: BackfillSkipReason }[];
+  failed: number[];
+};
+
+const SKIP_REASONS: BackfillSkipReason[] = ['already complete', 'opened by a bot', 'not tracked'];
+
+export const formatBackfillReport = (
+  { total, threads, topics, skipped, failed }: BackfillReport,
+  subject = plural(total, 'open pull request'),
+) => {
+  const created = [threads && plural(threads.length, 'Discord thread'), topics && plural(topics.length, 'Zulip topic')]
+    .filter((clause) => clause !== undefined)
+    .join(' and ');
+  const reasons = SKIP_REASONS.map((reason) => ({
+    reason,
+    count: skipped.filter((skip) => skip.reason === reason).length,
+  }))
+    .filter(({ count }) => count > 0)
+    .map(({ reason, count }) => `${count} ${reason}`)
+    .join(', ');
+  return [
+    `Backfill of ${subject} done: created ${created || 'nothing, no platform was asked'}`,
+    `skipped ${skipped.length}${reasons ? ` (${reasons})` : ''}`,
+    `failed ${failed.length}${failed.length > 0 ? ` (${failed.map((number) => `#${number}`).join(', ')}), see the log` : ''}.`,
+  ].join('; ');
+};
 
 /** Review and review-comment events are also `edited`, with `changes` about the review or the comment, not the PR. */
 const isPullRequestEdited = (dto: PullRequestEvent): dto is PullRequestEditedEvent =>
@@ -782,12 +817,70 @@ Read only for Nicholas: ${share.url}
     });
   }
 
-  private async handlePullRequestTeamPlatforms(payload: PullRequestEvent) {
+  async handlePullRequestTeamPlatforms(payload: PullRequestEvent) {
     const [discord] = await Promise.allSettled([this.handlePullRequestTeamUpdate(payload)]);
     await this.handlePullRequestZulipTopic(payload);
     if (discord.status === 'rejected') {
       throw discord.reason;
     }
+  }
+
+  /** Each missing platform goes through its own path, never both at once: an `opened` replay through the Discord path of a PR that has a thread would rewrite that thread's name and starter message. */
+  async backfillPullRequests(
+    pullRequests: PullRequestBaseEvent[],
+    platforms: BackfillPlatforms,
+  ): Promise<BackfillReport> {
+    const askZulip = platforms.zulip && this.zulip.isInitialised();
+    const report: BackfillReport = {
+      total: pullRequests.length,
+      threads: platforms.discord ? [] : undefined,
+      topics: askZulip ? [] : undefined,
+      skipped: [],
+      failed: [],
+    };
+
+    for (const pullRequest of pullRequests) {
+      const { node_id, number } = pullRequest.pull_request;
+      try {
+        const before = await this.database.getPullRequestById(node_id);
+        const reason = !before ? 'not tracked' : pullRequest.sender.type === 'Bot' ? 'opened by a bot' : undefined;
+        const needThread = !!report.threads && !!before && !before.discordThreadId;
+        const needTopic = !!report.topics && !!before && !before.zulipMessageId;
+        if (reason || (!needThread && !needTopic)) {
+          report.skipped.push({ number, reason: reason ?? 'already complete' });
+          continue;
+        }
+
+        const payload = { ...pullRequest, action: 'opened' } as EmitterWebhookEvent<'pull_request'>['payload'];
+        const [discord] = needThread ? await Promise.allSettled([this.handlePullRequestTeamUpdate(payload)]) : [];
+        if (needTopic) {
+          await this.handlePullRequestZulipTopic(payload);
+        }
+
+        const after = await this.database.getPullRequestById(node_id);
+        const threadCreated = needThread && !!after?.discordThreadId;
+        const topicCreated = needTopic && !!after?.zulipMessageId;
+        if (threadCreated) {
+          report.threads!.push(number);
+        }
+        if (topicCreated) {
+          report.topics!.push(number);
+        }
+        if (discord?.status === 'rejected') {
+          this.logger.error(`Could not backfill pull request #${number}`, discord.reason);
+        } else if (needThread && !threadCreated) {
+          this.logger.error(`Could not backfill pull request #${number}: Discord created no thread`);
+        }
+        if ((needThread && !threadCreated) || (needTopic && !topicCreated)) {
+          report.failed.push(number);
+        }
+      } catch (error) {
+        report.failed.push(number);
+        this.logger.error(`Could not backfill pull request #${number}`, error);
+      }
+    }
+
+    return report;
   }
 
   async handlePullRequestTeamUpdate(dto: PullRequestEvent) {

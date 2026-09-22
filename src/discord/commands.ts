@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
@@ -19,12 +18,13 @@ import {
 } from 'discord.js';
 import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants, DiscordField, DiscordModal } from 'src/constants';
+import { shorten } from 'src/format';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
-import { ChatService } from 'src/services/chat.service';
+import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
-import { WebhookService } from 'src/services/webhook.service';
+import { formatBackfillReport, WebhookService } from 'src/services/webhook.service';
 
 const authGuard = async (interaction: CommandInteraction) => {
   const isValid = [
@@ -477,7 +477,13 @@ export class DiscordCommands {
 
   @Slash({ name: 'emote-sync', description: 'Syncs Discord emotes to Zulip' })
   async handleEmoteSync(interaction: CommandInteraction) {
-    await this.service.syncEmotes(interaction);
+    if (!interaction.guildId) {
+      return;
+    }
+
+    const deferredInteraction = await interaction.deferReply();
+    const report = await this.service.syncEmotes(interaction.guildId);
+    await deferredInteraction.edit(shorten(formatEmoteSyncReport(report), 2000));
   }
 
   @Slash({ name: 'prune', description: 'Deletes all recent messages of a timed out user' })
@@ -635,13 +641,9 @@ export class DiscordCommands {
   async backfillPullRequests(interaction: CommandInteraction) {
     const deferredReply = await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
     const pullRequests = await this.githubService.getOpenPullRequests();
-    for (const pullRequest of pullRequests) {
-      await this.webhookService.handlePullRequestTeamUpdate({
-        ...pullRequest,
-        action: 'opened',
-      } as EmitterWebhookEvent<'pull_request'>['payload']);
-    }
+    // Discord's command creates on Discord alone; the Zulip command is the one that catches both platforms up.
+    const report = await this.webhookService.backfillPullRequests(pullRequests, { discord: true, zulip: false });
 
-    return deferredReply.edit('Successfully backfilled pull requests');
+    return deferredReply.edit(shorten(formatBackfillReport(report), 2000));
   }
 }

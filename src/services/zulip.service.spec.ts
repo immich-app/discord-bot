@@ -45,6 +45,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
+  getMessages: vitest.fn(),
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
@@ -278,7 +279,7 @@ describe('ZulipService', () => {
       config.zulip.user.apiKey = 'user-key';
       zulipMock.getSubscriptions.mockResolvedValue(subscriptions);
       let endPoll = () => {};
-      zulipMock.getOwnUser.mockResolvedValue({ userId: 7 });
+      zulipMock.getOwnUser.mockResolvedValue({ userId: 7, fullName: 'Immich' });
       zulipMock.registerQueue.mockResolvedValue({
         queue: { queueId: 'q1', lastEventId: -1 },
         streams: Object.values(Constants.Zulip.TeamStreams).map((streamId) => ({ streamId, isPrivate: true })),
@@ -442,7 +443,7 @@ describe('ZulipService', () => {
       registered = 0;
       handler = vitest.fn();
       zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 111 }, { streamId: 112 }, { streamId: 113 }]);
-      zulipMock.getOwnUser.mockResolvedValue({ userId: OWN_USER_ID });
+      zulipMock.getOwnUser.mockResolvedValue({ userId: OWN_USER_ID, fullName: 'Immich' });
       zulipMock.registerQueue.mockImplementation(async () => ({
         queue: { queueId: `q${++registered}`, lastEventId: -1 },
         streams: asPrivate(LISTENING_STREAMS),
@@ -466,6 +467,10 @@ describe('ZulipService', () => {
     });
 
     describe('start', () => {
+      it('should know no own account before the loop has read it', () => {
+        expect(sut.ownUser).toBeUndefined();
+      });
+
       it('should not start in local dev, where the sentinel key skips the clients', async () => {
         config.zulip.bot.apiKey = 'dev';
 
@@ -565,6 +570,22 @@ describe('ZulipService', () => {
         expect(polls).toHaveLength(2);
       });
 
+      it('should check every stream the command router listens in too', async () => {
+        expect(Constants.Zulip.Commands).toEqual(LISTENING_STREAMS);
+        const commands = Constants.Zulip.Commands;
+        commands.push(998);
+        try {
+          await sut.init();
+          await flush();
+        } finally {
+          commands.pop();
+        }
+
+        expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
+          'The Zulip bot is not subscribed to stream 998: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it',
+        );
+      });
+
       it('should check every stream of every expander, not only the team streams, naming an unnamed one by its ID', async () => {
         const mirror = Constants.Zulip.Expanders.TwitterMirror;
         mirror.push(999);
@@ -658,6 +679,27 @@ describe('ZulipService', () => {
         expect(Logger.prototype.error).toHaveBeenCalledTimes(2);
         expect(Logger.prototype.error).toHaveBeenLastCalledWith(notPrivate(109));
       });
+
+      it('should log an error for a stream the command router listens in that the server does not report as private', async () => {
+        const commands = Constants.Zulip.Commands;
+        commands.push(998);
+        zulipMock.registerQueue.mockResolvedValue({
+          queue: { queueId: 'q1', lastEventId: -1 },
+          streams: [{ streamId: 998, isPrivate: false }, ...asPrivate(LISTENING_STREAMS)],
+        });
+        try {
+          await sut.init();
+          await flush();
+        } finally {
+          commands.pop();
+        }
+
+        expect(sut.isPrivateStream(998)).toBe(false);
+        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+          'The Zulip bot takes commands in stream 998, but the server does not report that stream as private: anyone in the realm could drive it, so no command is taken there until the stream is made private or removed from Constants.Zulip.Commands',
+        );
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+      });
     });
 
     describe('polling', () => {
@@ -728,6 +770,10 @@ describe('ZulipService', () => {
         expect(second).toHaveBeenCalledTimes(2);
         expect(handler.mock.invocationCallOrder[0]).toBeLessThan(second.mock.invocationCallOrder[0]);
         expect(second.mock.invocationCallOrder[0]).toBeLessThan(handler.mock.invocationCallOrder[1]);
+      });
+
+      it("should expose the bot's own account to handlers, read before the first poll", () => {
+        expect(sut.ownUser).toEqual({ userId: OWN_USER_ID, fullName: 'Immich' });
       });
 
       it('should ignore the messages the bot sent itself, but still acknowledge them', async () => {

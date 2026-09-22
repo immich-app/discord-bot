@@ -108,6 +108,27 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
   return candidate;
 };
 
+export type EmoteSyncReport = {
+  zulipSkipped: boolean;
+  failed: string[];
+  renamed: string[];
+  alreadySynced: string[];
+};
+
+export const formatEmoteSyncReport = (
+  { zulipSkipped, failed, renamed, alreadySynced }: EmoteSyncReport,
+  subject?: string,
+) =>
+  [
+    subject ? `Done syncing ${subject}` : 'Done syncing',
+    zulipSkipped && 'Zulip skipped: its emoji could not be listed',
+    failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
+    renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
+    alreadySynced.length > 0 && `${alreadySynced.length} already on Zulip: ${alreadySynced.join(', ')}`,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
 @Injectable()
 export class ChatService {
   private logger = new Logger(ChatService.name);
@@ -730,14 +751,8 @@ ${formattedCode}
     }
   }
 
-  async syncEmotes(interaction: CommandInteraction) {
-    if (!interaction.guildId) {
-      return;
-    }
-
-    const deferredInteraction = await interaction.deferReply();
-
-    const emotes = await this.discord.getEmotes(interaction.guildId);
+  async syncEmotes(guildId: string): Promise<EmoteSyncReport> {
+    const emotes = await this.discord.getEmotes(guildId);
     const existing = await this.listZulipEmoji();
     const claimed = new Set<string>();
 
@@ -770,17 +785,7 @@ ${formattedCode}
       }
     }
 
-    // A systemic failure (a bot account cannot upload emoji) lists every emote; Discord caps a message at 2000.
-    const report = [
-      'Done syncing',
-      !existing && 'Zulip skipped: its emoji could not be listed',
-      failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
-      renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
-      alreadySynced.length > 0 && `${alreadySynced.length} already on Zulip: ${alreadySynced.join(', ')}`,
-    ]
-      .filter(Boolean)
-      .join(', ');
-    await deferredInteraction.edit(shorten(report, 2000));
+    return { zulipSkipped: !existing, failed, renamed, alreadySynced };
   }
 
   private async listZulipEmoji() {
@@ -840,9 +845,10 @@ ${formattedCode}
     }
   }
 
-  async handleFindSimilarIssuesOrDiscussions(messageContent: string) {
+  async handleFindSimilarIssuesOrDiscussions(messageContent: string, neutraliseTitle = (title: string) => title) {
     const similarIssues = await this.loopDedupe.getForText(messageContent);
-    const links = similarIssues.map(({ title, item_type, number, similarity }) => {
+    const links = similarIssues.map(({ title: rawTitle, item_type, number, similarity }) => {
+      const title = neutraliseTitle(rawTitle);
       const url = `https://github.com/${GithubOrg.ImmichApp}/${GithubRepo.Immich}/${item_type === 'issue' ? 'issues' : 'discussions'}/${number}`;
       const link = makeLink(GithubOrg.ImmichApp, GithubRepo.Immich, number, url);
 

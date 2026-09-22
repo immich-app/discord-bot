@@ -20,7 +20,9 @@ export type ZulipEmoji = { name: string; deactivated: boolean };
 
 export type ZulipSubscription = { streamId: number };
 
-export type ZulipUser = { userId: number };
+export type ZulipUser = { userId: number; fullName: string };
+
+export type ZulipMessagesQuery = { stream: number; topic: string; numBefore: number };
 
 export type ZulipEventQueue = { queueId: string; lastEventId: number };
 
@@ -54,6 +56,7 @@ export interface IZulipInterface {
   listEmoji(): Promise<ZulipEmoji[]>;
   getSubscriptions(): Promise<ZulipSubscription[]>;
   getOwnUser(): Promise<ZulipUser>;
+  getMessages(query: ZulipMessagesQuery): Promise<ZulipReceivedMessage[]>;
   registerQueue(): Promise<ZulipQueueRegistration>;
   getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;
   deleteQueue(queueId: string): Promise<void>;

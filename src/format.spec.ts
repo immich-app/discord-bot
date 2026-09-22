@@ -1,4 +1,12 @@
-import { asHexColor, neutraliseZulipMentions, shorten, shortenCodePoints, toZulipQuote } from 'src/format';
+import {
+  asHexColor,
+  neutraliseZulipLabel,
+  neutraliseZulipMentions,
+  plural,
+  shorten,
+  shortenCodePoints,
+  toZulipQuote,
+} from 'src/format';
 import { describe, expect, it } from 'vitest';
 
 describe('shorten', () => {
@@ -50,6 +58,31 @@ describe('neutraliseZulipMentions', () => {
     for (const text of ['zack@example.com', '**bold**', '#123', '@zack', 'a # b']) {
       expect(neutraliseZulipMentions(text)).toBe(text);
     }
+  });
+});
+
+describe('neutraliseZulipLabel', () => {
+  it('should break up `](` and `][`, the pairs that close a link label into a link', () => {
+    expect(neutraliseZulipLabel('a](https://evil) [b')).toBe('a]\u200B(https://evil) [b');
+    expect(neutraliseZulipLabel('a][ref]')).toBe('a]\u200B[ref]');
+  });
+
+  it('should neutralise mentions on the way', () => {
+    expect(neutraliseZulipLabel('@**all**](x)')).toBe('@\u200B**all**]\u200B(x)');
+  });
+
+  it('should leave every other bracket alone', () => {
+    for (const text of ['[owner/repo] Issue opened', 'Fix [BUG] thumbnails', 'a] b', 'a]', '[', 'f(x)', '] (x)']) {
+      expect(neutraliseZulipLabel(text), text).toBe(text);
+    }
+  });
+});
+
+describe('plural', () => {
+  it('should add an s to every count but one', () => {
+    expect(plural(0, 'thread')).toBe('0 threads');
+    expect(plural(1, 'thread')).toBe('1 thread');
+    expect(plural(2, 'open pull request')).toBe('2 open pull requests');
   });
 });
 

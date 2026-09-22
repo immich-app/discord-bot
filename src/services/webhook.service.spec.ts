@@ -1,9 +1,10 @@
 import { Logger, UnauthorizedException } from '@nestjs/common';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
-import { EmbedBuilder } from 'discord.js';
+import { CommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import _ from 'lodash';
-import { ReleaseMessages } from 'src/constants';
+import { Constants, ReleaseMessages } from 'src/constants';
+import { DiscordCommands } from 'src/discord/commands';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -12,13 +13,14 @@ import {
   FourthwallOrderUpdateWebhook,
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
-import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { GithubService } from 'src/services/github.service';
 import { NotificationService } from 'src/services/notification.service';
-import { WebhookService } from 'src/services/webhook.service';
+import { BackfillReport, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 /**
@@ -103,6 +105,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   getLatestReleaseTag: vitest.fn(),
   isCollaborator: vitest.fn(),
   getPullRequests: vitest.fn(),
+  getPullRequest: vitest.fn(),
 });
 
 const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
@@ -137,6 +140,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
+  getMessages: vitest.fn(),
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
@@ -3839,6 +3843,345 @@ describe(WebhookService.name, () => {
           expect.any(TypeError),
         );
         expect(discordMock.setThreadArchived).toHaveBeenCalledOnce();
+      });
+    });
+  });
+
+  describe('backfillPullRequests', () => {
+    const BOTH = { discord: true, zulip: true };
+    const DISCORD_ONLY = { discord: true, zulip: false };
+
+    const open = (number: number, sender: 'User' | 'Bot' = 'User'): PullRequestBaseEvent => ({
+      repository: { full_name: 'immich-app/immich' },
+      sender: { type: sender },
+      pull_request: {
+        number,
+        id: 1000 + number,
+        node_id: `PR_node_${number}`,
+        title: `PR ${number}`,
+        body: `Body ${number}`,
+        html_url: `https://github.com/immich-app/immich/pull/${number}`,
+      },
+    });
+
+    const rows = new Map<string, Record<string, unknown>>();
+    const track = (number: number, overrides: Record<string, unknown> = {}) =>
+      rows.set(`PR_node_${number}`, {
+        nodeId: `PR_node_${number}`,
+        organization: 'immich-app',
+        repository: 'immich',
+        number,
+        discordThreadId: null,
+        zulipMessageId: null,
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+        closedAt: null,
+        ...overrides,
+      });
+    const row = (number: number) => rows.get(`PR_node_${number}`);
+    const report = (overrides: Partial<BackfillReport>): BackfillReport => ({
+      total: 0,
+      threads: [],
+      topics: [],
+      skipped: [],
+      failed: [],
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      rows.clear();
+      databaseMock.getPullRequestById.mockImplementation((nodeId) => Promise.resolve(rows.get(nodeId) as any));
+      databaseMock.updatePullRequest.mockImplementation(({ nodeId, ...fields }) => {
+        Object.assign(rows.get(nodeId)!, fields);
+        return Promise.resolve();
+      });
+      discordMock.createThread.mockImplementation((_, { name }) => Promise.resolve({ threadId: `thread-${name}` }));
+      zulipMock.isInitialised.mockReturnValue(true);
+      zulipMock.sendMessage.mockImplementation(({ topic = '' }) =>
+        Promise.resolve({ id: Number(topic.slice(1, topic.indexOf(':'))) + 500 }),
+      );
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    });
+
+    it('should create the Discord thread and the Zulip topic a tracked pull request lacks, through the real paths, and report both', async () => {
+      track(1);
+
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(
+        report({ total: 1, threads: [1], topics: [1] }),
+      );
+
+      expect(discordMock.createThread).toHaveBeenCalledExactlyOnceWith(Constants.Discord.Channels.TeamPullRequests, {
+        name: '#1: PR 1',
+        message: 'Body 1',
+      });
+      expect(discordMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        channelId: Constants.Discord.Channels.TeamPullRequests,
+        threadId: 'thread-#1: PR 1',
+        message: { content: 'https://github.com/immich-app/immich/pull/1', flags: [MessageFlags.SuppressEmbeds] },
+        pin: true,
+      });
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: Constants.Zulip.Streams.ImmichPullRequests,
+        topic: '#1: PR 1',
+        content: 'https://github.com/immich-app/immich/pull/1\n\n~~~ quote\nBody 1\n~~~',
+      });
+      expect(row(1)).toMatchObject({ discordThreadId: 'thread-#1: PR 1', zulipMessageId: 501 });
+      expect(Logger.prototype.error).not.toHaveBeenCalled();
+    });
+
+    it('should create only the Zulip topic for a pull request that has its thread, and not touch the thread', async () => {
+      track(1, { discordThreadId: 'thread-old' });
+
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(report({ total: 1, topics: [1] }));
+
+      expect(discordMock.createThread).not.toHaveBeenCalled();
+      expect(discordMock.updateThread).not.toHaveBeenCalled();
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(row(1)).toMatchObject({ discordThreadId: 'thread-old', zulipMessageId: 501 });
+    });
+
+    it('should create only the Discord thread for a pull request that has its topic', async () => {
+      track(1, { zulipMessageId: 42 });
+
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(report({ total: 1, threads: [1] }));
+
+      expect(discordMock.createThread).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(zulipMock.getMessage).not.toHaveBeenCalled();
+      expect(row(1)).toMatchObject({ discordThreadId: 'thread-#1: PR 1', zulipMessageId: 42 });
+    });
+
+    it('should skip a pull request that has both, without a call to either platform', async () => {
+      track(1, { discordThreadId: 'thread-old', zulipMessageId: 42 });
+
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(
+        report({ total: 1, skipped: [{ number: 1, reason: 'already complete' }] }),
+      );
+
+      expect(discordMock.createThread).not.toHaveBeenCalled();
+      expect(discordMock.updateThread).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(databaseMock.getPullRequestById).toHaveBeenCalledOnce();
+    });
+
+    it('should skip a pull request that is not in the table, which neither path would create for', async () => {
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(
+        report({ total: 1, skipped: [{ number: 1, reason: 'not tracked' }] }),
+      );
+
+      expect(discordMock.createThread).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should skip a pull request opened by a bot, which neither path creates for', async () => {
+      track(1);
+
+      await expect(sut.backfillPullRequests([open(1, 'Bot')], BOTH)).resolves.toEqual(
+        report({ total: 1, skipped: [{ number: 1, reason: 'opened by a bot' }] }),
+      );
+
+      expect(discordMock.createThread).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should create on Discord alone when asked for Discord alone, and report no Zulip side', async () => {
+      track(1);
+      track(2, { discordThreadId: 'thread-old' });
+
+      await expect(sut.backfillPullRequests([open(1), open(2)], DISCORD_ONLY)).resolves.toEqual(
+        report({ total: 2, threads: [1], topics: undefined, skipped: [{ number: 2, reason: 'already complete' }] }),
+      );
+
+      expect(discordMock.createThread).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(row(1)).toMatchObject({ zulipMessageId: null });
+    });
+
+    it('should not ask Zulip when it is not initialised', async () => {
+      zulipMock.isInitialised.mockReturnValue(false);
+      track(1);
+
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(
+        report({ total: 1, threads: [1], topics: undefined }),
+      );
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should carry on past a Discord rejection, log it by number, still create that Zulip topic, and report the failure', async () => {
+      track(1);
+      track(2);
+      track(3);
+      const error = new Error('rate limited');
+      discordMock.createThread
+        .mockResolvedValueOnce({ threadId: 'thread-1' })
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce({ threadId: 'thread-3' });
+
+      await expect(sut.backfillPullRequests([open(1), open(2), open(3)], BOTH)).resolves.toEqual(
+        report({ total: 3, threads: [1, 3], topics: [1, 2, 3], failed: [2] }),
+      );
+
+      expect(zulipMock.sendMessage.mock.calls.map(([{ topic }]) => topic)).toEqual([
+        '#1: PR 1',
+        '#2: PR 2',
+        '#3: PR 3',
+      ]);
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith('Could not backfill pull request #2', error);
+      expect(row(2)).toMatchObject({ discordThreadId: null, zulipMessageId: 502 });
+    });
+
+    it('should report a Zulip failure, which the Zulip path has logged, beside the thread it created', async () => {
+      track(1);
+      zulipMock.sendMessage.mockRejectedValue(new TypeError('fetch failed'));
+
+      await expect(sut.backfillPullRequests([open(1)], BOTH)).resolves.toEqual(
+        report({ total: 1, threads: [1], failed: [1] }),
+      );
+
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        'Zulip failed while updating the topic of pull request #1',
+        expect.any(TypeError),
+      );
+    });
+
+    it('should report a thread Discord did not create, and say so, since that path logs nothing', async () => {
+      track(1);
+      discordMock.createThread.mockResolvedValue({});
+
+      await expect(sut.backfillPullRequests([open(1)], DISCORD_ONLY)).resolves.toEqual(
+        report({ total: 1, topics: undefined, failed: [1] }),
+      );
+
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        'Could not backfill pull request #1: Discord created no thread',
+      );
+    });
+
+    it('should report a lookup that fails as that pull request failing, and do the rest', async () => {
+      track(2);
+      databaseMock.getPullRequestById.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(sut.backfillPullRequests([open(1), open(2)], BOTH)).resolves.toEqual(
+        report({ total: 2, threads: [2], topics: [2], failed: [1] }),
+      );
+
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        'Could not backfill pull request #1',
+        expect.any(Error),
+      );
+    });
+
+    it('should do nothing with no pull requests', async () => {
+      await expect(sut.backfillPullRequests([], BOTH)).resolves.toEqual(report({ total: 0 }));
+
+      expect(databaseMock.getPullRequestById).not.toHaveBeenCalled();
+    });
+
+    describe('formatBackfillReport', () => {
+      it('should say what was created, skipped and failed, platform by platform asked', () => {
+        expect(
+          formatBackfillReport({
+            total: 5,
+            threads: [1],
+            topics: [1, 2],
+            skipped: [
+              { number: 3, reason: 'not tracked' },
+              { number: 4, reason: 'already complete' },
+            ],
+            failed: [5],
+          }),
+        ).toBe(
+          'Backfill of 5 open pull requests done: created 1 Discord thread and 2 Zulip topics; skipped 2 (1 already complete, 1 not tracked); failed 1 (#5), see the log.',
+        );
+      });
+
+      it('should name only the platforms asked', () => {
+        expect(formatBackfillReport({ total: 2, threads: [1, 2], skipped: [], failed: [] })).toBe(
+          'Backfill of 2 open pull requests done: created 2 Discord threads; skipped 0; failed 0.',
+        );
+        expect(formatBackfillReport({ total: 0, skipped: [], failed: [] })).toBe(
+          'Backfill of 0 open pull requests done: created nothing, no platform was asked; skipped 0; failed 0.',
+        );
+      });
+
+      it('should take a subject for one pull request', () => {
+        expect(
+          formatBackfillReport(
+            { total: 1, threads: [], topics: [], skipped: [{ number: 1234, reason: 'opened by a bot' }], failed: [] },
+            'pull request #1234',
+          ),
+        ).toBe(
+          'Backfill of pull request #1234 done: created 0 Discord threads and 0 Zulip topics; skipped 1 (1 opened by a bot); failed 0.',
+        );
+      });
+    });
+
+    describe('/backfill-pull-requests on Discord', () => {
+      const run = (pullRequests: PullRequestBaseEvent[]) => {
+        const edit = vitest.fn().mockResolvedValue(undefined);
+        const interaction = {
+          deferReply: vitest.fn().mockResolvedValue({ edit }),
+        } as unknown as CommandInteraction;
+        const githubService = { getOpenPullRequests: vitest.fn().mockResolvedValue(pullRequests) };
+        const commands = new DiscordCommands(
+          undefined as never,
+          undefined as never,
+          undefined as never,
+          githubService as unknown as GithubService,
+          sut,
+        );
+        return { interaction, edit, result: commands.backfillPullRequests(interaction) };
+      };
+
+      it('should create the thread every open pull request lacks on Discord alone, and reply with the report', async () => {
+        track(1);
+        track(2, { discordThreadId: 'thread-old' });
+        track(3);
+        const backfill = vitest.spyOn(sut, 'backfillPullRequests');
+
+        const { interaction, edit, result } = run([open(1), open(2), open(3), open(4)]);
+        await result;
+
+        expect(interaction.deferReply).toHaveBeenCalledExactlyOnceWith({ flags: [MessageFlags.Ephemeral] });
+        expect(backfill).toHaveBeenCalledExactlyOnceWith([open(1), open(2), open(3), open(4)], DISCORD_ONLY);
+        expect(discordMock.createThread.mock.calls.map(([, { name }]) => name)).toEqual(['#1: PR 1', '#3: PR 3']);
+        expect(discordMock.updateThread).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(edit).toHaveBeenCalledExactlyOnceWith(
+          'Backfill of 4 open pull requests done: created 2 Discord threads; skipped 2 (1 already complete, 1 not tracked); failed 0.',
+        );
+      });
+
+      it('should report a pull request that fails rather than stop at it', async () => {
+        track(1);
+        track(2);
+        discordMock.createThread.mockRejectedValueOnce(new Error('boom 1')).mockResolvedValueOnce({ threadId: 't2' });
+
+        const { edit, result } = run([open(1), open(2)]);
+        await result;
+
+        expect(edit).toHaveBeenCalledExactlyOnceWith(
+          'Backfill of 2 open pull requests done: created 1 Discord thread; skipped 0; failed 1 (#1), see the log.',
+        );
+      });
+
+      it('should let a failure to list the pull requests through, with no reply', async () => {
+        const edit = vitest.fn();
+        const interaction = { deferReply: vitest.fn().mockResolvedValue({ edit }) } as unknown as CommandInteraction;
+        const error = new Error('GitHub is down');
+        const githubService = { getOpenPullRequests: vitest.fn().mockRejectedValue(error) };
+        const commands = new DiscordCommands(
+          undefined as never,
+          undefined as never,
+          undefined as never,
+          githubService as unknown as GithubService,
+          sut,
+        );
+
+        await expect(commands.backfillPullRequests(interaction)).rejects.toBe(error);
+        expect(edit).not.toHaveBeenCalled();
       });
     });
   });

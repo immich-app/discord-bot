@@ -4,7 +4,13 @@ import { DateTime } from 'luxon';
 import { getConfig } from 'src/config';
 import { Constants } from 'src/constants';
 import { HolidayDto, IHolidaysInterface } from 'src/interfaces/holidays.interface';
-import { IZulipInterface, ZulipEvent, ZulipEventQueue, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import {
+  IZulipInterface,
+  ZulipEvent,
+  ZulipEventQueue,
+  ZulipReceivedMessage,
+  ZulipUser,
+} from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 
 export type ZulipMessageHandler = (message: ZulipReceivedMessage) => Promise<void> | void;
@@ -40,7 +46,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
 const backoffMs = (failures: number) => Math.min(INITIAL_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
 
 /** Message events carry no `is_bot` flag, but Zulip creates every bot as `{short_name}-bot@{realm host}`. */
-const isBotSender = (message: ZulipReceivedMessage) => /-bot@[^@]+$/i.test(message.senderEmail);
+export const isBotSender = (message: ZulipReceivedMessage) => /-bot@[^@]+$/i.test(message.senderEmail);
 
 export const describeZulipStream = (streamId: number) => {
   const named = [...Object.entries(Constants.Zulip.TeamStreams), ...Object.entries(Constants.Zulip.Streams)];
@@ -48,8 +54,14 @@ export const describeZulipStream = (streamId: number) => {
   return name ? `${streamId} (${name})` : `${streamId}`;
 };
 
-const listeningStreams = () => new Set(Object.values(Constants.Zulip.Expanders).flat());
-const privilegedStreams = () => new Set(Constants.Zulip.Expanders.GithubReferences);
+const listeningStreams = () =>
+  new Set([...Object.values(Constants.Zulip.Expanders).flat(), ...Constants.Zulip.Commands]);
+const privilegedStreams = () => new Set([...Constants.Zulip.Expanders.GithubReferences, ...Constants.Zulip.Commands]);
+
+const notPrivate = (streamId: number) =>
+  Constants.Zulip.Expanders.GithubReferences.includes(streamId)
+    ? `The Zulip bot is allowlisted to expand GitHub references in stream ${describeZulipStream(streamId)}, but the server does not report that stream as private: private repository titles and code would leak, so nothing is expanded there until the stream is made private or removed from Constants.Zulip.Expanders.GithubReferences`
+    : `The Zulip bot takes commands in stream ${describeZulipStream(streamId)}, but the server does not report that stream as private: anyone in the realm could drive it, so no command is taken there until the stream is made private or removed from Constants.Zulip.Commands`;
 
 @Injectable()
 export class ZulipService implements OnModuleDestroy {
@@ -58,7 +70,7 @@ export class ZulipService implements OnModuleDestroy {
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
   private privateStreams = new Set<number>();
-  private ownUserId?: number;
+  private self?: ZulipUser;
   private loop?: { promise: Promise<void>; controller: AbortController };
 
   constructor(
@@ -81,6 +93,10 @@ export class ZulipService implements OnModuleDestroy {
 
   isPrivateStream(streamId: number) {
     return this.privateStreams.has(streamId);
+  }
+
+  get ownUser(): ZulipUser | undefined {
+    return this.self;
   }
 
   /** An in-flight registration is awaited: the server creates its queue even if the client never reads the answer. */
@@ -122,7 +138,7 @@ export class ZulipService implements OnModuleDestroy {
     };
     while (!signal.aborted) {
       try {
-        this.ownUserId ??= (await this.zulip.getOwnUser()).userId;
+        this.self ??= await this.zulip.getOwnUser();
         this.queue ??= await this.registerQueue();
         const queue = this.queue;
 
@@ -202,9 +218,7 @@ export class ZulipService implements OnModuleDestroy {
     }
     for (const streamId of privilegedStreams()) {
       if (subscribed.has(streamId) && !this.privateStreams.has(streamId)) {
-        this.logger.error(
-          `The Zulip bot is allowlisted to expand GitHub references in stream ${describeZulipStream(streamId)}, but the server does not report that stream as private: private repository titles and code would leak, so nothing is expanded there until the stream is made private or removed from Constants.Zulip.Expanders.GithubReferences`,
-        );
+        this.logger.error(notPrivate(streamId));
       }
     }
     return queue;
@@ -232,7 +246,7 @@ export class ZulipService implements OnModuleDestroy {
       return;
     }
     const { message } = event;
-    if (message.senderId === this.ownUserId || isBotSender(message)) {
+    if (message.senderId === this.self?.userId || isBotSender(message)) {
       return;
     }
     for (const handler of this.handlers) {

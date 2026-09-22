@@ -13,11 +13,17 @@ export const shortenCodePoints = (text: string, maxLength: number) => {
   return codePoints.length > maxLength ? `${codePoints.slice(0, maxLength - 3).join('')}...` : text;
 };
 
+export const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
 /** `#rrggbb` for a Mattermost accent. Deliberately not zero-padded: that is what has always been sent. */
 export const asHexColor = (color: number) => `#${color.toString(16)}`;
 
 /** Zulip has no backslash escaping, so a zero-width space after the sigil is the only way to stop a mention. */
 export const neutraliseZulipMentions = (text: string) => text.replaceAll(/([@#])(?=_?\*)/g, '$1\u200B');
+
+/** Python-Markdown only closes a link label when `(` or `[` directly follows `]`, so breaking just those pairs stops an untrusted string forging a link while leaving every other `]` as written. */
+export const neutraliseZulipLabel = (text: string) =>
+  neutraliseZulipMentions(text).replaceAll(/\](?=[([])/g, ']\u200B');
 
 /** Zulip closes a fence on a line equal to its opening fence, so the fence must outrun any tilde run in the text. */
 export const toZulipQuote = (text: string) => {

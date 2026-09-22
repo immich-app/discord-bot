@@ -71,6 +71,7 @@ describe('ZulipRepository', () => {
       { method: 'listEmoji', call: () => sut.listEmoji() },
       { method: 'getSubscriptions', call: () => sut.getSubscriptions() },
       { method: 'getOwnUser', call: () => sut.getOwnUser() },
+      { method: 'getMessages', call: () => sut.getMessages({ stream: 107, topic: 'deploy', numBefore: 10 }) },
       { method: 'registerQueue', call: () => sut.registerQueue() },
       { method: 'getEvents', call: () => sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live()) },
       { method: 'deleteQueue', call: () => sut.deleteQueue('q1') },
@@ -306,7 +307,7 @@ describe('ZulipRepository', () => {
         json({ result: 'success', msg: '', user_id: 7, email: 'bot@example.com', full_name: 'Immich', is_bot: true }),
       );
 
-      await expect(sut.getOwnUser()).resolves.toEqual({ userId: 7 });
+      await expect(sut.getOwnUser()).resolves.toEqual({ userId: 7, fullName: 'Immich' });
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(request(0).method).toBe('GET');
@@ -318,6 +319,108 @@ describe('ZulipRepository', () => {
       fetchMock.mockResolvedValue(json({ result: 'success', msg: '', email: 'bot@example.com', is_bot: true }));
 
       await expect(sut.getOwnUser()).rejects.toThrow('Zulip returned no user ID for the bot');
+    });
+
+    it('should return an empty name when the answer has none: the loop needs the ID, only the commands need the name', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', user_id: 7, email: 'bot@example.com' }));
+
+      await expect(sut.getOwnUser()).resolves.toEqual({ userId: 7, fullName: '' });
+    });
+  });
+
+  describe('getMessages', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should ask for the newest messages of the topic as raw markdown, with the narrow as one JSON string', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          anchor: 10000000000000000,
+          found_newest: true,
+          messages: [
+            {
+              id: 490,
+              sender_id: 12,
+              sender_email: 'alice@example.com',
+              type: 'stream',
+              stream_id: 107,
+              subject: 'deploy',
+              content: 'the thumbnails crash',
+              flags: ['read'],
+            },
+            {
+              id: 500,
+              sender_id: 12,
+              sender_email: 'alice@example.com',
+              type: 'stream',
+              stream_id: 107,
+              subject: 'deploy',
+              content: '@**Immich** similar',
+              flags: ['mentioned'],
+            },
+          ],
+        }),
+      );
+
+      await expect(sut.getMessages({ stream: 107, topic: 'deploy', numBefore: 10 })).resolves.toEqual([
+        {
+          id: 490,
+          senderId: 12,
+          senderEmail: 'alice@example.com',
+          type: 'stream',
+          streamId: 107,
+          topic: 'deploy',
+          content: 'the thumbnails crash',
+        },
+        {
+          id: 500,
+          senderId: 12,
+          senderEmail: 'alice@example.com',
+          type: 'stream',
+          streamId: 107,
+          topic: 'deploy',
+          content: '@**Immich** similar',
+        },
+      ]);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      const url = new URL(request(0).url);
+      expect(url.pathname).toBe('/api/v1/messages');
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        anchor: 'newest',
+        num_before: '10',
+        num_after: '0',
+        narrow: JSON.stringify([
+          { operator: 'channel', operand: 107 },
+          { operator: 'topic', operand: 'deploy' },
+        ]),
+        apply_markdown: 'false',
+      });
+    });
+
+    it('should return an empty list for an empty topic', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', messages: [] }));
+
+      await expect(sut.getMessages({ stream: 107, topic: 'nothing here', numBefore: 10 })).resolves.toEqual([]);
+    });
+
+    it('should throw on a Zulip error instead of resolving', async () => {
+      fetchMock.mockResolvedValue(
+        json(
+          { result: 'error', code: 'BAD_REQUEST', msg: 'Invalid narrow operator: unknown operator' },
+          { status: 400 },
+        ),
+      );
+
+      await expect(sut.getMessages({ stream: 107, topic: 'deploy', numBefore: 10 })).rejects.toMatchObject({
+        status: 400,
+        code: 'BAD_REQUEST',
+      });
     });
   });
 
