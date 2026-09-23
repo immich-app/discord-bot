@@ -1401,6 +1401,36 @@ describe('ZulipRepository', () => {
     });
   });
 
+  describe('getMessagesByIds', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should read the messages by ID as raw markdown, the ID list as one JSON value', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          messages: [
+            { id: 653, sender_id: 8, type: 'stream', stream_id: 156, subject: 'general chat', content: 'edited' },
+          ],
+        }),
+      );
+
+      await expect(sut.getMessagesByIds([653, 654])).resolves.toEqual([
+        expect.objectContaining({ id: 653, streamId: 156, topic: 'general chat', content: 'edited' }),
+      ]);
+      const url = new URL(request(0).url);
+      expect(url.pathname).toBe('/api/v1/messages');
+      expect(Object.fromEntries(url.searchParams)).toEqual({ message_ids: '[653,654]', apply_markdown: 'false' });
+    });
+
+    it('should ask nothing for no IDs', async () => {
+      await expect(sut.getMessagesByIds([])).resolves.toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getEmojiCodes', () => {
     beforeEach(async () => {
       await sut.init({ ...config, realm: 'https://zulip.example.com/api/' });

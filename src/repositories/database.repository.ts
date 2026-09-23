@@ -417,6 +417,18 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
+  getRecentMirrorMessages(discordChannelId: string, since: Date, limit: number): Promise<MirrorMessage[]> {
+    return this.db
+      .selectFrom('mirror_message')
+      .selectAll()
+      .where('discordChannelId', '=', discordChannelId)
+      .where('createdAt', '>=', since)
+      .where('deletedAt', 'is', null)
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .execute();
+  }
+
   async getNewestMirrorZulipMessageId(conversationId: string): Promise<number | undefined> {
     const { newest } = await this.db
       .selectFrom('mirror_message')

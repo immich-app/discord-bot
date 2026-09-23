@@ -97,6 +97,8 @@ const DISCORD_EPOCH = 1_420_070_400_000n;
 const ACTIVE_THREAD_DAYS = 7;
 const ACTIVE_THREAD_LIMIT = 20;
 const NEW_THREAD_LIMIT = 20;
+const RECHECK_LIMIT = 200;
+const ZULIP_ID_BATCH = 100;
 const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const FILE_TRANSFER_BUDGET_MS = 120_000;
@@ -139,6 +141,7 @@ type PairState = {
   retryDelayMs: number;
   /** Edits, deletions and renames held back, in order, until the side they go to is ready. */
   held: Record<Side, Op[]>;
+  unheard: Record<Side, boolean>;
   resumeTimer?: NodeJS.Timeout;
 };
 
@@ -327,6 +330,7 @@ export class MirrorService implements OnModuleDestroy {
   private pendingReactions = new Set<string>();
   private active = false;
   private zulipRegistered = false;
+  private subscribedStreams = new Set<number>();
   private discordConnected = false;
   private channelCheck?: NodeJS.Timeout;
 
@@ -377,7 +381,7 @@ export class MirrorService implements OnModuleDestroy {
     this.logger.log(`${state.pair.key}: linked with Zulip stream ${state.pair.zulipStreamId}`);
     if (this.discordConnected && this.discordMirror.isReady()) {
       await this.checkDiscordChannel(state);
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord', 'Zulip']);
       this.maybeCatchUp(state);
       this.resume(state);
     }
@@ -425,13 +429,14 @@ export class MirrorService implements OnModuleDestroy {
       turnedAway: noneTurnedAway(),
       retryDelayMs: CATCH_UP_RETRY_MS,
       held: { Discord: [], Zulip: [] },
+      unheard: { Discord: false, Zulip: false },
     };
   }
 
   async onDiscordReady() {
     this.discordConnected = true;
     for (const state of this.pairs) {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord']);
     }
     for (const state of this.pairs) {
       await this.checkDiscordChannel(state);
@@ -447,7 +452,7 @@ export class MirrorService implements OnModuleDestroy {
   onDiscordDisconnected() {
     this.discordConnected = false;
     for (const state of this.pairs) {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord']);
     }
   }
 
@@ -598,6 +603,7 @@ export class MirrorService implements OnModuleDestroy {
 
   private onZulipQueueRegistered({ subscribedStreamIds }: { subscribedStreamIds: number[] }) {
     const subscribed = new Set(subscribedStreamIds);
+    this.subscribedStreams = subscribed;
     for (const { pair, status } of this.pairs) {
       if (status !== 'disabled' && !subscribed.has(pair.zulipStreamId)) {
         this.logger.warn(
@@ -609,7 +615,7 @@ export class MirrorService implements OnModuleDestroy {
     this.streamNames.clear();
     this.zulipRegistered = true;
     for (const state of this.pairs) {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Zulip']);
       this.maybeCatchUp(state);
       this.resume(state);
     }
@@ -692,7 +698,7 @@ export class MirrorService implements OnModuleDestroy {
       this.logger[level](reason);
     }
     if (state.status !== 'disabled') {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord', 'Zulip']);
     }
     state.status = 'disabled';
     state.offReason = reason;
@@ -710,7 +716,7 @@ export class MirrorService implements OnModuleDestroy {
       }
       await this.checkDiscordChannel(state);
       if (this.discordReady(state)) {
-        this.lostTrack(state);
+        this.lostTrack(state, ['Discord', 'Zulip']);
         this.maybeCatchUp(state);
         this.resume(state);
       }
@@ -725,9 +731,13 @@ export class MirrorService implements OnModuleDestroy {
     state.queue.push('catch-up', () => this.catchUp(state));
   }
 
-  private lostTrack(state: PairState) {
+  /** `unheard` are the sides whose edits and deletions may have gone without an event, which the next recheck reads. */
+  private lostTrack(state: PairState, unheard: Side[] = []) {
     state.caughtUp = false;
     state.generation++;
+    for (const side of unheard) {
+      state.unheard[side] = true;
+    }
   }
 
   private retryCatchUp(state: PairState) {
@@ -767,7 +777,9 @@ export class MirrorService implements OnModuleDestroy {
       // Only an op the queue's watchdog gave up on can meet creates turned away while it read.
       const complete = read && isEmpty(state.turnedAway);
       this.queueMissed(state, generation, discord.messages, zulip.messages, since, complete);
-      if (!complete) {
+      if (complete) {
+        state.queue.push('recheck of recent messages', () => this.recheck(state, generation));
+      } else {
         this.turnAway(state, turnedAway);
         this.retryCatchUp(state);
       }
@@ -981,6 +993,151 @@ export class MirrorService implements OnModuleDestroy {
           (message.movedAt === undefined || turnedAway.has(message.id)),
       );
     return { messages, complete: true };
+  }
+
+  /**
+   * Edits and deletions made while the bot was away bring no event, so after a complete catch-up both sides of the
+   * newest recent rows are read again and whatever changed goes through the live edit and deletion paths.
+   */
+  private async recheck(state: PairState, generation: number) {
+    const { pair } = state;
+    if (generation !== state.generation) {
+      return;
+    }
+    const unheard = state.unheard;
+    state.unheard = { Discord: false, Zulip: false };
+    if (!unheard.Discord && !unheard.Zulip) {
+      return;
+    }
+    const since = Math.max(Date.now() - Constants.Mirror.RecheckMaxAgeHours * HOUR, pair.linkedAt);
+    const rows = await this.database.getRecentMirrorMessages(pair.discordChannelId, new Date(since), RECHECK_LIMIT);
+    if (rows.length === RECHECK_LIMIT) {
+      this.logger.log(
+        `${pair.key}: rechecking the newest ${RECHECK_LIMIT} mirrored messages; edits and deletions of older ones made while the bot was away are not mirrored`,
+      );
+    }
+    const ops = [
+      ...(unheard.Discord
+        ? await this.recheckOnDiscord(
+            state,
+            rows.filter(({ origin }) => origin === 'discord'),
+          )
+        : []),
+      ...(unheard.Zulip
+        ? await this.recheckOnZulip(
+            state,
+            rows.filter(({ origin }) => origin === 'zulip'),
+          )
+        : []),
+    ];
+    // What was read may be out of date by now; the catch-up that follows reads again.
+    if (generation !== state.generation) {
+      state.unheard.Discord ||= unheard.Discord;
+      state.unheard.Zulip ||= unheard.Zulip;
+      return;
+    }
+    if (ops.length > 0) {
+      this.logger.log(`${pair.key}: mirroring ${plural(ops.length, 'change')} made while the bot was away`);
+    }
+    state.queue.pushNext(ops);
+  }
+
+  /**
+   * Reads each location back to its oldest recent row; a row the pages do not reach is left alone, and so is every row
+   * of a location that shows no message at all, which is likelier lost access than everything deleted.
+   */
+  private async recheckOnDiscord(state: PairState, rows: MirrorMessage[]) {
+    const { pair } = state;
+    const byLocation = new Map<string, MirrorMessage[]>();
+    for (const row of rows) {
+      const location = row.discordThreadId ?? row.discordChannelId;
+      byLocation.set(location, [...(byLocation.get(location) ?? []), row]);
+    }
+    const ops: Op[] = [];
+    for (const [location, located] of byLocation) {
+      const oldest = located.reduce((min, { discordMessageId }) => {
+        const id = BigInt(discordMessageId);
+        return id < min ? id : min;
+      }, BigInt(located[0].discordMessageId));
+      const found = new Map<string, DiscordSourceMessage>();
+      let reached: bigint;
+      try {
+        for (let page = 1, before: string | undefined; ; page++) {
+          const { messages, oldestId, full } = await this.discordMirror.fetchMirrorMessagesBefore(
+            location,
+            before,
+            CATCH_UP_PAGE,
+          );
+          for (const message of messages) {
+            found.set(message.id, message);
+          }
+          reached = full && oldestId !== null ? BigInt(oldestId) : 0n;
+          if (reached <= oldest || page === CATCH_UP_PAGES) {
+            break;
+          }
+          before = oldestId!;
+        }
+      } catch (error) {
+        if (!isMirrorError(error, 'unknown-channel')) {
+          this.fail(`${pair.key}: could not recheck Discord channel ${location}`, error);
+        }
+        continue;
+      }
+      if (found.size === 0) {
+        continue;
+      }
+      for (const row of located) {
+        const dto = found.get(row.discordMessageId);
+        if (!dto && BigInt(row.discordMessageId) >= reached) {
+          ops.push({
+            label: `deletion of Discord messages ${row.discordMessageId}`,
+            run: () => this.deleteFromDiscord(state, [row.discordMessageId]),
+          });
+        } else if (dto && discordSourceHash(dto) !== row.sourceHash) {
+          ops.push({ label: `edit of Discord message ${dto.id}`, run: () => this.editFromDiscord(state, dto) });
+        }
+      }
+    }
+    return ops;
+  }
+
+  /** Like Discord, a stream that shows none of the messages is left alone. */
+  private async recheckOnZulip(state: PairState, rows: MirrorMessage[]) {
+    const { pair } = state;
+    const hashes = new Map(rows.map(({ zulipMessageId, sourceHash }) => [zulipMessageId, sourceHash]));
+    const ids = [...hashes.keys()];
+    if (ids.length === 0 || !this.subscribedStreams.has(pair.zulipStreamId)) {
+      return [];
+    }
+    const found = new Map<number, ZulipReceivedMessage>();
+    try {
+      for (let start = 0; start < ids.length; start += ZULIP_ID_BATCH) {
+        const batch = ids.slice(start, start + ZULIP_ID_BATCH);
+        for (const message of await this.retryZulip(() => this.zulip.getMessagesByIds(batch))) {
+          found.set(message.id, message);
+        }
+      }
+    } catch (error) {
+      this.fail(`${pair.key}: could not recheck Zulip stream ${pair.zulipStreamId}`, error);
+      return [];
+    }
+    const ops: Op[] = [];
+    const gone = ids.filter((id) => !found.has(id));
+    if (found.size === 0) {
+      return [];
+    }
+    if (gone.length > 0) {
+      ops.push({
+        label: `deletion of Zulip messages ${gone.join(', ')}`,
+        run: () => this.deleteFromZulip(state, gone),
+      });
+    }
+    for (const [id, message] of found) {
+      if (sha256(message.content) !== hashes.get(id)) {
+        ops.push({ label: `edit of Zulip message ${id}`, run: () => this.editFromZulip(state, id, message.content) });
+      }
+    }
+    return ops;
   }
 
   private discordReady(state: PairState) {

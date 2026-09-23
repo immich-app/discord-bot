@@ -86,6 +86,45 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     });
   });
 
+  it('should list the recent rows of a channel and its threads, newest first, without deleted ones', async () => {
+    const row = (discordMessageId: string, overrides: Record<string, unknown> = {}) => ({
+      discordMessageId,
+      conversationId: null,
+      origin: 'discord' as const,
+      discordChannelId: CHANNEL,
+      discordThreadId: null,
+      discordWebhookId: null,
+      discordAuthorId: null,
+      zulipMessageId: Number(discordMessageId.slice(-4)),
+      zulipStreamId: 120,
+      zulipSenderId: null,
+      sourceHash: 'hash',
+      zulipHeader: null,
+      zulipAttachments: null,
+      ...overrides,
+    });
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
+    await sut.createMirrorMessages([
+      row('900000000000000001', { createdAt: hoursAgo(30) }),
+      row('900000000000000002', { createdAt: hoursAgo(3) }),
+      row('900000000000000003', { createdAt: hoursAgo(2), discordThreadId: '200000000000000001' }),
+      row('900000000000000004', { createdAt: hoursAgo(1) }),
+      row('900000000000000005', { createdAt: hoursAgo(1), discordChannelId: OTHER_CHANNEL }),
+    ]);
+    await sut.markMirrorMessagesDeleted(['900000000000000004']);
+
+    try {
+      const recent = await sut.getRecentMirrorMessages(CHANNEL, hoursAgo(24), 10);
+      expect(recent.map(({ discordMessageId }) => discordMessageId)).toEqual([
+        '900000000000000003',
+        '900000000000000002',
+      ]);
+      expect(await sut.getRecentMirrorMessages(CHANNEL, hoursAgo(24), 1)).toHaveLength(1);
+    } finally {
+      await sql`DELETE FROM "mirror_message" WHERE "discordMessageId" LIKE '9000000000000000%'`.execute(db);
+    }
+  });
+
   it('should keep the conversations of a channel when its link is removed', async () => {
     await sut.createMirrorLink({
       discordChannelId: CHANNEL,

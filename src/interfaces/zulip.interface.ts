@@ -164,6 +164,8 @@ export interface IZulipInterface {
   downloadUpload(path: string, maxBytes: number, signal?: AbortSignal): Promise<File | undefined>;
   /** Oldest first, as raw markdown. */
   getStreamMessagesBefore(query: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]>;
+  /** As raw markdown; a message that is gone, or that the bot cannot read, is left out. */
+  getMessagesByIds(ids: number[]): Promise<ZulipReceivedMessage[]>;
   /** From the realm's static emoji table. */
   getEmojiCodes(): Promise<ZulipEmojiCodes>;
   /** Rejects with `REACTION_ALREADY_EXISTS` when the bot has that reaction already. */

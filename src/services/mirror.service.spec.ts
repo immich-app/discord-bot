@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository, MirrorMessageQuery } from 'src/interfaces/database.interface';
 import {
@@ -91,6 +92,7 @@ type MirrorMethods =
   | 'getMirrorMessagesByDiscordIds'
   | 'getMirrorMessagesByZulipIds'
   | 'getMirrorMessagesByConversation'
+  | 'getRecentMirrorMessages'
   | 'getNewestMirrorZulipMessageId'
   | 'updateMirrorMessages'
   | 'markMirrorMessagesDeleted'
@@ -228,6 +230,14 @@ const newMirrorDatabase = () => {
         .filter(({ conversationId }) => conversationId === id)
         .map((row) => ({ ...row })),
     ),
+    getRecentMirrorMessages: vitest.fn(async (channelId: string, since: Date, limit: number) =>
+      messages
+        .filter(visible())
+        .filter((row) => row.discordChannelId === channelId && row.createdAt >= since)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((row) => ({ ...row })),
+    ),
     getNewestMirrorZulipMessageId: vitest.fn(async (id: string) => {
       const ids = messages
         .filter(visible())
@@ -329,6 +339,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => {
     uploadFile: vitest.fn(async (file: File) => ({ url: UPLOAD_URL, filename: file.name })),
     downloadUpload: vitest.fn(async (path: string) => new File(['bytes'], path.slice(path.lastIndexOf('/') + 1))),
     getStreamMessagesBefore: vitest.fn().mockResolvedValue([]),
+    getMessagesByIds: vitest.fn().mockResolvedValue([]),
     getEmojiCodes: vitest.fn().mockResolvedValue({
       unicode: { smile: '😄', fire: '🔥' },
       names: { '1f604': 'smile', '1f525': 'fire', '1f44d': '+1', '2764': 'heart' },
@@ -3508,6 +3519,142 @@ describe(MirrorService.name, () => {
     });
   });
 
+  describe('recheck', () => {
+    const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+    const EDITED = '300000000000000011';
+    const DELETED = '300000000000000012';
+    const KEPT = '300000000000000013';
+    const discordRow = (id: string, zulipMessageId: number, content: string, overrides: Partial<MirrorMessage> = {}) =>
+      seedRow({
+        discordMessageId: id,
+        origin: 'discord',
+        discordWebhookId: null,
+        discordAuthorId: CONTRIBUTOR,
+        zulipMessageId,
+        zulipSenderId: null,
+        zulipHeader: '**Contrib** (&#64;contrib123)',
+        sourceHash: discordSourceHash(discordMessage({ id, content })),
+        ...overrides,
+      });
+    const zulipRow = (
+      discordMessageId: string,
+      zulipMessageId: number,
+      content: string,
+      overrides: Partial<MirrorMessage> = {},
+    ) => seedRow({ discordMessageId, zulipMessageId, sourceHash: sha256(content), ...overrides });
+    const onZulip = (...messages: ZulipReceivedMessage[]) =>
+      zulip.getMessagesByIds.mockImplementation(async (ids) => messages.filter(({ id }) => ids.includes(id)));
+
+    beforeEach(() => {
+      discordRow(EDITED, 70, 'before');
+      discordRow(DELETED, 71, 'gone soon');
+      discordRow(KEPT, 72, 'same');
+      zulipRow('800000000000000001', 1001, 'zulip before');
+      zulipRow('800000000000000002', 1002, 'zulip gone soon');
+      zulipRow('800000000000000003', 1003, 'zulip same');
+      discord.fetchMirrorMessagesBefore.mockImplementation(async (channelId) => ({
+        messages:
+          channelId === DEV_CHANNEL
+            ? [discordMessage({ id: EDITED, content: 'after' }), discordMessage({ id: KEPT, content: 'same' })]
+            : [],
+        oldestId: channelId === DEV_CHANNEL ? '300000000000000001' : null,
+        full: false,
+      }));
+      onZulip(zulipMessage({ id: 1001, content: 'zulip after' }), zulipMessage({ id: 1003, content: 'zulip same' }));
+    });
+
+    it('should mirror the edits and deletions of recent messages made on either side while the bot was away', async () => {
+      await start();
+
+      expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(70, {
+        content: '**Contrib** (&#64;contrib123): after',
+      });
+      expect(zulip.deleteMessage).toHaveBeenCalledExactlyOnceWith(71);
+      expect(discord.editMirrorMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ messageId: '800000000000000001' }),
+        { content: 'zulip after', suppressEmbeds: false },
+      );
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ messageId: '800000000000000002' }),
+      );
+      expect(zulip.getMessagesByIds).toHaveBeenCalledExactlyOnceWith([1001, 1002, 1003]);
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: mirroring 4 changes made while the bot was away`);
+    });
+
+    it('should read again only the side whose events may have been missed', async () => {
+      await start();
+      discord.fetchMirrorMessagesBefore.mockClear();
+      zulip.getMessagesByIds.mockClear();
+
+      await register();
+      expect(zulip.getMessagesByIds).toHaveBeenCalledOnce();
+      expect(discord.fetchMirrorMessagesBefore).toHaveBeenCalledExactlyOnceWith(DEV_CHANNEL, undefined, 100);
+
+      zulip.getMessagesByIds.mockClear();
+      sut.onDiscordDisconnected();
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      expect(zulip.getMessagesByIds).not.toHaveBeenCalled();
+    });
+
+    it('should leave alone the rows older than a day, and a side that shows none of its messages', async () => {
+      db.messages.splice(0);
+      discordRow(DELETED, 71, 'old', { createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+      zulipRow('800000000000000002', 1002, 'zulip gone', { createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+      zulipRow('800000000000000004', 1004, 'zulip gone too');
+      zulip.getMessagesByIds.mockResolvedValue([]);
+
+      await start();
+
+      expect(zulip.deleteMessage).not.toHaveBeenCalled();
+      expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
+      expect(zulip.getMessagesByIds).toHaveBeenCalledExactlyOnceWith([1004]);
+    });
+
+    it('should leave a Discord row the pages do not reach alone', async () => {
+      discord.fetchMirrorMessagesBefore.mockImplementation(async (channelId) => ({
+        messages: channelId === DEV_CHANNEL ? [discordMessage({ id: '300000000000000099' })] : [],
+        oldestId: '300000000000000050',
+        full: true,
+      }));
+
+      await start();
+
+      expect(
+        discord.fetchMirrorMessagesBefore.mock.calls.filter(([channelId]) => channelId === DEV_CHANNEL),
+      ).toHaveLength(6);
+      expect(zulip.deleteMessage).not.toHaveBeenCalled();
+    });
+
+    it('should drop what it read when the mirror lost track meanwhile, and read it again with the next catch-up', async () => {
+      const messages = [
+        zulipMessage({ id: 1001, content: 'zulip after' }),
+        zulipMessage({ id: 1003, content: 'zulip same' }),
+      ];
+      zulip.getMessagesByIds.mockImplementationOnce(async () => {
+        sut.onDiscordDisconnected();
+        return messages;
+      });
+
+      await start();
+      expect(discord.editMirrorMessage).not.toHaveBeenCalled();
+
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      expect(zulip.getMessagesByIds).toHaveBeenCalledTimes(2);
+      expect(discord.editMirrorMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should not recheck after an incomplete catch-up', async () => {
+      discord.fetchMirrorMessagesBefore.mockRejectedValue(new DiscordMirrorError('unavailable'));
+
+      await start();
+
+      expect(zulip.getMessagesByIds).not.toHaveBeenCalled();
+      expect(zulip.deleteMessage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('catch-up', () => {
     const HOUR = 60 * 60 * 1000;
     const snowflake = (at: number, sequence = 0) =>
@@ -3555,6 +3702,7 @@ describe(MirrorService.name, () => {
     beforeEach(() => {
       discordHistory.clear();
       zulipHistory.length = 0;
+      db.repository.getRecentMirrorMessages.mockResolvedValue([]);
       discord.fetchMirrorMessagesBefore.mockImplementation(async (channelId, before, limit) => {
         const page = (discordHistory.get(channelId) ?? [])
           .filter(({ id }) => before === undefined || BigInt(id) < BigInt(before))

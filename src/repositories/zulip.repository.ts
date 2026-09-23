@@ -271,6 +271,16 @@ export class ZulipRepository implements IZulipInterface {
     return (data!.messages ?? []).map(toReceivedMessage);
   }
 
+  async getMessagesByIds(ids: number[]): Promise<ZulipReceivedMessage[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const { data } = await this.bot.GET('/messages', {
+      params: { query: { message_ids: JSON.stringify(ids), apply_markdown: false } },
+    });
+    return (data!.messages ?? []).map(toReceivedMessage);
+  }
+
   /** An undocumented static file, served without authentication. */
   async getEmojiCodes(): Promise<ZulipEmojiCodes> {
     const { origin } = this.site;
