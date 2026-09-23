@@ -1921,19 +1921,44 @@ describe(MirrorService.name, () => {
       expect(db.conversations[0].zulipAnchorMessageId).toBe(1002);
     });
 
-    it('should leave the Discord copies alone when a whole thread disappears from Zulip', async () => {
+    it('should delete the Discord copies and let the thread go when its whole topic disappears from Zulip', async () => {
       await fromZulip(zulipMessage({ topic: 'Crash' }));
       await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
       const threadId = db.conversations[0].discordThreadId!;
       await fromDiscord(discordMessage({ threadId, threadName: 'Crash' }));
+      const copies = db.messages
+        .filter(({ origin }) => origin === 'zulip')
+        .map(({ discordMessageId }) => discordMessageId);
 
       await deleteFromZulip({ messageIds: [1001, 1002, 5001], topic: 'Crash' });
 
-      expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
+      expect(discord.deleteMirrorMessage.mock.calls.map(([{ messageId }]) => messageId)).toEqual(copies);
       expect(db.conversations).toEqual([]);
-      expect(warn()).toHaveBeenCalledWith(
-        `Dev: Zulip removed every mirrored message of the topic of Discord thread ${threadId}, as it does when the topic moves to a stream the bot cannot read; detached the thread and left its Discord copies alone (delete them there by hand if the topic was deleted)`,
+      expect(log()).toHaveBeenCalledWith(
+        `Dev: detached the conversation of Discord thread ${threadId}: Zulip removed every mirrored message of its topic`,
       );
+    });
+
+    it('should delete the copy of the only message of a topic posted by mistake', async () => {
+      await fromZulip(zulipMessage({ topic: 'Oops wrong stream' }));
+
+      await deleteFromZulip({ messageIds: [1001], topic: 'Oops wrong stream' });
+
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ messageId: db.messages[0].discordMessageId }),
+      );
+      expect(db.conversations).toEqual([]);
+    });
+
+    it('should delete the copy of the last message left in a topic', async () => {
+      await fromZulip(zulipMessage({ topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+
+      await deleteFromZulip({ messageIds: [1001] });
+      await deleteFromZulip({ messageIds: [1002] });
+
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledTimes(2);
+      expect(db.conversations).toEqual([]);
     });
 
     it('should still delete the copies when the rest of the thread stays', async () => {

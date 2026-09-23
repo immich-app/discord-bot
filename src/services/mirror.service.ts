@@ -1435,17 +1435,11 @@ export class MirrorService implements OnModuleDestroy {
     const vanished = await this.vanishedConversations(state, messageIds);
     await this.database.markMirrorMessagesDeleted(rows.map(({ discordMessageId }) => discordMessageId));
     for (const conversation of vanished) {
-      await this.database.removeMirrorConversation(conversation.id);
-      this.logger.warn(
-        `${pair.key}: Zulip removed every mirrored message of the topic of Discord thread ${conversation.discordThreadId}, as it does when the topic moves to a stream the bot cannot read; detached the thread and left its Discord copies alone (delete them there by hand if the topic was deleted)`,
-      );
+      await this.detach(state, conversation, 'Zulip removed every mirrored message of its topic');
     }
 
     const cutoff = Date.now() - Constants.Mirror.DeleteSyncMaxAgeDays * DAY;
-    const gone = new Set(vanished.map(({ id }) => id));
-    const copies = rows.filter(
-      ({ origin, conversationId }) => origin === 'zulip' && (conversationId === null || !gone.has(conversationId)),
-    );
+    const copies = rows.filter(({ origin }) => origin === 'zulip');
     const old = copies.filter(({ createdAt }) => createdAt.getTime() < cutoff);
     const young = copies.filter(({ createdAt }) => createdAt.getTime() >= cutoff);
     if (old.length > 0) {
@@ -1475,8 +1469,9 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   /**
-   * Zulip tells a bot about a topic that moves to a stream the bot cannot read only by deleting its messages, so a
-   * deletion that takes a thread's anchor and every other mirrored message of the thread may well be such a move.
+   * Threads whose anchor and every other mirrored message the deletion takes. Zulip reports a topic moved to a stream
+   * the bot cannot read with the same event as a real deletion, so the copies go either way, and the thread is let go
+   * rather than kept for a topic that may now live elsewhere.
    */
   private async vanishedConversations(state: PairState, messageIds: number[]) {
     const deleted = new Set(messageIds);
