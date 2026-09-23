@@ -339,10 +339,12 @@ describe('ZulipCommandService', () => {
     });
 
     it('should close an inline-code span the cut fell inside, within the limit', async () => {
-      await send(`@**Immich** ${'y'.repeat(50_000)}`);
+      chatServiceMock.handleFindSimilarIssuesOrDiscussions.mockResolvedValue(`\`${'y'.repeat(50_000)}\``);
+
+      await send('@**Immich** similar text="hello"');
 
       const [content] = replies().map(({ content }) => content);
-      expect(content).toMatch(/^Unknown command `y+\.\.\.`$/);
+      expect(content).toMatch(/^Similar to `hello`:\n`y+\.\.\.`$/);
       expect(content).toHaveLength(10_000);
     });
 
@@ -407,6 +409,14 @@ describe('ZulipCommandService', () => {
       expect(replies().map(({ content }) => content)).toEqual([
         'Unknown command `deploy`. Mention me with `help` for the list.',
         'Unknown command `@\u200B**all**`. Mention me with `help` for the list.',
+      ]);
+    });
+
+    it('should echo an unknown command shortened, as it echoes the text `similar` compared', async () => {
+      await send(`@**Immich** ${'y'.repeat(9000)}`);
+
+      expect(replies().map(({ content }) => content)).toEqual([
+        `Unknown command \`${'y'.repeat(77)}...\`. Mention me with \`help\` for the list.`,
       ]);
     });
 

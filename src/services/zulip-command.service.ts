@@ -10,7 +10,7 @@ import { ZulipService, isBotSender } from 'src/services/zulip.service';
 /** Zulip's default `max_message_length`, in code points: the server refuses a longer message. */
 const MAX_MESSAGE_LENGTH = 10_000;
 const SIMILAR_LOOKBACK = 10;
-const SIMILAR_ECHO_LENGTH = 80;
+const ECHO_LENGTH = 80;
 const ERROR_LENGTH = 300;
 
 /** Straight and curly double quotes: a phone keyboard curls the quotes around `text="two words"`. */
@@ -235,7 +235,7 @@ export class ZulipCommandService {
     }
     const command = this.commands[name];
     if (!command) {
-      return `Unknown command ${code(name)}. Mention me with ${code('help')} for the list.`;
+      return `Unknown command ${code(shorten(name, ECHO_LENGTH))}. Mention me with ${code('help')} for the list.`;
     }
     // With no autocomplete, an argument the command does not take must be answered, never dropped: a typo in `number=` would otherwise backfill every PR.
     const { args, options } = splitArguments(tokens, command.options);
@@ -381,7 +381,7 @@ export class ZulipCommandService {
       return `There is no message in this topic to compare; pass the text instead: ${code('similar text="…"')}.`;
     }
     const result = await this.chatService.handleFindSimilarIssuesOrDiscussions(subject.content, neutraliseZulipLabel);
-    const echo = code(shorten(subject.content.replaceAll(/\s+/g, ' ').trim(), SIMILAR_ECHO_LENGTH));
+    const echo = code(shorten(subject.content.replaceAll(/\s+/g, ' ').trim(), ECHO_LENGTH));
     return result ? `Similar to ${echo}:\n${neutraliseZulipMentions(result)}` : `Nothing similar to ${echo} was found.`;
   }
 
