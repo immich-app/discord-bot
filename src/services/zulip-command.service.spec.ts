@@ -30,7 +30,6 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
 
 const newZulipServiceMock = () => ({
   onMessage: vitest.fn<(handler: ZulipMessageHandler) => void>(),
-  isPrivateStream: vitest.fn<(streamId: number) => boolean>().mockReturnValue(true),
   ownUser: BOT as ZulipUser | undefined,
 });
 
@@ -270,12 +269,12 @@ describe('ZulipCommandService', () => {
   });
 
   describe('gating', () => {
-    it('should listen in the four team streams', () => {
-      expect(Constants.Zulip.Commands).toEqual([107, 109, 110, 112]);
+    it('should take commands in every immich team stream', () => {
+      expect(Constants.Zulip.Commands).toEqual([107, 108, 109, 110, 111, 112, 113]);
     });
 
     it('should ignore a command in a stream that is not allowlisted, without a reply', async () => {
-      await send('@**Immich** help', { streamId: Constants.Zulip.Streams.ImmichThirdParties });
+      await send('@**Immich** help', { streamId: Constants.Zulip.Streams.Immich });
       await send('@**Immich** help', { streamId: 999 });
 
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
@@ -284,32 +283,6 @@ describe('ZulipCommandService', () => {
     it('should ignore a direct message, without a reply', async () => {
       await send('@**Immich** help', { type: 'private', streamId: undefined });
 
-      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
-    });
-
-    it('should ignore a command in an allowlisted stream the server does not report as private, warn, and run nothing', async () => {
-      zulipServiceMock.isPrivateStream.mockImplementation((streamId) => streamId !== 107);
-
-      await send('@**Immich** emote-sync');
-      await send('@**Immich** backfill-pull-requests all', { id: 501 });
-      await send('@**Immich** help', { id: 502, streamId: 109 });
-
-      expect(zulipServiceMock.isPrivateStream).toHaveBeenCalledWith(107);
-      expect(chatServiceMock.syncEmotes).not.toHaveBeenCalled();
-      expect(githubServiceMock.getOpenPullRequests).not.toHaveBeenCalled();
-      expect(replies()).toEqual([{ stream: 109, topic: 'deploy', content: HELP }]);
-      expect(Logger.prototype.warn).toHaveBeenCalledTimes(2);
-      expect(Logger.prototype.warn).toHaveBeenCalledWith(
-        'Ignoring a command in Zulip stream 107 (ImmichGeneral): it is allowlisted, but the server does not report it as private, and membership of a private team stream is the only authorisation a command has',
-      );
-    });
-
-    it('should not warn about a stream that is not private for a message that is not a command', async () => {
-      zulipServiceMock.isPrivateStream.mockReturnValue(false);
-
-      await send('see #1234');
-
-      expect(Logger.prototype.warn).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 

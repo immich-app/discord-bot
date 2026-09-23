@@ -26,9 +26,7 @@ export type ZulipMessagesQuery = { stream: number; topic: string; numBefore: num
 
 export type ZulipEventQueue = { queueId: string; lastEventId: number };
 
-export type ZulipQueueStream = { streamId: number; isPrivate: boolean };
-
-export type ZulipQueueRegistration = { queue: ZulipEventQueue; streams: ZulipQueueStream[] };
+export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[] };
 
 export type ZulipReceivedMessage = {
   id: number;

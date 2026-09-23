@@ -429,7 +429,7 @@ describe('ZulipRepository', () => {
       await sut.init(config);
     });
 
-    it('should register a queue for message events only, as raw markdown, and return its ID, cursor and streams with their privacy', async () => {
+    it('should register a queue for message events only, as raw markdown, and return its ID, cursor and subscribed streams', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
@@ -446,10 +446,7 @@ describe('ZulipRepository', () => {
 
       await expect(sut.registerQueue()).resolves.toEqual({
         queue: { queueId: 'q1', lastEventId: -1 },
-        streams: [
-          { streamId: 107, isPrivate: true },
-          { streamId: 54, isPrivate: false },
-        ],
+        subscribedStreamIds: [107, 54],
       });
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -465,21 +462,10 @@ describe('ZulipRepository', () => {
     it('should carry no streams when the answer lists no subscriptions', async () => {
       fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: 'q1', last_event_id: 3 }));
 
-      await expect(sut.registerQueue()).resolves.toEqual({ queue: { queueId: 'q1', lastEventId: 3 }, streams: [] });
-    });
-
-    it('should not take a stream to be private when the answer does not say so', async () => {
-      fetchMock.mockResolvedValue(
-        json({
-          result: 'success',
-          msg: '',
-          queue_id: 'q1',
-          last_event_id: -1,
-          subscriptions: [{ stream_id: 107, name: 'immich-general' }],
-        }),
-      );
-
-      await expect(sut.registerQueue()).resolves.toMatchObject({ streams: [{ streamId: 107, isPrivate: false }] });
+      await expect(sut.registerQueue()).resolves.toEqual({
+        queue: { queueId: 'q1', lastEventId: 3 },
+        subscribedStreamIds: [],
+      });
     });
 
     it('should not ask for every public stream of the realm', async () => {

@@ -142,12 +142,14 @@ const zulipStreams = {
   ImmichAlerts: 113,
 };
 
-/** Private team streams only: the GitHub expander runs privileged here and shows private repository code. */
 const zulipTeamStreams = {
   ImmichGeneral: 107,
+  ImmichOffTopic: 108,
   ImmichMobile: 109,
   ImmichFocusTopic: 110,
+  ImmichThirdParties: zulipStreams.ImmichThirdParties,
   ImmichPullRequests: zulipStreams.ImmichPullRequests,
+  ImmichAlerts: zulipStreams.ImmichAlerts,
 };
 
 /**
@@ -250,10 +252,10 @@ export const Constants = {
       zulipStreams.ImmichAlerts,
     ],
     Expanders: {
-      GithubReferences: Object.values(zulipTeamStreams),
-      TwitterMirror: Object.values(zulipTeamStreams),
+      GithubReferences: [zulipStreams.Immich, ...Object.values(zulipTeamStreams)],
+      TwitterMirror: [zulipStreams.Immich, ...Object.values(zulipTeamStreams)],
     },
-    /** Membership of these private streams is the only authorisation for commands: Zulip has no per-channel bot permissions. */
+    /** Zulip has no per-channel bot permissions, so this list is the only authorisation for commands. */
     Commands: Object.values(zulipTeamStreams),
     TeamStreams: zulipTeamStreams,
   },
