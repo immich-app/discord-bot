@@ -9,6 +9,8 @@ export type DiscordSourceMessage = {
   channelId: string;
   threadId: string | null;
   threadName: string | null;
+  /** The names of the tags applied to the forum post the message is in. */
+  threadTags?: string[];
   createdTimestamp: number;
   jumpUrl: string;
   author: { id: string; username: string; displayName: string };
@@ -109,6 +111,7 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   startMirrorThread(channelId: string, messageId: string, name: string): Promise<string>;
   renameMirrorThread(threadId: string, name: string): Promise<void>;
   unarchiveMirrorThread(threadId: string): Promise<void>;
+  archiveMirrorThread(threadId: string): Promise<void>;
   getTeamMember(guildId: string, userId: string): Promise<DiscordTeamMember | undefined>;
   /**
    * As the bot and pinging nobody: a message in a text channel, a post named `title` in a forum, whose ID is then

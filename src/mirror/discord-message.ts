@@ -1,4 +1,12 @@
-import { Channel, ChannelType, GuildTextBasedChannel, Message, MessageFlags, MessageType } from 'discord.js';
+import {
+  AnyThreadChannel,
+  Channel,
+  ChannelType,
+  GuildTextBasedChannel,
+  Message,
+  MessageFlags,
+  MessageType,
+} from 'discord.js';
 import { Constants } from 'src/constants';
 import { DiscordSourceMessage } from 'src/interfaces/discord-mirror.interface';
 
@@ -19,6 +27,15 @@ export const mirrorLocation = (
   channel.isThread()
     ? { channelId: channel.parentId ?? channel.id, threadId: channel.id, threadName: channel.name }
     : { channelId: channel.id, threadId: null, threadName: null };
+
+/** `undefined` outside a forum post. */
+export const forumTagNames = (thread: AnyThreadChannel) => {
+  const { parent } = thread;
+  if (parent?.type !== ChannelType.GuildForum) {
+    return undefined;
+  }
+  return thread.appliedTags.flatMap((id) => parent.availableTags.find((tag) => tag.id === id)?.name ?? []);
+};
 
 const displayNameOf = (message: Message) => message.member?.displayName ?? message.author.displayName;
 
@@ -48,10 +65,12 @@ export const toDiscordSourceMessage = (message: Message<true>): DiscordSourceMes
     }
   }
 
+  const threadTags = message.channel.isThread() ? forumTagNames(message.channel) : undefined;
   return {
     id: message.id,
     guildId: message.guildId,
     ...mirrorLocation(message.channel),
+    ...(threadTags ? { threadTags } : {}),
     createdTimestamp: message.createdTimestamp,
     jumpUrl: message.url,
     author: { id: message.author.id, username: message.author.username, displayName: displayNameOf(message) },

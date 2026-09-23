@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChannelType, Message, PartialMessage, TextBasedChannel } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import { Constants } from 'src/constants';
-import { isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
+import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { MirrorService } from 'src/services/mirror.service';
 
 const parentOf = (channel: TextBasedChannel | null) =>
@@ -66,16 +66,19 @@ export class DiscordMirrorEvents {
     this.reactionsChanged(reaction.message);
   }
 
+  /** Archiving is left alone: Discord archives a thread on its own once it goes quiet. */
   @On({ event: 'threadUpdate', priority: 0 })
   onThreadUpdate([oldThread, newThread]: ArgsOf<'threadUpdate'>) {
     const { parentId } = newThread;
-    if (
-      oldThread.name !== newThread.name &&
-      newThread.type !== ChannelType.PrivateThread &&
-      parentId &&
-      this.mirror.handlesChannel(parentId)
-    ) {
+    if (newThread.type === ChannelType.PrivateThread || !parentId || !this.mirror.handlesChannel(parentId)) {
+      return;
+    }
+    if (oldThread.name !== newThread.name) {
       this.mirror.onDiscordThreadRenamed({ channelId: parentId, threadId: newThread.id, name: newThread.name });
+    }
+    const tags = forumTagNames(newThread);
+    if (tags && oldThread.appliedTags.join() !== newThread.appliedTags.join()) {
+      this.mirror.onDiscordThreadTagsChanged({ channelId: parentId, threadId: newThread.id, tags });
     }
   }
 

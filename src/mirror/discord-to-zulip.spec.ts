@@ -7,10 +7,12 @@ import {
   toZulipAttachmentLines,
   toZulipMirrorBody,
   toZulipReplySnippet,
+  withZulipTags,
   zulipAuthorHeader,
   ZulipHeaderContext,
   zulipMirrorContent,
   zulipMirrorLead,
+  zulipTagsNotice,
   zulipThreadContext,
 } from 'src/mirror/discord-to-zulip';
 import { describe, expect, it } from 'vitest';
@@ -160,6 +162,22 @@ describe('zulipAuthorHeader', () => {
       const content = zulipMirrorContent(zulipMirrorLead('**contrib123**', snippet), 'mine', '');
       expect(content).toBe(`**contrib123**:\n~~~ quote\n${'x'.repeat(185)} \`a @${ZWSP}**all**...\n~~~\nmine`);
     });
+  });
+});
+
+describe('forum tags', () => {
+  it('should put the tags on the first line of the lead, replacing the ones there, or take them out', () => {
+    const tagged = withZulipTags('**contrib123**', ['bug', 'a*b']);
+
+    expect(tagged).toBe('**Tags:** bug, a&#42;b\n**contrib123**');
+    expect(withZulipTags(tagged, ['mobile'])).toBe('**Tags:** mobile\n**contrib123**');
+    expect(withZulipTags(tagged, [])).toBe('**contrib123**');
+    expect(zulipMirrorContent(tagged, 'the post', '')).toBe('**Tags:** bug, a&#42;b\n**contrib123**: the post');
+  });
+
+  it('should say what the tags are now', () => {
+    expect(zulipTagsNotice(['bug', '@mobile'])).toBe('Tags changed: bug, &#64;mobile');
+    expect(zulipTagsNotice([])).toBe('Tags changed: none');
   });
 });
 

@@ -3,11 +3,12 @@ import { AnyThreadChannel, ChannelType, Collection, Message, TextBasedChannel } 
 import { MetadataStorage } from 'discordx';
 import { Constants } from 'src/constants';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
-import { isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
+import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { MirrorService } from 'src/services/mirror.service';
 import { afterEach, beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
 
 vitest.mock('src/mirror/discord-message', () => ({
+  forumTagNames: vitest.fn(),
   isMirrorCandidate: vitest.fn(),
   mirrorLocation: vitest.fn(),
   toDiscordSourceMessage: vitest.fn(),
@@ -24,6 +25,7 @@ const thread = (overrides: Record<string, unknown> = {}) =>
     name: 'Crash',
     parentId: PARENT,
     type: ChannelType.PublicThread,
+    appliedTags: [],
     ...overrides,
   }) as unknown as AnyThreadChannel;
 
@@ -38,6 +40,7 @@ describe(DiscordMirrorEvents.name, () => {
       | 'onDiscordMessagesDeleted'
       | 'onDiscordThreadRenamed'
       | 'onDiscordThreadDeleted'
+      | 'onDiscordThreadTagsChanged'
       | 'onDiscordReactionsChanged'
       | 'onDiscordReady'
       | 'onDiscordDisconnected'
@@ -54,12 +57,14 @@ describe(DiscordMirrorEvents.name, () => {
       onDiscordMessagesDeleted: vitest.fn(),
       onDiscordThreadRenamed: vitest.fn(),
       onDiscordThreadDeleted: vitest.fn(),
+      onDiscordThreadTagsChanged: vitest.fn(),
       onDiscordReactionsChanged: vitest.fn(),
       onDiscordReady: vitest.fn().mockResolvedValue(undefined),
       onDiscordDisconnected: vitest.fn(),
       onDiscordResumed: vitest.fn(),
     };
     vitest.mocked(isMirrorCandidate).mockReturnValue(true);
+    vitest.mocked(forumTagNames).mockReturnValue(undefined);
     vitest.mocked(mirrorLocation).mockReturnValue({ channelId: PARENT, threadId: THREAD, threadName: 'Crash' });
     vitest.mocked(toDiscordSourceMessage).mockReturnValue(dto as ReturnType<typeof toDiscordSourceMessage>);
     sut = new DiscordMirrorEvents(mirror as unknown as MirrorService);
@@ -194,6 +199,27 @@ describe(DiscordMirrorEvents.name, () => {
   ])('should ignore an update of a thread that %s', (_, overrides) => {
     sut.onThreadUpdate([thread(), thread(overrides)]);
 
+    expect(mirror.onDiscordThreadRenamed).not.toHaveBeenCalled();
+  });
+
+  it('should pass a change of the tags of a forum post on, by name', () => {
+    vitest.mocked(forumTagNames).mockReturnValue(['bug', 'mobile']);
+
+    sut.onThreadUpdate([thread({ appliedTags: ['1'] }), thread({ appliedTags: ['1', '2'] })]);
+    sut.onThreadUpdate([thread({ appliedTags: ['1'] }), thread({ appliedTags: ['1'] })]);
+
+    expect(mirror.onDiscordThreadTagsChanged).toHaveBeenCalledExactlyOnceWith({
+      channelId: PARENT,
+      threadId: THREAD,
+      tags: ['bug', 'mobile'],
+    });
+    expect(mirror.onDiscordThreadRenamed).not.toHaveBeenCalled();
+  });
+
+  it('should leave the tags of a thread outside a forum, and any archiving, alone', () => {
+    sut.onThreadUpdate([thread({ appliedTags: ['1'] }), thread({ appliedTags: ['2'], archived: true })]);
+
+    expect(mirror.onDiscordThreadTagsChanged).not.toHaveBeenCalled();
     expect(mirror.onDiscordThreadRenamed).not.toHaveBeenCalled();
   });
 

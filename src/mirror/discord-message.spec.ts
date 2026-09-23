@@ -8,7 +8,7 @@ import {
   MessageType,
 } from 'discord.js';
 import { Constants } from 'src/constants';
-import { isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
+import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { describe, expect, it } from 'vitest';
 
 const guildId = Constants.Discord.Servers[0];
@@ -126,6 +126,23 @@ describe('toDiscordSourceMessage', () => {
       threadId,
       threadName: 'Crash on upload',
     });
+  });
+
+  it('should name the tags of the forum post a message is in', () => {
+    const forum = {
+      type: ChannelType.GuildForum,
+      availableTags: [
+        { id: '1', name: 'bug' },
+        { id: '2', name: 'mobile' },
+        { id: '3', name: 'server' },
+      ],
+    };
+    const post = { ...threadChannel(), parent: forum, appliedTags: ['2', '1', '9'] };
+
+    expect(toDiscordSourceMessage(makeMessage({ channel: post })).threadTags).toEqual(['mobile', 'bug']);
+    expect(forumTagNames(post as never)).toEqual(['mobile', 'bug']);
+    expect(forumTagNames({ ...post, parent: { type: ChannelType.GuildText } } as never)).toBeUndefined();
+    expect(toDiscordSourceMessage(makeMessage({ channel: threadChannel() }))).not.toHaveProperty('threadTags');
   });
 
   it('should fall back to the user display name without a member', () => {

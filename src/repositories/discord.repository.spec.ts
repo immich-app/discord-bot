@@ -704,6 +704,14 @@ describe(DiscordRepository.name, () => {
       expect(thread.setArchived).toHaveBeenCalledWith(false);
     });
 
+    it('should archive the thread, locked or not', async () => {
+      await sut.archiveMirrorThread(threadId);
+      expect(thread.setArchived).toHaveBeenCalledWith(true);
+
+      bot.channels.fetch.mockResolvedValue(channel);
+      await expect(sut.archiveMirrorThread(threadId)).rejects.toMatchObject({ kind: 'unknown-channel' });
+    });
+
     it('should leave a locked thread archived', async () => {
       bot.channels.fetch.mockResolvedValue(makeThread({ locked: true }));
 

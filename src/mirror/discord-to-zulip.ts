@@ -336,6 +336,17 @@ export const zulipThreadContext = (
   return snippet.trim() ? `${line}:\n${toZulipQuote(snippet)}\n` : `${line}\n`;
 };
 
+const TAGS_LINE = /^\*\*Tags:\*\* [^\n]*\n/;
+
+/** The first line of the lead of a forum post's first message, which a change of tags rewrites. */
+export const withZulipTags = (lead: string, tags: string[]) => {
+  const line = tags.length > 0 ? `**Tags:** ${tags.map(escapeZulipInline).join(', ')}\n` : '';
+  return line + lead.replace(TAGS_LINE, '');
+};
+
+export const zulipTagsNotice = (tags: string[]) =>
+  `Tags changed: ${tags.length > 0 ? tags.map(escapeZulipInline).join(', ') : 'none'}`;
+
 export const zulipMirrorLead = (header: string, replySnippet: string | null) =>
   replySnippet ? `${header}:\n${toZulipQuote(replySnippet)}\n` : header;
 

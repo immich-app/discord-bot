@@ -305,6 +305,7 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     startMirrorThread: vitest.fn(async (_channelId: string, messageId: string) => messageId),
     renameMirrorThread: vitest.fn().mockResolvedValue(undefined),
     unarchiveMirrorThread: vitest.fn().mockResolvedValue(undefined),
+    archiveMirrorThread: vitest.fn().mockResolvedValue(undefined),
     getTeamMember: vitest.fn().mockResolvedValue(TEAM_MEMBER),
     fetchMirrorMessagesBefore: vitest.fn().mockResolvedValue({ messages: [], oldestId: null, full: false }),
     fetchMirrorMessage: vitest.fn().mockResolvedValue(undefined),
@@ -1977,6 +1978,83 @@ describe(MirrorService.name, () => {
       });
     });
 
+    describe('forum tags', () => {
+      const POST = '300000000000000007';
+      const starter = (threadTags: string[], content = 'the post') =>
+        discordMessage({ id: POST, channelId: FORUM, threadId: POST, threadName: 'Feature idea', threadTags, content });
+      const tagsChanged = async (tags: string[]) => {
+        sut.onDiscordThreadTagsChanged({ channelId: FORUM, threadId: POST, tags });
+        await sut.whenIdle();
+      };
+
+      it('should show the tags of a new post in the first message of its topic', async () => {
+        await fromDiscord(starter(['bug', 'mobile']));
+        await fromDiscord(
+          discordMessage({
+            id: '300000000000000008',
+            channelId: FORUM,
+            threadId: POST,
+            threadName: 'Feature idea',
+            threadTags: ['bug'],
+          }),
+        );
+
+        expect(sentMessages().map(({ content }) => content)).toEqual([
+          '**Tags:** bug, mobile\n**Contrib** (&#64;contrib123): the post',
+          '**Contrib** (&#64;contrib123): hello',
+        ]);
+      });
+
+      it('should edit the tags of the first message when they change, keeping the post as it is now', async () => {
+        await fromDiscord(starter(['bug']));
+        discord.fetchMirrorMessage.mockResolvedValue(starter(['bug', 'mobile'], 'the post, edited'));
+        zulip.getMessage.mockResolvedValue({ id: 5001, topic: 'Feature idea', streamId: FORUM_STREAM });
+
+        await tagsChanged(['bug', 'mobile']);
+
+        expect(discord.fetchMirrorMessage).toHaveBeenCalledExactlyOnceWith(POST, POST);
+        expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(5001, {
+          content: '**Tags:** bug, mobile\n**Contrib** (&#64;contrib123): the post, edited',
+        });
+        expect(db.messages[0].zulipHeader).toBe('**Tags:** bug, mobile\n**Contrib** (&#64;contrib123)');
+        expect(zulip.sendMessage).toHaveBeenCalledOnce();
+
+        await tagsChanged(['bug', 'mobile']);
+        expect(zulip.updateMessage).toHaveBeenCalledOnce();
+      });
+
+      it('should post the tags when Zulip refuses the edit, or a Zulip user started the topic', async () => {
+        await fromDiscord(starter([]));
+        discord.fetchMirrorMessage.mockResolvedValue(starter(['bug']));
+        zulip.getMessage.mockResolvedValue({ id: 5001, topic: 'Feature idea', streamId: FORUM_STREAM });
+        zulip.updateMessage.mockRejectedValueOnce(
+          new ZulipApiError(400, 'BAD_REQUEST', 'The time limit for editing this message has passed', 'PATCH'),
+        );
+
+        await tagsChanged(['bug']);
+
+        expect(sentMessages().at(-1)).toEqual({
+          stream: FORUM_STREAM,
+          topic: 'Feature idea',
+          content: 'Tags changed: bug',
+        });
+        expect(db.messages[0].zulipHeader).toBe('**Contrib** (&#64;contrib123)');
+      });
+
+      it('should post the tags in a topic started on Zulip, and nothing for a post that is not mirrored', async () => {
+        await fromZulip(zulipMessage({ streamId: FORUM_STREAM, topic: 'From Zulip' }));
+        const postId = db.conversations[0].discordThreadId!;
+        zulip.getMessage.mockResolvedValue({ id: 1001, topic: 'From Zulip', streamId: FORUM_STREAM });
+
+        sut.onDiscordThreadTagsChanged({ channelId: FORUM, threadId: postId, tags: [] });
+        sut.onDiscordThreadTagsChanged({ channelId: FORUM, threadId: '300000000000000099', tags: ['bug'] });
+        await sut.whenIdle();
+
+        expect(sentMessages()).toEqual([{ stream: FORUM_STREAM, topic: 'From Zulip', content: 'Tags changed: none' }]);
+        expect(discord.fetchMirrorMessage).not.toHaveBeenCalled();
+      });
+    });
+
     it('should post a forum starter once, as the first message of its topic', async () => {
       const post = '300000000000000007';
       await fromDiscord(discordMessage({ id: post, channelId: FORUM, threadId: post, threadName: 'Feature idea' }));
@@ -3156,6 +3234,41 @@ describe(MirrorService.name, () => {
       sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'Crash on start' });
       await sut.whenIdle();
       expect(zulip.updateMessage).not.toHaveBeenCalled();
+    });
+
+    it('should archive the thread of a resolved topic after renaming it, and take it out when the topic is unresolved', async () => {
+      await updateFromZulip({ messageId: 1001, topic: '✔ Crash', propagateMode: 'change_all' });
+
+      expect(discord.renameMirrorThread).toHaveBeenCalledExactlyOnceWith(threadId, '✔ Crash');
+      expect(discord.archiveMirrorThread).toHaveBeenCalledExactlyOnceWith(threadId);
+      expect(discord.renameMirrorThread.mock.invocationCallOrder[0]).toBeLessThan(
+        discord.archiveMirrorThread.mock.invocationCallOrder[0],
+      );
+
+      await updateFromZulip({ messageId: 1001, topic: 'Crash', propagateMode: 'change_all' });
+      expect(discord.unarchiveMirrorThread).toHaveBeenCalledExactlyOnceWith(threadId);
+      expect(discord.renameMirrorThread).toHaveBeenLastCalledWith(threadId, 'Crash');
+
+      await updateFromZulip({ messageId: 1001, topic: 'Crash on start', propagateMode: 'change_all' });
+      expect(discord.archiveMirrorThread).toHaveBeenCalledOnce();
+      expect(discord.unarchiveMirrorThread).toHaveBeenCalledOnce();
+    });
+
+    it('should say so when the thread cannot be archived, and archive it once Discord is back', async () => {
+      discord.archiveMirrorThread.mockRejectedValueOnce(new DiscordMirrorError('forbidden', 50_013));
+      await updateFromZulip({ messageId: 1001, topic: '✔ Crash', propagateMode: 'change_all' });
+
+      expect(warn()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: could not archive Discord thread ${threadId} after its Zulip topic was resolved: forbidden (50013)`,
+      );
+
+      discord.isReady.mockReturnValue(false);
+      await updateFromZulip({ messageId: 1001, topic: 'Crash', propagateMode: 'change_all' });
+      expect(discord.unarchiveMirrorThread).not.toHaveBeenCalled();
+      discord.isReady.mockReturnValue(true);
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      expect(discord.unarchiveMirrorThread).toHaveBeenCalledExactlyOnceWith(threadId);
     });
 
     it('should skip the echo of a rename the mirror made before the next one it made', async () => {

@@ -32,12 +32,14 @@ import {
   toZulipAttachmentLines,
   toZulipMirrorBody,
   toZulipReplySnippet,
+  withZulipTags,
   ZulipAttachmentResult,
   zulipAuthorHeader,
   ZulipChannel,
   zulipMirrorContent,
   zulipMirrorLead,
   ZulipReplyTarget,
+  zulipTagsNotice,
   zulipThreadContext,
 } from 'src/mirror/discord-to-zulip';
 import { downloadDiscordAttachment } from 'src/mirror/download';
@@ -500,6 +502,11 @@ export class MirrorService implements OnModuleDestroy {
   onDiscordThreadRenamed(thread: { channelId: string; threadId: string; name: string }) {
     const state = this.byChannel(thread.channelId);
     state?.queue.push(`rename of Discord thread ${thread.threadId}`, () => this.renameFromDiscord(state, thread));
+  }
+
+  onDiscordThreadTagsChanged(thread: { channelId: string; threadId: string; tags: string[] }) {
+    const state = this.byChannel(thread.channelId);
+    state?.queue.push(`tags of Discord thread ${thread.threadId}`, () => this.tagsFromDiscord(state, thread));
   }
 
   onDiscordThreadDeleted(thread: { channelId: string; threadId: string }) {
@@ -2185,6 +2192,9 @@ export class MirrorService implements OnModuleDestroy {
       if (name !== toDiscordThreadName(previous)) {
         await this.renameThread(state, conversation, name);
       }
+      if (isResolvedTopic(update.topic) !== isResolvedTopic(previous)) {
+        await this.archiveThread(state, { ...conversation, zulipTopic: update.topic });
+      }
     }
   }
 
@@ -2212,6 +2222,113 @@ export class MirrorService implements OnModuleDestroy {
         );
       }
     }
+  }
+
+  /** Resolving a topic archives its thread, and unresolving it takes the thread out of the archive. */
+  private async archiveThread(state: PairState, conversation: MirrorConversation) {
+    const threadId = conversation.discordThreadId!;
+    const archive = isResolvedTopic(conversation.zulipTopic);
+    const later = async () => {
+      const current = await this.database.getMirrorConversation(conversation.id);
+      if (current) {
+        await this.archiveThread(state, current);
+      }
+    };
+    if (
+      this.holdFor(state, 'Discord', `${archive ? 'archiving' : 'unarchiving'} of Discord thread ${threadId}`, later)
+    ) {
+      return;
+    }
+    try {
+      await (archive
+        ? this.discordMirror.archiveMirrorThread(threadId)
+        : this.discordMirror.unarchiveMirrorThread(threadId));
+    } catch (error) {
+      if (isMirrorError(error, 'unknown-channel')) {
+        await this.detach(state, conversation, 'the Discord thread no longer exists');
+      } else {
+        this.logger.warn(
+          `${state.pair.key}: could not ${archive ? 'archive' : 'unarchive'} Discord thread ${threadId} after its Zulip topic was ${archive ? 'resolved' : 'unresolved'}: ${describe(error)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * The tags of a forum post are the first line of the first message of its topic when the bot posted that message,
+   * and a notice in the topic when a Zulip user did, or when the message can no longer be edited.
+   */
+  private async tagsFromDiscord(state: PairState, thread: { threadId: string; tags: string[] }) {
+    const { pair } = state;
+    const { threadId, tags } = thread;
+    if (this.holdFor(state, 'Zulip', `tags of Discord thread ${threadId}`, () => this.tagsFromDiscord(state, thread))) {
+      return;
+    }
+    const found = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
+    const conversation = found && (await this.verifyConversation(state, found));
+    if (!conversation) {
+      return;
+    }
+    const [row] = (await this.database.getMirrorMessagesByDiscordIds([threadId])).filter(
+      ({ origin }) => origin === 'discord',
+    );
+    if (row && (await this.editTags(state, row, tags))) {
+      return;
+    }
+    try {
+      await this.zulip.sendMessage({
+        stream: pair.zulipStreamId,
+        topic: conversation.zulipTopic,
+        content: zulipTagsNotice(tags),
+      });
+    } catch (error) {
+      this.fail(
+        `${pair.key}: could not post the tags of Discord thread ${threadId} in Zulip stream ${pair.zulipStreamId}`,
+        error,
+      );
+    }
+  }
+
+  /** Resolves to whether the first message now shows the tags. */
+  private async editTags(state: PairState, row: MirrorMessage, tags: string[]) {
+    const { pair } = state;
+    const lead = withZulipTags(row.zulipHeader ?? '', tags);
+    if (lead === row.zulipHeader) {
+      return true;
+    }
+    let dto: DiscordSourceMessage | undefined;
+    try {
+      dto = await this.discordMirror.fetchMirrorMessage(
+        row.discordThreadId ?? row.discordChannelId,
+        row.discordMessageId,
+      );
+    } catch (error) {
+      this.fail(`${pair.key}: could not read Discord message ${row.discordMessageId} to show its thread's tags`, error);
+      return false;
+    }
+    if (!dto) {
+      return false;
+    }
+    const content = zulipMirrorContent(
+      lead,
+      toZulipMirrorBody(dto, await this.renderContext(dto)),
+      row.zulipAttachments ?? '',
+    );
+    try {
+      await this.retryZulip(() => this.zulip.updateMessage(row.zulipMessageId, { content }));
+    } catch (error) {
+      if (!isNothingToChange(error)) {
+        this.logger.log(
+          `${pair.key}: could not edit the tags into Zulip message ${row.zulipMessageId}, so they are posted instead: ${describe(error)}`,
+        );
+        return false;
+      }
+    }
+    await this.database.updateMirrorMessages([row.discordMessageId], {
+      zulipHeader: lead,
+      sourceHash: discordSourceHash(dto),
+    });
+    return true;
   }
 
   /** Moved messages whose conversation stays behind no longer belong to it, so they can never become its anchor. */
@@ -2374,8 +2491,11 @@ export class MirrorService implements OnModuleDestroy {
       const late = Date.now() - dto.createdTimestamp > LATE_MS;
       const header = zulipAuthorHeader(dto, { ...ctx, reply, late });
       const context = conversation || pair.kind !== 'text' ? '' : await this.threadContext(state, dto.threadId!, ctx);
-      const lead =
-        context + zulipMirrorLead(header, dto.replyTo?.content ? toZulipReplySnippet(dto.replyTo.content, ctx) : null);
+      const tags = !conversation && pair.kind === 'forum' && dto.id === dto.threadId ? (dto.threadTags ?? []) : [];
+      const lead = withZulipTags(
+        context + zulipMirrorLead(header, dto.replyTo?.content ? toZulipReplySnippet(dto.replyTo.content, ctx) : null),
+        tags,
+      );
       const attachments = toZulipAttachmentLines(await this.uploadAttachments(state, dto), dto.jumpUrl);
       if (body.trim() === '' && attachments === '') {
         return;

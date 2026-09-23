@@ -490,6 +490,15 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
+  async archiveMirrorThread(threadId: string) {
+    try {
+      const thread = await this.fetchThread(threadId);
+      await thread.setArchived(true);
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
   async getTeamMember(guildId: string, userId: string): Promise<DiscordTeamMember | undefined> {
     const guild = bot.guilds.cache.get(guildId);
     if (!guild) {
