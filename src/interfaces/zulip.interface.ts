@@ -14,6 +14,9 @@ export type ZulipMessageUpdate = {
   content?: string;
   topic?: string;
   propagateMode?: 'change_one' | 'change_later' | 'change_all';
+  /** Left to the server's default when undefined. */
+  sendNotificationToOldThread?: boolean;
+  sendNotificationToNewThread?: boolean;
 };
 
 export type ZulipEmoji = { name: string; deactivated: boolean };
@@ -90,6 +93,14 @@ export type ZulipEvent =
   | ZulipDeleteEvent
   | { id: number; type: string; message?: undefined; update?: undefined; deletion?: undefined };
 
+/** A download the repository will not make, or whose answer it will not use. */
+export class ZulipUploadRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZulipUploadRefused';
+  }
+}
+
 export interface IZulipInterface {
   init(config: ZulipConfig): Promise<void>;
   isInitialised(): boolean;
@@ -105,6 +116,15 @@ export interface IZulipInterface {
   registerQueue(): Promise<ZulipQueueRegistration>;
   getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;
   deleteQueue(queueId: string): Promise<void>;
+  deleteMessage(id: number): Promise<void>;
+  uploadFile(file: File): Promise<{ url: string; filename: string }>;
+  /**
+   * Resolves to `undefined` when the file is larger than `maxBytes`; rejects with `ZulipUploadRefused` for anything
+   * but a plain `/user_uploads/` path, and for an answer that is not the file.
+   */
+  downloadUpload(path: string, maxBytes: number): Promise<File | undefined>;
+  /** Up to `numAfter` messages of the stream after `anchor`, oldest first, as raw markdown. */
+  getStreamMessagesAfter(stream: number, anchor: number, numAfter: number): Promise<ZulipReceivedMessage[]>;
   /** Emoji name to its Unicode string, from the realm's static emoji table. */
   getEmojiCodes(): Promise<Record<string, string>>;
 }

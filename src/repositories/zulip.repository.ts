@@ -12,12 +12,15 @@ import {
   ZulipQueueRegistration,
   ZulipReceivedMessage,
   ZulipSubscription,
+  ZulipUploadRefused,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
 import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
 const EMOJI_CODES_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
 /** Zulip's default long-poll timeout: a quiet poll gets its heartbeat about this late, so the client adds a margin. */
 const DEFAULT_LONGPOLL_TIMEOUT_SECONDS = 90;
 const LONGPOLL_MARGIN_MS = 30_000;
@@ -32,7 +35,64 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 /** Typed as empty by the generated types, but the server requires `notification_settings_null`, false by default. */
 const CLIENT_CAPABILITIES: unknown = { notification_settings_null: false, bulk_message_deletion: true };
 
-type Clients = { bot: ZulipClient; user: ZulipClient; events: ZulipClient };
+type Clients = { bot: ZulipClient; user: ZulipClient; uploads: ZulipClient; events: ZulipClient };
+
+const UPLOAD_PATH = /^\/user_uploads\/\d+\/[\w-]+\/[\w-]+\/([^/?#\\]+)$/;
+
+/**
+ * The bot's credentials go with the request, so a path that URL normalisation or the server could steer to another
+ * route (`..`, encoded slashes and dots) is refused before anything is fetched.
+ */
+const toUploadUrl = (path: string, origin: string) => {
+  const refuse = () => new ZulipUploadRefused('Not a Zulip upload path');
+  const segment = UPLOAD_PATH.exec(path)?.[1];
+  if (!segment || segment === '.' || segment === '..' || /%(2f|5c|2e)/i.test(path)) {
+    throw refuse();
+  }
+  const url = new URL(path, origin);
+  if (url.origin !== origin || url.pathname !== path) {
+    throw refuse();
+  }
+  try {
+    return { url, name: decodeURIComponent(segment) };
+  } catch {
+    throw refuse();
+  }
+};
+
+/** The body, or `undefined` as soon as it runs past `maxBytes`. */
+const readAtMost = async (body: ReadableStream<Uint8Array> | null, maxBytes: number) => {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (body) {
+    const reader = body.getReader();
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      size += chunk.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(chunk.value);
+    }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+};
+
+const toEmoji = (codepoints: unknown) => {
+  if (typeof codepoints !== 'string' || !/^[\da-f]{1,6}(-[\da-f]{1,6})*$/i.test(codepoints)) {
+    return undefined;
+  }
+  const points = codepoints.split('-').map((hex) => Number.parseInt(hex, 16));
+  return points.every((point) => point <= 0x10_ffff) ? String.fromCodePoint(...points) : undefined;
+};
+
+const notInitialised = () => new Error('Zulip client not initialised: call init() first');
 
 const toEmoji = (codepoints: unknown) => {
   if (typeof codepoints !== 'string' || !/^[\da-f]{1,6}(-[\da-f]{1,6})*$/i.test(codepoints)) {
@@ -53,6 +113,7 @@ export class ZulipRepository implements IZulipInterface {
     this.clients = {
       bot: createZulipClient(this.botIdentity),
       user: createZulipClient({ realm, ...user }),
+      uploads: createZulipClient({ ...this.botIdentity, timeoutMs: UPLOAD_TIMEOUT_MS }),
       events: createZulipClient({
         ...this.botIdentity,
         timeoutMs: longpollTimeoutMs(DEFAULT_LONGPOLL_TIMEOUT_SECONDS),
@@ -78,6 +139,11 @@ export class ZulipRepository implements IZulipInterface {
     return this.client('events');
   }
 
+  /** The bot uploads files with a longer timeout than the API calls. */
+  private get uploads() {
+    return this.client('uploads');
+  }
+
   private client(identity: keyof Clients) {
     if (!this.clients) {
       throw notInitialised();
@@ -85,6 +151,7 @@ export class ZulipRepository implements IZulipInterface {
     return this.clients[identity];
   }
 
+  /** For the requests outside the API: the realm's origin and the bot's `Authorization` header. */
   private get site() {
     if (!this.botIdentity) {
       throw notInitialised();
@@ -109,14 +176,90 @@ export class ZulipRepository implements IZulipInterface {
     return { id: data!.message!.id ?? id, topic: data!.message!.subject ?? '' };
   }
 
-  async updateMessage(id: number, { content, topic, propagateMode }: ZulipMessageUpdate) {
+  async updateMessage(
+    id: number,
+    { content, topic, propagateMode, sendNotificationToOldThread, sendNotificationToNewThread }: ZulipMessageUpdate,
+  ) {
     await this.bot.PATCH('/messages/{message_id}', {
       params: { path: { message_id: id } },
-      body: { content, topic, propagate_mode: propagateMode },
+      body: {
+        content,
+        topic,
+        propagate_mode: propagateMode,
+        send_notification_to_old_thread: sendNotificationToOldThread,
+        send_notification_to_new_thread: sendNotificationToNewThread,
+      },
     });
   }
 
-  /** An undocumented static file, served without authentication. */
+  async deleteMessage(id: number) {
+    await this.bot.DELETE('/messages/{message_id}', { params: { path: { message_id: id } } });
+  }
+
+  async uploadFile(file: File) {
+    const { data } = await this.uploads.POST('/user_uploads', multipart({ filename: file }));
+    if (!data?.url) {
+      throw new Error('Zulip returned no URL for the upload');
+    }
+    return { url: data.url, filename: data.filename ?? file.name };
+  }
+
+  /**
+   * An anonymous or unauthenticated request is redirected to the login page on the realm itself, or answered with it,
+   * so only a redirect to another HTTPS origin (the S3 backend) is followed, once and without credentials.
+   */
+  async downloadUpload(path: string, maxBytes: number) {
+    const { origin, authorization } = this.site;
+    const { url, name } = toUploadUrl(path, origin);
+    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+
+    let response = await fetch(url, { headers: { Authorization: authorization }, redirect: 'manual', signal });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      const location = response.headers.get('location');
+      const target = location === null ? undefined : new URL(location, url);
+      if (!target || target.protocol !== 'https:' || target.origin === origin) {
+        throw new ZulipUploadRefused(
+          `Zulip redirected the download to ${target?.origin === origin ? 'itself' : 'an unexpected location'}`,
+        );
+      }
+      response = await fetch(target, { redirect: 'error', signal });
+    }
+
+    const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+    const isPage = type === 'text/html' && !/\.html?$/i.test(name);
+    if (response.status !== 200 || isPage) {
+      await response.body?.cancel();
+      const answer = response.status === 200 ? 'a web page' : `status ${response.status}`;
+      throw new ZulipUploadRefused(`Zulip answered the download with ${answer}`);
+    }
+
+    if (Number(response.headers.get('content-length')) > maxBytes) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const bytes = await readAtMost(response.body, maxBytes);
+    return bytes && new File([bytes], name, { type });
+  }
+
+  async getStreamMessagesAfter(stream: number, anchor: number, numAfter: number): Promise<ZulipReceivedMessage[]> {
+    const narrow = JSON.stringify([{ operator: 'channel', operand: stream }]);
+    const { data } = await this.bot.GET('/messages', {
+      params: {
+        query: {
+          anchor: String(anchor),
+          include_anchor: false,
+          num_before: 0,
+          num_after: numAfter,
+          narrow,
+          apply_markdown: false,
+        },
+      },
+    });
+    return (data!.messages ?? []).map(toReceivedMessage);
+  }
+
+  /** An undocumented static file, served without authentication; a missing or malformed entry is skipped. */
   async getEmojiCodes() {
     const { origin } = this.site;
     const response = await fetch(`${origin}/static/generated/emoji/emoji_codes.json`, {
