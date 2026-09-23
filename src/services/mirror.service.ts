@@ -72,6 +72,7 @@ const CATCH_UP_PAGES = 5;
 const CATCH_UP_RETRY_MS = 30_000;
 const MAX_CATCH_UP_RETRY_MS = 10 * MINUTE;
 const MAX_CREATE_ATTEMPTS = 3;
+const RESUME_MS = 30_000;
 const DISCORD_EPOCH = 1_420_070_400_000n;
 const ACTIVE_THREAD_DAYS = 7;
 const ACTIVE_THREAD_LIMIT = 20;
@@ -109,7 +110,14 @@ type PairState = {
   turnedAway: TurnedAway;
   retryTimer?: NodeJS.Timeout;
   retryDelayMs: number;
+  /** Edits, deletions and renames held back, in order, until the side they go to is ready. */
+  held: Record<Side, Op[]>;
+  resumeTimer?: NodeJS.Timeout;
 };
+
+type Side = 'Discord' | 'Zulip';
+
+type Op = { label: string; run: () => Promise<void> };
 
 /** The first message turned away per Discord channel or thread, and every Zulip message turned away. */
 type TurnedAway = { discord: Map<string, bigint>; zulip: Set<number> };
@@ -309,6 +317,7 @@ export class MirrorService implements OnModuleDestroy {
       generation: 0,
       turnedAway: noneTurnedAway(),
       retryDelayMs: CATCH_UP_RETRY_MS,
+      held: { Discord: [], Zulip: [] },
     }));
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
     this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
@@ -327,6 +336,7 @@ export class MirrorService implements OnModuleDestroy {
         this.fail(`${state.pair.key}: could not check Discord channel ${state.pair.discordChannelId}`, error);
       }
       this.maybeCatchUp(state);
+      this.resume(state);
     }
   }
 
@@ -373,6 +383,7 @@ export class MirrorService implements OnModuleDestroy {
     for (const state of this.pairs) {
       state.queue.close();
       clearTimeout(state.retryTimer);
+      clearTimeout(state.resumeTimer);
     }
     let timer: NodeJS.Timeout | undefined;
     const grace = new Promise<void>((resolve) => {
@@ -440,6 +451,7 @@ export class MirrorService implements OnModuleDestroy {
     for (const state of this.pairs) {
       this.lostTrack(state);
       this.maybeCatchUp(state);
+      this.resume(state);
     }
   }
 
@@ -728,7 +740,50 @@ export class MirrorService implements OnModuleDestroy {
     return state.status === 'ready' && this.discordMirror.isReady();
   }
 
-  private notReady(state: PairState, side: 'Discord' | 'Zulip') {
+  private sideReady(state: PairState, side: Side) {
+    return side === 'Discord' ? this.discordReady(state) : this.zulip.isInitialised();
+  }
+
+  /** Holds a change back, behind any held before it, until `side` is ready; `true` when it did. */
+  private holdFor(state: PairState, side: Side, label: string, run: () => Promise<void>) {
+    const held = state.held[side];
+    if (held.length === 0 && this.sideReady(state, side)) {
+      return false;
+    }
+    held.push({ label, run });
+    if (this.throttle(`held:${state.pair.key}:${side}`, THROTTLE_MS)) {
+      this.logger.warn(`${state.pair.key}: ${side} is not ready, so edits, deletions and renames wait until it is`);
+    }
+    this.resumeLater(state);
+    return true;
+  }
+
+  private resumeLater(state: PairState) {
+    state.resumeTimer ??= setTimeout(() => {
+      state.resumeTimer = undefined;
+      this.resume(state);
+    }, RESUME_MS);
+  }
+
+  /** The op waits behind the queue, so whatever is held meanwhile lines up behind the older changes and goes with them. */
+  private resume(state: PairState) {
+    for (const side of ['Discord', 'Zulip'] as const) {
+      if (state.held[side].length === 0) {
+        continue;
+      }
+      state.queue.push(`changes held for ${side}`, async () => {
+        if (state.status === 'disabled') {
+          state.held[side] = [];
+        } else if (this.sideReady(state, side)) {
+          state.queue.pushNext(state.held[side].splice(0));
+        } else {
+          this.resumeLater(state);
+        }
+      });
+    }
+  }
+
+  private notReady(state: PairState, side: Side) {
     if (this.throttle(`not-ready:${state.pair.key}`, THROTTLE_MS)) {
       this.logger.warn(
         `${state.pair.key}: not mirroring yet: ${side} is not ready; catch-up picks it up once both sides are`,
@@ -1355,11 +1410,13 @@ export class MirrorService implements OnModuleDestroy {
     );
     const rows = all.filter(({ deletedAt }) => deletedAt === null);
     const hash = sha256(content);
-    if (rows.length === 0 || rows[0].sourceHash === hash) {
-      return;
-    }
-    if (!this.discordReady(state)) {
-      this.notReady(state, 'Discord');
+    if (
+      rows.length === 0 ||
+      this.holdFor(state, 'Discord', `edit of Zulip message ${messageId}`, () =>
+        this.editFromZulip(state, messageId, content),
+      ) ||
+      rows[0].sourceHash === hash
+    ) {
       return;
     }
 
@@ -1504,19 +1561,23 @@ export class MirrorService implements OnModuleDestroy {
         `${pair.key}: Zulip deleted ${plural(count, 'mirrored message')} older than ${Constants.Mirror.DeleteSyncMaxAgeDays} days; not deleting their Discord copies (Discord messages ${old.map(({ discordMessageId }) => discordMessageId).join(', ')}); delete them there by hand if this was intended`,
       );
     }
-    if (young.length > 0 && !this.discordReady(state)) {
-      this.notReady(state, 'Discord');
-    } else {
-      for (const row of young) {
-        try {
-          await this.onDiscord(state, row.discordThreadId, () => this.discordMirror.deleteMirrorMessage(toTarget(row)));
-        } catch (error) {
-          if (!isMirrorError(error, 'unknown-message')) {
-            this.fail(
-              `${pair.key}: could not delete Discord message ${row.discordMessageId} (the copy of Zulip message ${row.zulipMessageId})`,
-              error,
-            );
-          }
+    await this.deleteOnDiscord(state, young);
+  }
+
+  private async deleteOnDiscord(state: PairState, rows: MirrorMessage[]) {
+    const label = `deletion of Discord messages ${rows.map(({ discordMessageId }) => discordMessageId).join(', ')}`;
+    if (rows.length === 0 || this.holdFor(state, 'Discord', label, () => this.deleteOnDiscord(state, rows))) {
+      return;
+    }
+    for (const row of rows) {
+      try {
+        await this.onDiscord(state, row.discordThreadId, () => this.discordMirror.deleteMirrorMessage(toTarget(row)));
+      } catch (error) {
+        if (!isMirrorError(error, 'unknown-message')) {
+          this.fail(
+            `${state.pair.key}: could not delete Discord message ${row.discordMessageId} (the copy of Zulip message ${row.zulipMessageId})`,
+            error,
+          );
         }
       }
     }
@@ -1565,7 +1626,6 @@ export class MirrorService implements OnModuleDestroy {
     );
     await this.leaveConversations(state, update, moved, new Set(conversations.map(({ id }) => id)));
     for (const conversation of conversations) {
-      const threadId = conversation.discordThreadId!;
       if (update.newStreamId !== undefined && update.newStreamId !== pair.zulipStreamId) {
         await this.detach(state, conversation, 'its Zulip topic was moved to another stream');
         continue;
@@ -1583,23 +1643,32 @@ export class MirrorService implements OnModuleDestroy {
       const previous = conversation.zulipTopic;
       await this.database.updateMirrorConversation(conversation.id, { zulipTopic: update.topic, zulipTopicKey });
       const name = toDiscordThreadName(update.topic);
-      if (name === toDiscordThreadName(previous)) {
-        continue;
+      if (name !== toDiscordThreadName(previous)) {
+        await this.renameThread(state, conversation, name);
       }
-      if (!this.discordReady(state)) {
-        this.notReady(state, 'Discord');
-        continue;
+    }
+  }
+
+  private async renameThread(state: PairState, conversation: MirrorConversation, name: string) {
+    const threadId = conversation.discordThreadId!;
+    const later = async () => {
+      const current = await this.database.getMirrorConversation(conversation.id);
+      if (current) {
+        await this.renameThread(state, current, toDiscordThreadName(current.zulipTopic));
       }
-      try {
-        await this.onDiscord(state, threadId, () => this.discordMirror.renameMirrorThread(threadId, name));
-      } catch (error) {
-        if (isMirrorError(error, 'unknown-channel')) {
-          await this.detach(state, conversation, 'the Discord thread no longer exists');
-        } else {
-          this.logger.warn(
-            `${pair.key}: could not rename Discord thread ${threadId} after its Zulip topic moved: ${describe(error)}`,
-          );
-        }
+    };
+    if (this.holdFor(state, 'Discord', `rename of Discord thread ${threadId}`, later)) {
+      return;
+    }
+    try {
+      await this.onDiscord(state, threadId, () => this.discordMirror.renameMirrorThread(threadId, name));
+    } catch (error) {
+      if (isMirrorError(error, 'unknown-channel')) {
+        await this.detach(state, conversation, 'the Discord thread no longer exists');
+      } else {
+        this.logger.warn(
+          `${state.pair.key}: could not rename Discord thread ${threadId} after its Zulip topic moved: ${describe(error)}`,
+        );
       }
     }
   }
@@ -1849,11 +1918,11 @@ export class MirrorService implements OnModuleDestroy {
       ({ origin }) => origin === 'discord',
     );
     const hash = discordSourceHash(dto);
-    if (!row || row.sourceHash === hash) {
-      return;
-    }
-    if (!this.zulip.isInitialised()) {
-      this.notReady(state, 'Zulip');
+    if (
+      !row ||
+      this.holdFor(state, 'Zulip', `edit of Discord message ${dto.id}`, () => this.editFromDiscord(state, dto)) ||
+      row.sourceHash === hash
+    ) {
       return;
     }
 
@@ -1883,40 +1952,45 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async deleteFromDiscord(state: PairState, messageIds: string[]) {
-    const { pair } = state;
     for (const row of await this.database.getMirrorMessagesByDiscordIds(messageIds)) {
       // Marked first: Zulip reports the bot's own deletion back as an event, which must find nothing.
       await this.database.markMirrorMessagesDeleted([row.discordMessageId]);
-      if (row.origin === 'zulip') {
-        continue;
+      if (row.origin === 'discord') {
+        await this.deleteOnZulip(state, row);
       }
-      if (!this.zulip.isInitialised()) {
-        this.notReady(state, 'Zulip');
-        continue;
-      }
-      const about = `message ${row.zulipMessageId} (the copy of Discord message ${row.discordMessageId})`;
-      try {
-        await this.retryZulip(() => this.zulip.deleteMessage(row.zulipMessageId));
-      } catch (error) {
-        if (isZulipMessageGone(error)) {
-          await this.reanchor(state, [row.zulipMessageId]);
-        } else if (isZulipRefusal(error)) {
-          this.logger.warn(
-            `${pair.key}: Zulip refused to delete ${about}; add the bot to the stream's can_delete_any_message_group`,
-          );
-        } else {
-          this.fail(`${pair.key}: could not delete Zulip ${about}`, error);
-        }
-        continue;
-      }
-      await this.reanchor(state, [row.zulipMessageId]);
     }
+  }
+
+  private async deleteOnZulip(state: PairState, row: MirrorMessage) {
+    const { pair } = state;
+    const about = `message ${row.zulipMessageId} (the copy of Discord message ${row.discordMessageId})`;
+    if (this.holdFor(state, 'Zulip', `deletion of Zulip ${about}`, () => this.deleteOnZulip(state, row))) {
+      return;
+    }
+    try {
+      await this.retryZulip(() => this.zulip.deleteMessage(row.zulipMessageId));
+    } catch (error) {
+      if (isZulipRefusal(error)) {
+        this.logger.warn(
+          `${pair.key}: Zulip refused to delete ${about}; add the bot to the stream's can_delete_any_message_group`,
+        );
+        return;
+      }
+      if (!isZulipMessageGone(error)) {
+        this.fail(`${pair.key}: could not delete Zulip ${about}`, error);
+        return;
+      }
+    }
+    await this.reanchor(state, [row.zulipMessageId]);
   }
 
   private async renameFromDiscord(state: PairState, thread: { threadId: string; name: string }) {
     const { pair } = state;
-    if (!this.zulip.isInitialised()) {
-      this.notReady(state, 'Zulip');
+    if (
+      this.holdFor(state, 'Zulip', `rename of Discord thread ${thread.threadId}`, () =>
+        this.renameFromDiscord(state, thread),
+      )
+    ) {
       return;
     }
     const found = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, thread.threadId);
@@ -1978,16 +2052,20 @@ export class MirrorService implements OnModuleDestroy {
       return;
     }
     await this.detach(state, conversation, 'the Discord thread was deleted');
-    if (!this.zulip.isInitialised()) {
-      this.notReady(state, 'Zulip');
+    await this.noticeThreadDeleted(state, conversation.zulipTopic);
+  }
+
+  private async noticeThreadDeleted(state: PairState, topic: string) {
+    const { pair } = state;
+    if (
+      this.holdFor(state, 'Zulip', `notice of the deleted thread of a Zulip topic`, () =>
+        this.noticeThreadDeleted(state, topic),
+      )
+    ) {
       return;
     }
     try {
-      await this.zulip.sendMessage({
-        stream: pair.zulipStreamId,
-        topic: conversation.zulipTopic,
-        content: THREAD_DELETED_NOTICE,
-      });
+      await this.zulip.sendMessage({ stream: pair.zulipStreamId, topic, content: THREAD_DELETED_NOTICE });
     } catch (error) {
       this.fail(`${pair.key}: could not post the thread deletion notice in Zulip stream ${pair.zulipStreamId}`, error);
     }

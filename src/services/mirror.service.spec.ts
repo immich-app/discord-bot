@@ -2349,8 +2349,8 @@ describe(MirrorService.name, () => {
   });
 
   describe('readiness', () => {
-    const zulipNotReady = 'Dev: not mirroring yet: Zulip is not ready; catch-up picks it up once both sides are';
-    const discordNotReady = 'Dev: not mirroring yet: Discord is not ready; catch-up picks it up once both sides are';
+    const zulipNotReady = 'Dev: Zulip is not ready, so edits, deletions and renames wait until it is';
+    const discordNotReady = 'Dev: Discord is not ready, so edits, deletions and renames wait until it is';
     let threadId: string;
 
     beforeEach(async () => {
@@ -2361,59 +2361,137 @@ describe(MirrorService.name, () => {
       threadId = db.conversations[0].discordThreadId!;
     });
 
-    it('should leave a Zulip edit for later while Discord is away', async () => {
+    const discordIsBack = async () => {
+      discord.isReady.mockReturnValue(true);
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+    };
+
+    const zulipIsBack = async () => {
+      zulip.isInitialised.mockReturnValue(true);
+      await register();
+    };
+
+    it('should hold a Zulip edit back until Discord is ready', async () => {
       discord.isReady.mockReturnValue(false);
       await updateFromZulip({ messageId: 1001, content: 'edited' });
 
       expect(discord.editMirrorMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledWith(discordNotReady);
+
+      await discordIsBack();
+      expect(discord.editMirrorMessage).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+        content: 'edited',
+        suppressEmbeds: false,
+      });
     });
 
-    it('should leave a Zulip deletion for later while Discord is away', async () => {
+    it('should keep later changes behind the ones held, and try again soon', async () => {
+      vitest.useFakeTimers();
+      discord.isReady.mockReturnValue(false);
+      await updateFromZulip({ messageId: 1001, content: 'first edit' });
+      discord.isReady.mockReturnValue(true);
+      await updateFromZulip({ messageId: 1001, content: 'second edit' });
+
+      expect(discord.editMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+      expect(discord.editMirrorMessage.mock.calls.map(([, { content }]) => content)).toEqual([
+        'first edit',
+        'second edit',
+      ]);
+    });
+
+    it('should apply an edit back to the original content after the edit held before it', async () => {
+      discord.isReady.mockReturnValue(false);
+      await updateFromZulip({ messageId: 1001, content: 'edited' });
+      await updateFromZulip({ messageId: 1001, content: 'hello' });
+
+      await discordIsBack();
+
+      expect(discord.editMirrorMessage.mock.calls.map(([, { content }]) => content)).toEqual(['edited', 'hello']);
+    });
+
+    it('should drop the changes held for a pair that was turned off', async () => {
+      discord.isReady.mockReturnValue(false);
+      await updateFromZulip({ messageId: 1001, content: 'edited' });
+      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
+        ...mirrorChannel(channelId),
+        everyoneCanView: channelId === DEV_CHANNEL,
+      }));
+
+      await discordIsBack();
+
+      expect(discord.editMirrorMessage).not.toHaveBeenCalled();
+    });
+
+    it('should hold a Zulip deletion back until Discord is ready', async () => {
       discord.isReady.mockReturnValue(false);
       await deleteFromZulip({ messageIds: [1002] });
 
       expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
+      expect(db.messages.find(({ zulipMessageId }) => zulipMessageId === 1002)?.deletedAt).toEqual(expect.any(Date));
       expect(warn()).toHaveBeenCalledWith(discordNotReady);
+
+      await discordIsBack();
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledOnce();
     });
 
-    it('should store a Zulip rename but leave the thread for later while Discord is away', async () => {
+    it('should store a Zulip rename at once and rename the thread once Discord is ready', async () => {
       discord.isReady.mockReturnValue(false);
       await updateFromZulip({ messageId: 1001, topic: 'Crash on start', propagateMode: 'change_all' });
 
       expect(db.conversations[0].zulipTopic).toBe('Crash on start');
       expect(discord.renameMirrorThread).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledWith(discordNotReady);
+
+      await discordIsBack();
+      expect(discord.renameMirrorThread).toHaveBeenCalledExactlyOnceWith(threadId, 'Crash on start');
     });
 
-    it('should leave a Discord edit for later while Zulip is away', async () => {
+    it('should hold a Discord edit back until Zulip is ready', async () => {
       zulip.isInitialised.mockReturnValue(false);
       sut.onDiscordMessageEdited(discordMessage({ threadId: '200000000000000009', content: 'edited' }));
       await sut.whenIdle();
 
       expect(zulip.updateMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledWith(zulipNotReady);
+
+      await zulipIsBack();
+      expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(5001, {
+        content: expect.stringContaining('edited'),
+      });
     });
 
-    it('should leave a Discord deletion for later while Zulip is away', async () => {
+    it('should hold a Discord deletion back until Zulip is ready', async () => {
       zulip.isInitialised.mockReturnValue(false);
       sut.onDiscordMessagesDeleted(DEV_CHANNEL, ['300000000000000001']);
       await sut.whenIdle();
 
       expect(zulip.deleteMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledWith(zulipNotReady);
+
+      await zulipIsBack();
+      expect(zulip.deleteMessage).toHaveBeenCalledExactlyOnceWith(5001);
     });
 
-    it('should leave a Discord rename for later while Zulip is away', async () => {
+    it('should hold a Discord rename back until Zulip is ready', async () => {
       zulip.isInitialised.mockReturnValue(false);
       sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'Crash on start' });
       await sut.whenIdle();
 
       expect(zulip.updateMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledWith(zulipNotReady);
+
+      await zulipIsBack();
+      expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(
+        1001,
+        expect.objectContaining({ topic: 'Crash on start' }),
+      );
     });
 
-    it('should detach a deleted thread but post no notice while Zulip is away', async () => {
+    it('should detach a deleted thread at once and post its notice once Zulip is ready', async () => {
       zulip.isInitialised.mockReturnValue(false);
       sut.onDiscordThreadDeleted({ channelId: DEV_CHANNEL, threadId });
       await sut.whenIdle();
@@ -2421,6 +2499,10 @@ describe(MirrorService.name, () => {
       expect(db.conversations.map(({ discordThreadId }) => discordThreadId)).toEqual(['200000000000000009']);
       expect(sentMessages()).toHaveLength(1);
       expect(warn()).toHaveBeenCalledWith(zulipNotReady);
+
+      await zulipIsBack();
+      expect(sentMessages().at(-1)).toEqual(expect.objectContaining({ topic: 'Crash', content: expect.any(String) }));
+      expect(sentMessages()).toHaveLength(2);
     });
   });
 
