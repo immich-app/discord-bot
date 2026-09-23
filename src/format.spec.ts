@@ -62,19 +62,36 @@ describe('neutraliseZulipMentions', () => {
 });
 
 describe('neutraliseZulipLabel', () => {
-  it('should break up `](` and `][`, the pairs that close a link label into a link', () => {
-    expect(neutraliseZulipLabel('a](https://evil) [b')).toBe('a]\u200B(https://evil) [b');
-    expect(neutraliseZulipLabel('a][ref]')).toBe('a]\u200B[ref]');
+  it('should turn a `](url)` that would repoint the link into text', () => {
+    expect(neutraliseZulipLabel('Click here for the fix ](https://evil.example) thanks')).toBe(
+      'Click here for the fix &#93;(https://evil.example) thanks',
+    );
+    expect(neutraliseZulipLabel('[x](https://evil.example)')).toBe('&#91;x&#93;(https://evil.example)');
+  });
+
+  it.each([
+    { text: 'A lone ] bracket', expected: 'A lone &#93; bracket' },
+    { text: 'fix: emoji :]', expected: 'fix: emoji :&#93;' },
+    { text: 'lone [ bracket', expected: 'lone &#91; bracket' },
+    { text: String.raw`a\[b\]`, expected: String.raw`a\&#91;b\&#93;` },
+  ])('should keep the unbalanced bracket in $text from ending or opening a label', ({ text, expected }) => {
+    expect(neutraliseZulipLabel(text)).toBe(expected);
+  });
+
+  it('should reference balanced brackets too, which Zulip renders as written', () => {
+    expect(neutraliseZulipLabel('[owner/repo] Fix [BUG] thumbnails')).toBe(
+      '&#91;owner/repo&#93; Fix &#91;BUG&#93; thumbnails',
+    );
+  });
+
+  it('should leave a title without brackets or mentions as it is', () => {
+    for (const text of ['feat(server): add a thing', 'f(x) & <b>', 'zack@example.com', '']) {
+      expect(neutraliseZulipLabel(text), text).toBe(text);
+    }
   });
 
   it('should neutralise mentions on the way', () => {
-    expect(neutraliseZulipLabel('@**all**](x)')).toBe('@\u200B**all**]\u200B(x)');
-  });
-
-  it('should leave every other bracket alone', () => {
-    for (const text of ['[owner/repo] Issue opened', 'Fix [BUG] thumbnails', 'a] b', 'a]', '[', 'f(x)', '] (x)']) {
-      expect(neutraliseZulipLabel(text), text).toBe(text);
-    }
+    expect(neutraliseZulipLabel('@**all**](x)')).toBe('@\u200B**all**&#93;(x)');
   });
 });
 

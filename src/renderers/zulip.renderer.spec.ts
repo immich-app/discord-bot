@@ -24,7 +24,7 @@ describe('toZulipMessage', () => {
       }),
     ).toBe(
       [
-        '🔀 **[[immich-app/immich] Pull request merged: #1 Fix thing](https://github.com/immich-app/immich/pull/1)** — [octocat](https://github.com/octocat)',
+        '🔀 **[&#91;immich-app/immich&#93; Pull request merged: #1 Fix thing](https://github.com/immich-app/immich/pull/1)** — [octocat](https://github.com/octocat)',
         '~~~ quote',
         'Body',
         '~~~',
@@ -49,7 +49,7 @@ describe('toZulipMessage', () => {
       }),
     ).toBe(
       [
-        '**[[immich-app/immich] New release: v2.4.0](https://github.com/immich-app/immich/releases/tag/v2.4.0)** — [octocat](https://github.com/octocat)',
+        '**[&#91;immich-app/immich&#93; New release: v2.4.0](https://github.com/immich-app/immich/releases/tag/v2.4.0)** — [octocat](https://github.com/octocat)',
         '🎉 Release time! 🚀',
       ].join('\n'),
     );
@@ -293,7 +293,7 @@ describe('toZulipMessage', () => {
         title: '[immich-app/immich] Issue opened: #1 @**all** look',
         url: 'https://x',
       });
-      expect(message).toBe('**[[immich-app/immich] Issue opened: #1 @\u200B**all** look](https://x)**');
+      expect(message).toBe('**[&#91;immich-app/immich&#93; Issue opened: #1 @\u200B**all** look](https://x)**');
     });
 
     it('should neutralise a mention in a merch order message field', () => {
@@ -349,37 +349,36 @@ describe('toZulipMessage', () => {
     });
 
     describe('link labels', () => {
-      const LabelBreak = /\][([]/;
+      const Bracket = /[[\]]/;
       const forged = '[immich-app/immich] Issue opened: #99 Crash on upload](https://evil.example/phish) [';
 
-      it('should put a zero-width space between a `]` and a following `(` or `[`, so a smuggled pair cannot close the label', () => {
-        expect(neutraliseLabel('a](https://evil) [b')).toBe('a]\u200B(https://evil) [b');
-        expect(neutraliseLabel('a][ref]')).toBe('a]\u200B[ref]');
-        expect(neutraliseLabel('a](https://evil) [b')).not.toMatch(LabelBreak);
+      it('should turn every bracket into a character reference, which Zulip never counts towards a link', () => {
+        expect(neutraliseLabel('a](https://evil) [b')).toBe('a&#93;(https://evil) &#91;b');
+        expect(neutraliseLabel('a][ref]')).toBe('a&#93;&#91;ref&#93;');
+        expect(neutraliseLabel('a](https://evil) [b')).not.toMatch(Bracket);
       });
 
       it('should neutralise mentions as well, since a label gets no other pass', () => {
-        expect(neutraliseLabel('@**all**](x)')).toBe('@\u200B**all**]\u200B(x)');
+        expect(neutraliseLabel('@**all**](x)')).toBe('@\u200B**all**&#93;(x)');
       });
 
-      it('should leave every other `]` alone, so a bracketed title reads and copies as written', () => {
-        for (const text of [
-          'octocat',
-          'Fix [BUG] thumbnails',
-          '[immich-app/immich] Fix thing',
-          'Fix [thing',
-          'x (y)',
-          '',
-        ]) {
+      it('should leave a label without brackets alone', () => {
+        for (const text of ['octocat', 'Fix thumbnails', 'x (y)', '']) {
           expect(neutraliseLabel(text), text).toBe(text);
         }
       });
 
-      it('should render a title with a plain [BUG] prefix unchanged inside the heading link', () => {
-        expect(toZulipMessage({ kind: 'feed', title: 'Fix [BUG] thumbnails', url: 'https://x' })).toBe(
-          '**[Fix [BUG] thumbnails](https://x)**',
-        );
-        expect(toZulipMessage({ kind: 'report', title: '[BUG] report' })).toBe('**[BUG] report**');
+      it.each([
+        { title: 'Fix [BUG] thumbnails', label: 'Fix &#91;BUG&#93; thumbnails' },
+        { title: 'A lone ] bracket', label: 'A lone &#93; bracket' },
+        { title: 'fix: emoji :]', label: 'fix: emoji :&#93;' },
+        { title: 'lone [ bracket', label: 'lone &#91; bracket' },
+      ])('should keep the whole of $title as the heading link', ({ title, label }) => {
+        expect(toZulipMessage({ kind: 'feed', title, url: 'https://x' })).toBe(`**[${label}](https://x)**`);
+      });
+
+      it('should keep the brackets of a plain bold title from forming a link', () => {
+        expect(toZulipMessage({ kind: 'report', title: '[BUG] report' })).toBe('**&#91;BUG&#93; report**');
       });
 
       it('should not let a GitHub title repoint the heading link', () => {
@@ -391,7 +390,7 @@ describe('toZulipMessage', () => {
           url: 'https://github.com/immich-app/immich/issues/99',
         });
         expect(message).toBe(
-          '🆕 **[[immich-app/immich] Issue opened: #99 Crash on upload]\u200B(https://evil.example/phish) [](https://github.com/immich-app/immich/issues/99)** — [octocat](https://github.com/octocat)',
+          '🆕 **[&#91;immich-app/immich&#93; Issue opened: #99 Crash on upload&#93;(https://evil.example/phish) &#91;](https://github.com/immich-app/immich/issues/99)** — [octocat](https://github.com/octocat)',
         );
         expect(message).not.toContain('](https://evil.example/phish)');
       });
@@ -404,7 +403,7 @@ describe('toZulipMessage', () => {
           author: { name: 'octocat](https://evil.example/phish) [', url: 'https://github.com/octocat' },
         });
         expect(message).toBe(
-          '**[T](https://x)** — [octocat]\u200B(https://evil.example/phish) [](https://github.com/octocat)',
+          '**[T](https://x)** — [octocat&#93;(https://evil.example/phish) &#91;](https://github.com/octocat)',
         );
       });
 
@@ -442,7 +441,7 @@ describe('toZulipMessage', () => {
 
       it('should neutralise a plain bold title too, so a report or alert heading cannot carry a forged link', () => {
         for (const kind of ['report', 'alert'] as const) {
-          expect(toZulipMessage({ kind, title: '[a](https://evil)' }), kind).toBe('**[a]\u200B(https://evil)**');
+          expect(toZulipMessage({ kind, title: '[a](https://evil)' }), kind).toBe('**&#91;a&#93;(https://evil)**');
         }
       });
     });

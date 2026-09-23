@@ -21,9 +21,13 @@ export const asHexColor = (color: number) => `#${color.toString(16)}`;
 /** Zulip has no backslash escaping, so a zero-width space after the sigil is the only way to stop a mention. */
 export const neutraliseZulipMentions = (text: string) => text.replaceAll(/([@#])(?=_?\*)/g, '$1\u200B');
 
-/** Python-Markdown only closes a link label when `(` or `[` directly follows `]`, so breaking just those pairs stops an untrusted string forging a link while leaving every other `]` as written. */
+/**
+ * Zulip counts every `[` and `]` in a link label, backslash-escaped or not, so one unbalanced bracket in an untrusted
+ * string can end the label early or open a link of its own. A character reference renders as the bracket but is never
+ * counted; inside inline code it shows as written.
+ */
 export const neutraliseZulipLabel = (text: string) =>
-  neutraliseZulipMentions(text).replaceAll(/\](?=[([])/g, ']\u200B');
+  neutraliseZulipMentions(text).replaceAll('[', '&#91;').replaceAll(']', '&#93;');
 
 /** Zulip closes a fence on a line equal to its opening fence, so the fence must outrun any tilde run in the text. */
 export const toZulipQuote = (text: string) => {

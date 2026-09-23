@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
 import { Constants } from 'src/constants';
 import { DiscordCommands } from 'src/discord/commands';
+import { neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -1043,6 +1044,16 @@ describe('Bot test', () => {
           '[Issue] <Thumbnails crash]|(https://evil.example) [> ([immich-app/immich#1](https://github.com/immich-app/immich/issues/1)), Similarity: 0.912',
           '[Discussion] <Ping @**all**> ([immich-app/immich#2](https://github.com/immich-app/immich/discussions/2)), Similarity: 0.800',
         ].join('\n'),
+      );
+    });
+
+    it("should leave only the bot's own link in a line when given the Zulip label neutraliser", async () => {
+      loopDedupeMock.getForText.mockResolvedValue([
+        { ...hits[0], title: '[x](https://evil.example) lone [ and ] brackets' },
+      ]);
+
+      await expect(sut.handleFindSimilarIssuesOrDiscussions('crash', neutraliseZulipLabel)).resolves.toBe(
+        '[Issue] &#91;x&#93;(https://evil.example) lone &#91; and &#93; brackets ([immich-app/immich#1](https://github.com/immich-app/immich/issues/1)), Similarity: 0.912',
       );
     });
 
