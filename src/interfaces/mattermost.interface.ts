@@ -138,6 +138,8 @@ export type UserProfile = Awaited<ReturnType<Client4['getMe']>>;
 
 export interface IMattermostInterface {
   init: () => Promise<void>;
+  /** False when the domain or token is the `dev` sentinel: nothing is sent to Mattermost then. */
+  isInitialised: () => boolean;
   registerEventListener: <T extends MattermostEvents>(event: T, listener: MattermostEventListener<T>) => void;
   send: (post: {
     channelId: string;

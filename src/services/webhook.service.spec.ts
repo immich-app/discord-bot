@@ -142,6 +142,7 @@ const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
+  isInitialised: vitest.fn().mockReturnValue(true),
   init: vitest.fn(),
   registerEventListener: vitest.fn() as any,
   send: vitest.fn(),

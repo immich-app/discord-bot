@@ -27,6 +27,7 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
 });
 
 const newMattermostMock = (): Mocked<IMattermostInterface> => ({
+  isInitialised: vitest.fn().mockReturnValue(true),
   init: vitest.fn(),
   registerEventListener: vitest.fn() as any,
   send: vitest.fn(),
@@ -327,6 +328,17 @@ describe(NotificationService.name, () => {
       expect(fatalMock).not.toHaveBeenCalled();
     });
 
+    it('should skip Mattermost silently when it is not configured', async () => {
+      mattermostMock.isInitialised.mockReturnValue(false);
+
+      await expect(sut.notify('team.releases', notification)).resolves.toBeUndefined();
+
+      expect(mattermostMock.send).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(loggerMock).not.toHaveBeenCalled();
+      expect(fatalMock).not.toHaveBeenCalled();
+    });
+
     it('should skip Discord silently while it is not ready', async () => {
       discordMock.isReady.mockReturnValue(false);
 
@@ -523,6 +535,14 @@ describe(NotificationService.name, () => {
       });
       expect(mattermostMock.send).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should resolve false and send nothing to Mattermost when it is not configured', async () => {
+      mattermostMock.isInitialised.mockReturnValue(false);
+
+      await expect(sut.notifyTarget({ platform: 'mattermost', channelId: 'town-square' }, rss)).resolves.toBe(false);
+
+      expect(mattermostMock.send).not.toHaveBeenCalled();
     });
 
     it('should send the rendered block tree to the Mattermost channel, and resolve true', async () => {

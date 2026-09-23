@@ -129,6 +129,7 @@ export type EmoteSyncReport = {
   zulipUploaded: number;
   mattermostUploaded: number;
   zulipSkipped?: ZulipSkipReason;
+  mattermostSkipped?: true;
   failed: string[];
   renamed: string[];
   alreadyOnZulip: string[];
@@ -141,6 +142,7 @@ export const formatEmoteSyncReport = (
     zulipUploaded,
     mattermostUploaded,
     zulipSkipped,
+    mattermostSkipped,
     failed,
     renamed,
     alreadyOnZulip,
@@ -155,7 +157,7 @@ export const formatEmoteSyncReport = (
   const outcome = [
     plural(total, 'emote'),
     `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ` (skipped: ${ZULIP_SKIP_REASONS[zulipSkipped]})` : ''}`,
-    `${mattermostUploaded} uploaded to Mattermost`,
+    `${mattermostUploaded} uploaded to Mattermost${mattermostSkipped ? ' (skipped: not configured)' : ''}`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
     alreadyOnZulip.length > 0 && `${alreadyOnZulip.length} already on Zulip: ${alreadyOnZulip.join(', ')}`,
@@ -807,7 +809,8 @@ ${formattedCode}
       );
     }
     const existing = await this.listZulipEmoji();
-    const onMattermost = await this.listMattermostEmoji();
+    const mattermostSkipped = !this.mattermost.isInitialised();
+    const onMattermost = mattermostSkipped ? undefined : await this.listMattermostEmoji();
     // A realm emoji already holding a built-in name (an administrator's override) counts as that emote, already synced.
     const builtIn = existing ? await this.listZulipBuiltInEmoji() : undefined;
     const claimed = new Set(builtIn?.filter((name) => !existing?.has(name)));
@@ -843,7 +846,11 @@ ${formattedCode}
           }
         }
       }
-      const mattermost = onMattermost?.has(name) ? 'exists' : await this.uploadToMattermost(name, url);
+      const mattermost = mattermostSkipped
+        ? 'skipped'
+        : onMattermost?.has(name)
+          ? 'exists'
+          : await this.uploadToMattermost(name, url);
       if (mattermost === 'uploaded') {
         mattermostUploaded++;
       } else if (mattermost === 'exists') {
@@ -859,6 +866,7 @@ ${formattedCode}
       zulipUploaded,
       mattermostUploaded,
       zulipSkipped,
+      ...(mattermostSkipped ? { mattermostSkipped } : {}),
       failed,
       renamed,
       alreadyOnZulip,

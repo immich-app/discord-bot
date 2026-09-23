@@ -34,6 +34,7 @@ const newOutlineMock = (): Mocked<IOutlineInterface> => ({
 });
 
 const newMattermostMock = (): Mocked<IMattermostInterface> => ({
+  isInitialised: vitest.fn().mockReturnValue(true),
   createEmote: vitest.fn(),
   init: vitest.fn(),
   joinChannel: vitest.fn(),

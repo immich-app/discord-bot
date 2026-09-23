@@ -9,7 +9,7 @@ import {
   IDiscordMirrorInterface,
 } from 'src/interfaces/discord-mirror.interface';
 import { IZulipInterface, ZulipStream } from 'src/interfaces/zulip.interface';
-import { defaultMainTopic, mainTopicProblem } from 'src/mirror/pairs';
+import { defaultMainTopic, holdsIdentityRole, mainTopicProblem } from 'src/mirror/pairs';
 import { escapeDiscordInline } from 'src/mirror/zulip-to-discord';
 import { MirrorLink } from 'src/schema';
 import { MirrorService } from 'src/services/mirror.service';
@@ -345,18 +345,21 @@ export class MirrorLinkService {
         return `- Discord channel ${channelName(p, link.discordChannelId, channel)} ↔ Zulip stream ${streamName(p, link.zulipStreamId, stream)}${state}: ${layout}; linked by ${text(p, link.createdBy)} on ${link.createdAt.toISOString().slice(0, 10)}`;
       }),
     );
-    const guildId = Constants.Discord.Servers[0];
-    const { Team, Immich } = Constants.Discord.Roles;
     const identityLines = await Promise.all(
       identities.map(async ({ zulipUserId, discordUserId }) => {
-        const [zulipUser, member] = await Promise.all([
+        const [zulipUser, members] = await Promise.all([
           this.zulip.getUser(zulipUserId).catch(() => undefined),
-          this.discordMirror.getTeamMember(guildId, discordUserId).catch(() => undefined),
+          Promise.all(
+            Constants.Discord.Servers.map(async (guildId) => ({
+              guildId,
+              member: await this.discordMirror.getTeamMember(guildId, discordUserId).catch(() => undefined),
+            })),
+          ),
         ]);
-        const unused =
-          member && (member.roleIds.includes(Team) || member.roleIds.includes(Immich))
-            ? ''
-            : ' (not used: not a member with the Team or Immich role)';
+        const found = members.filter(({ member }) => member);
+        const verified = found.find(({ guildId, member }) => holdsIdentityRole(guildId, member!.roleIds));
+        const member = (verified ?? found[0])?.member;
+        const unused = verified ? '' : ' (not used: not a member with the Team or Immich role)';
         const zulipName = zulipUser ? `${text(p, zulipUser.fullName)} ` : '';
         const discordName = member ? `${text(p, member.displayName)} ` : '';
         return `- ${zulipName}(Zulip user ${zulipUserId}) ↔ ${discordName}(Discord user ${discordUserId})${unused}`;

@@ -21,7 +21,9 @@ const EMOJI_PAGE_SIZE = 200;
 
 export class MattermostRepository implements IMattermostInterface {
   #client: Client4;
-  #wsClient: WebSocketClient;
+  #wsClient?: WebSocketClient;
+  #disabled: boolean;
+  #initialised = false;
   #user!: UserProfile;
   #eventListeners: Partial<{ [K in MattermostEvents]: MattermostEventListener<K>[] }> = {};
   #commandHandlers: Record<
@@ -33,8 +35,13 @@ export class MattermostRepository implements IMattermostInterface {
   constructor() {
     const { mattermost } = getConfig();
 
-    globalThis.WebSocket = WebSocket as never;
     this.#client = new Client4();
+    this.#disabled = mattermost.domain === 'dev' || mattermost.botToken === 'dev';
+    if (this.#disabled) {
+      return;
+    }
+
+    globalThis.WebSocket = WebSocket as never;
     this.#client.setUrl(mattermost.domain);
     this.#client.setToken(mattermost.botToken);
 
@@ -45,14 +52,22 @@ export class MattermostRepository implements IMattermostInterface {
   }
 
   async init() {
+    if (this.#disabled) {
+      return;
+    }
     this.#user = await this.#client.getMe();
 
-    this.#wsClient.addMessageListener(async (msg) => {
+    this.#wsClient!.addMessageListener(async (msg) => {
       // I have to cast the type safety away since the union type becomes too complex for TS
       const listeners = (this.#eventListeners[msg.event] ?? []) as ((msg: unknown) => unknown)[];
       await Promise.all(listeners.map((listener) => listener(msg)));
     });
     await this.clearCommands();
+    this.#initialised = true;
+  }
+
+  isInitialised() {
+    return this.#initialised;
   }
 
   registerEventListener<T extends MattermostEvents>(event: T, listener: MattermostEventListener<T>) {
@@ -86,6 +101,9 @@ export class MattermostRepository implements IMattermostInterface {
     { parameters, ...command }: CommandCreate<T>,
     handler: (data: CommandWebhookRequest<T>) => unknown,
   ) {
+    if (this.#disabled) {
+      return;
+    }
     const id = crypto.randomUUID();
     this.#commandHandlers[id] = { parameters, handler } as never;
 
@@ -224,6 +242,9 @@ export class MattermostRepository implements IMattermostInterface {
   }
 
   async *streamChannels(teamId?: string) {
+    if (this.#disabled) {
+      return;
+    }
     let totalCount: number | undefined;
     let page = 0;
     const pageSize = 100;
