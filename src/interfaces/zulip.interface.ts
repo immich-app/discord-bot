@@ -58,4 +58,6 @@ export interface IZulipInterface {
   registerQueue(): Promise<ZulipQueueRegistration>;
   getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;
   deleteQueue(queueId: string): Promise<void>;
+  /** Emoji name to its Unicode string, from the realm's static emoji table. */
+  getEmojiCodes(): Promise<Record<string, string>>;
 }

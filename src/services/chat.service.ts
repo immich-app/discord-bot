@@ -98,8 +98,8 @@ const toZulipEmojiName = (name: string) => {
 };
 
 /**
- * The suffix is decided from the run alone so it is stable across syncs: an emote uploaded as `catjam2` is
- * found again rather than re-uploaded as `catjam3`.
+ * The suffix is decided from the run and Zulip's built-in names alone so it is stable across syncs: an emote
+ * uploaded as `catjam2` or `fire2` is found again rather than re-uploaded as `catjam3` or `fire3`.
  */
 const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
   const base = toZulipEmojiName(name);
@@ -113,10 +113,11 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
 
 const MATTERMOST_DUPLICATE_EMOJI = 'api.emoji.create.duplicate.app_error';
 
-type ZulipSkipReason = 'unlisted' | 'refused';
+type ZulipSkipReason = 'unlisted' | 'builtins' | 'refused';
 
 const ZULIP_SKIP_REASONS: Record<ZulipSkipReason, string> = {
   unlisted: 'its emoji could not be listed',
+  builtins: 'its built-in emoji names could not be read',
   refused: 'Zulip refused the credentials of the user account that uploads emoji',
 };
 
@@ -809,9 +810,11 @@ ${formattedCode}
     }
     const existing = await this.listZulipEmoji();
     const onMattermost = await this.listMattermostEmoji();
-    const claimed = new Set<string>();
+    // A realm emoji already holding a built-in name (an administrator's override) counts as that emote, already synced.
+    const builtIn = existing ? await this.listZulipBuiltInEmoji() : undefined;
+    const claimed = new Set(builtIn?.filter((name) => !existing?.has(name)));
 
-    let zulipSkipped: ZulipSkipReason | undefined = existing ? undefined : 'unlisted';
+    let zulipSkipped: ZulipSkipReason | undefined = existing ? (builtIn ? undefined : 'builtins') : 'unlisted';
     let zulipUploaded = 0;
     let mattermostUploaded = 0;
     const failed: string[] = [];
@@ -898,6 +901,20 @@ ${formattedCode}
       return new Set(emoji.filter(({ deactivated }) => !deactivated).map(({ name }) => name));
     } catch (error) {
       this.logger.error('Could not list the Zulip emoji, skipping the Zulip side of the sync', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Zulip refuses a built-in emoji's name from a member (`Only administrators can override default emoji.`) and
+   * takes it from an administrator as a realm-wide replacement of the built-in, so those names are never uploaded.
+   * Its logo emoji `zulip` is not in the table, and Zulip lets even a member replace it.
+   */
+  private async listZulipBuiltInEmoji() {
+    try {
+      return [...Object.keys(await this.zulip.getEmojiCodes()), 'zulip'];
+    } catch (error) {
+      this.logger.error('Could not fetch the Zulip built-in emoji names, skipping the Zulip side of the sync', error);
       return undefined;
     }
   }

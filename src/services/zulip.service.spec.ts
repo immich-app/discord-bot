@@ -49,6 +49,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  getEmojiCodes: vitest.fn(),
 });
 
 /** A relevant holiday on the day after the frozen clock, unless overridden. */

@@ -17,6 +17,7 @@ import {
 import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
+const EMOJI_CODES_TIMEOUT_MS = 30_000;
 /** Zulip's default long-poll timeout: a quiet poll gets its heartbeat about this late, so the client adds a margin. */
 const DEFAULT_LONGPOLL_TIMEOUT_SECONDS = 90;
 const LONGPOLL_MARGIN_MS = 30_000;
@@ -29,6 +30,16 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 };
 
 type Clients = { bot: ZulipClient; user: ZulipClient; events: ZulipClient };
+
+const toEmoji = (codepoints: unknown) => {
+  if (typeof codepoints !== 'string' || !/^[\da-f]{1,6}(-[\da-f]{1,6})*$/i.test(codepoints)) {
+    return undefined;
+  }
+  const points = codepoints.split('-').map((hex) => Number.parseInt(hex, 16));
+  return points.every((point) => point <= 0x10_ffff) ? String.fromCodePoint(...points) : undefined;
+};
+
+const notInitialised = () => new Error('Zulip client not initialised: call init() first');
 
 export class ZulipRepository implements IZulipInterface {
   private clients?: Clients;
@@ -66,9 +77,20 @@ export class ZulipRepository implements IZulipInterface {
 
   private client(identity: keyof Clients) {
     if (!this.clients) {
-      throw new Error('Zulip client not initialised: call init() first');
+      throw notInitialised();
     }
     return this.clients[identity];
+  }
+
+  private get site() {
+    if (!this.botIdentity) {
+      throw notInitialised();
+    }
+    const { realm, username, apiKey } = this.botIdentity;
+    return {
+      origin: new URL(realm).origin,
+      authorization: `Basic ${Buffer.from(`${username}:${apiKey}`).toString('base64')}`,
+    };
   }
 
   async sendMessage({ stream, topic, content }: MessagePayload) {
@@ -89,6 +111,28 @@ export class ZulipRepository implements IZulipInterface {
       params: { path: { message_id: id } },
       body: { content, topic, propagate_mode: propagateMode },
     });
+  }
+
+  /** An undocumented static file, served without authentication. */
+  async getEmojiCodes() {
+    const { origin } = this.site;
+    const response = await fetch(`${origin}/static/generated/emoji/emoji_codes.json`, {
+      signal: AbortSignal.timeout(EMOJI_CODES_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`Could not fetch the Zulip emoji codes: ${response.status}`);
+    }
+    const codes = ((await response.json()) as { name_to_codepoint?: unknown } | null)?.name_to_codepoint;
+    if (typeof codes !== 'object' || codes === null || Array.isArray(codes)) {
+      throw new Error('The Zulip emoji codes have no name_to_codepoint table');
+    }
+    return Object.fromEntries(
+      Object.entries(codes).flatMap(([name, codepoints]) => {
+        const emoji = toEmoji(codepoints);
+        return emoji === undefined ? [] : [[name, emoji] as const];
+      }),
+    );
   }
 
   async listEmoji(): Promise<ZulipEmoji[]> {

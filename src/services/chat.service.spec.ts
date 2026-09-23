@@ -148,6 +148,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  getEmojiCodes: vitest.fn(),
 });
 
 const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
@@ -670,6 +671,7 @@ describe('Bot test', () => {
 
     beforeEach(() => {
       zulipMock.listEmoji.mockResolvedValue([]);
+      zulipMock.getEmojiCodes.mockResolvedValue({ fire: '🔥', tada: '🎉', wave: '👋' });
       mattermostMock.listEmoji.mockResolvedValue([]);
     });
 
@@ -824,6 +826,89 @@ describe('Bot test', () => {
         );
       });
 
+      it('should suffix an emote named like a Zulip built-in emoji instead of uploading under the built-in name', async () => {
+        const { interaction, reply } = newInteraction();
+        discordMock.getEmotes.mockResolvedValue([emote('fire', 1), emote('Tada', 2), emote('catJAM', 3)]);
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.getEmojiCodes).toHaveBeenCalledOnce();
+        expect(zulipMock.createEmote.mock.calls).toEqual([
+          ['fire2', 'https://cdn.discordapp.com/emojis/1.webp'],
+          ['tada2', 'https://cdn.discordapp.com/emojis/2.webp'],
+          ['catjam', 'https://cdn.discordapp.com/emojis/3.webp'],
+        ]);
+        expect(mattermostMock.createEmote.mock.calls).toEqual([
+          ['fire', 'https://cdn.discordapp.com/emojis/1.webp'],
+          ['Tada', 'https://cdn.discordapp.com/emojis/2.webp'],
+          ['catJAM', 'https://cdn.discordapp.com/emojis/3.webp'],
+        ]);
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: fire → fire2, Tada → tada2',
+        );
+      });
+
+      it('should suffix an emote named like the Zulip logo emoji, which is not in the built-in table', async () => {
+        const { interaction, reply } = newInteraction();
+        discordMock.getEmotes.mockResolvedValue([emote('Zulip', 1), emote('zulip', 2)]);
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.createEmote.mock.calls).toEqual([
+          ['zulip2', 'https://cdn.discordapp.com/emojis/1.webp'],
+          ['zulip3', 'https://cdn.discordapp.com/emojis/2.webp'],
+        ]);
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 2 emotes, 2 uploaded to Zulip, 2 uploaded to Mattermost, 2 renamed: Zulip → zulip2, zulip → zulip3',
+        );
+      });
+
+      it('should skip a suffix that is built-in or already claimed in the run', async () => {
+        const { interaction, reply } = newInteraction();
+        zulipMock.getEmojiCodes.mockResolvedValue({ fire: '🔥', fire3: '🔥' });
+        discordMock.getEmotes.mockResolvedValue([emote('fire2', 1), emote('fire', 2), emote('FIRE', 3)]);
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.createEmote.mock.calls).toEqual([
+          ['fire2', 'https://cdn.discordapp.com/emojis/1.webp'],
+          ['fire4', 'https://cdn.discordapp.com/emojis/2.webp'],
+          ['fire5', 'https://cdn.discordapp.com/emojis/3.webp'],
+        ]);
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: fire → fire4, FIRE → fire5',
+        );
+      });
+
+      it('should count a realm emoji that already overrides a built-in name as that emote, uploading no suffixed copy', async () => {
+        const { interaction, reply } = newInteraction();
+        zulipMock.listEmoji.mockResolvedValue([{ name: 'fire', deactivated: false }]);
+        discordMock.getEmotes.mockResolvedValue([emote('fire', 1), emote('Fire', 2), emote('tada', 3)]);
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.createEmote.mock.calls).toEqual([
+          ['fire2', 'https://cdn.discordapp.com/emojis/2.webp'],
+          ['tada2', 'https://cdn.discordapp.com/emojis/3.webp'],
+        ]);
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 3 emotes, 2 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: Fire → fire2, tada → tada2, 1 already on Zulip: fire',
+        );
+      });
+
+      it('should suffix an emote named like a built-in whose override is deactivated', async () => {
+        const { interaction } = newInteraction();
+        zulipMock.listEmoji.mockResolvedValue([{ name: 'fire', deactivated: true }]);
+        discordMock.getEmotes.mockResolvedValue([emote('fire', 1)]);
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.createEmote).toHaveBeenCalledExactlyOnceWith(
+          'fire2',
+          'https://cdn.discordapp.com/emojis/1.webp',
+        );
+      });
+
       it('should skip an emote whose name is already on Zulip instead of uploading it again', async () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('pepeD', 2)]);
@@ -851,8 +936,13 @@ describe('Bot test', () => {
         expect(reply.edit).toHaveBeenCalledWith('Done syncing: 1 emote, 1 uploaded to Zulip, 1 uploaded to Mattermost');
       });
 
-      it('should be a no-op on Zulip when synced twice, suffixed names included', async () => {
-        discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('CatJam', 2), emote('nameless:3', 3)]);
+      it('should be a no-op on Zulip when synced twice, suffixed and built-in names included', async () => {
+        discordMock.getEmotes.mockResolvedValue([
+          emote('catJAM', 1),
+          emote('CatJam', 2),
+          emote('nameless:3', 3),
+          emote('wave', 4),
+        ]);
 
         await syncEmotes(newInteraction().interaction);
 
@@ -860,11 +950,12 @@ describe('Bot test', () => {
           ['catjam', 'https://cdn.discordapp.com/emojis/1.webp'],
           ['catjam2', 'https://cdn.discordapp.com/emojis/2.webp'],
           ['nameless_3', 'https://cdn.discordapp.com/emojis/3.webp'],
+          ['wave2', 'https://cdn.discordapp.com/emojis/4.webp'],
         ]);
 
         zulipMock.createEmote.mockClear();
         zulipMock.listEmoji.mockResolvedValue(
-          ['catjam', 'catjam2', 'nameless_3'].map((name) => ({ name, deactivated: false })),
+          ['catjam', 'catjam2', 'nameless_3', 'wave2'].map((name) => ({ name, deactivated: false })),
         );
         const { interaction, reply } = newInteraction();
 
@@ -872,7 +963,7 @@ describe('Bot test', () => {
 
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 0 uploaded to Zulip, 3 uploaded to Mattermost, 3 already on Zulip: catJAM, CatJam → catjam2, nameless:3 → nameless_3',
+          'Done syncing: 4 emotes, 0 uploaded to Zulip, 4 uploaded to Mattermost, 4 already on Zulip: catJAM, CatJam → catjam2, nameless:3 → nameless_3, wave → wave2',
         );
       });
     });
@@ -1074,6 +1165,7 @@ describe('Bot test', () => {
 
         await syncEmotes(interaction);
 
+        expect(zulipMock.getEmojiCodes).not.toHaveBeenCalled();
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
         expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
         expect(Logger.prototype.error).toHaveBeenCalledOnce();
@@ -1095,6 +1187,23 @@ describe('Bot test', () => {
 
         expect(reply.edit).toHaveBeenCalledWith(
           'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD',
+        );
+      });
+
+      it('should skip Zulip and say so when the built-in emoji names cannot be read, and still sync Mattermost', async () => {
+        const { interaction, reply } = newInteraction();
+        zulipMock.getEmojiCodes.mockRejectedValue(new Error('Could not fetch the Zulip emoji codes: 502'));
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.createEmote).not.toHaveBeenCalled();
+        expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
+        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+          'Could not fetch the Zulip built-in emoji names, skipping the Zulip side of the sync',
+          expect.any(Error),
+        );
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its built-in emoji names could not be read), 3 uploaded to Mattermost',
         );
       });
 
