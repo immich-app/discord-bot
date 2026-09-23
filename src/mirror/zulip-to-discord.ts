@@ -49,7 +49,15 @@ const WILDCARDS = new Set(['all', 'everyone', 'channel', 'stream', 'topic']);
 
 export const escapeDiscordInline = (text: string) => escapeMarkdown(text).replaceAll('@', '@\u200B');
 
-const QUOTE_REPLY = /^@_\*\*([^*\n]*?)(?:\|(\d+))?\*\* \[[^\]\n]*\]\([^()\s]*\/(?:near|with)\/(\d+)[^()\s]*\):[ \t]*$/;
+/** A forward, and the first message of a quote of several, also name where the message was: `in <topic link>` or `to …`. */
+const QUOTE_REPLY =
+  /^@_\*\*([^*\n]*?)(?:\|(\d+))?\*\* \[[^\]\n]*\]\([^()\s]*\/(?:near|with)\/(\d+)[^()\s]*\)(?:[ \t][^\n]*)?:[ \t]*$/;
+
+/**
+ * Zulip writes a channel or topic whose name it cannot put in `#**…**` syntax as a link labelled `#channel > topic`,
+ * and names the topic a forward comes from the same way, so such a label is as internal as the syntax.
+ */
+const isChannelLabel = (label: string) => label.trimStart().startsWith('#');
 
 const INLINE = new RegExp(
   [
@@ -219,12 +227,19 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
           if (upload) {
             return queueUpload(upload, at) && aloneOnLine(at!, at! + match.length) ? DROP : label;
           }
+          const hidden = isChannelLabel(groups.label);
           if (target.startsWith('#narrow/') || realmUrl(target)) {
             const messageId = /\/(?:near|with)\/(\d+)/.exec(target)?.[1];
             const message = messageId === undefined ? undefined : lookups.message(Number(messageId));
-            return message ? `[${label}](${message.jumpUrl})` : `${label} ${ZULIP_LINK}`;
+            if (message) {
+              return `[${label}](${message.jumpUrl})`;
+            }
+            return hidden ? ZULIP_LINK : `${label} ${ZULIP_LINK}`;
           }
-          return /^https?:\/\//i.test(target) ? `[${label}](${target.replaceAll(' ', '%20')})` : label;
+          if (/^https?:\/\//i.test(target)) {
+            return `[${label}](${target.replaceAll(' ', '%20')})`;
+          }
+          return hidden ? ZULIP_LINK : label;
         }
 
         if (groups.mention !== undefined) {

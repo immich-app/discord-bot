@@ -130,6 +130,24 @@ describe('toDiscordMirrorContent', () => {
       );
     });
 
+    it.each([
+      [
+        'a topic',
+        '[#immich-team > &#91;RFC&#93; hiring plan](#narrow/channel/9-immich-team/topic/.5BRFC.5D.20hiring.20plan)',
+      ],
+      ['a channel', '[#immich-team &#42;](#narrow/channel/9-immich-team)'],
+      ['a message', `[#immich-team > x&#96; @ 💬](${REALM}/#narrow/channel/9-immich-team/topic/x.60/near/999)`],
+      ['anything else', '[#immich-team > x](/#narrow/channel/9-immich-team)'],
+    ])('should hide the channel and topic names Zulip puts in the label of a link to %s', (_, link) => {
+      expect(text(`see ${link} now`)).toBe('see *(Zulip link)* now');
+    });
+
+    it('should keep the label of a channel link to a mirrored message', () => {
+      expect(text('[#immich-dev > x @ 💬](#narrow/channel/9-immich-dev/topic/x/near/101)')).toBe(
+        `[#immich-dev > x @ 💬](${JUMP_DISCORD})`,
+      );
+    });
+
     it('should keep only the label of a link to anything else', () => {
       expect(text('[help](/help) [mail](mailto:a@b.c) [top](#top)')).toBe('help mail top');
     });
@@ -253,6 +271,27 @@ describe('toDiscordMirrorContent', () => {
     it('should keep a quoted code block in the quote', () => {
       expect(text(quoteReply(999, 'look\n```js\nconst a = @**all**;\n```', '````'))).toBe(
         '-# ↩ Someone said:\n> look\n> ```js\n> const a = @**all**;\n> ```',
+      );
+    });
+
+    it.each([
+      [
+        'a forward from a channel',
+        `@_**Iago|5** [said](${REALM}/#narrow/channel/9-immich-security/topic/CVE-2026.20in.20.60auth.60/near/999) in [#immich-security > CVE-2026 in &#96;auth&#96;](#narrow/channel/9-immich-security/topic/CVE-2026.20in.20.60auth.60/with/999):`,
+      ],
+      [
+        'a forward from a topic with a plain name',
+        `@_**Iago|5** [said](${REALM}/#narrow/channel/9-immich-team/topic/security.20embargo/near/999) in [#immich-team > security embargo](#narrow/channel/9-immich-team/topic/security.20embargo/with/999):`,
+      ],
+      ['a forward from a direct message', `@_**Iago|5** [said](${REALM}/#narrow/dm/5,8-dm/near/999) to @_**Zack|8**:`],
+    ])('should read the header of %s as a quote, leaving out where it came from', (_, header) => {
+      expect(text(`${header}\n\`\`\`quote\nthe details\n\`\`\`\nFYI`)).toBe('-# ↩ Iago said:\n> the details\nFYI');
+    });
+
+    it('should hide where a later quote header says a message came from', () => {
+      const header = `@_**Iago|5** [said](${REALM}/#narrow/channel/9-immich-team/topic/x/near/998) in [#immich-team > x](#narrow/channel/9-immich-team/topic/x/with/998):`;
+      expect(text(`hi\n${header}\n\`\`\`quote\ny\n\`\`\``)).toBe(
+        'hi\n@Iago said *(Zulip link)* in *(Zulip link)*:\n> y',
       );
     });
 
