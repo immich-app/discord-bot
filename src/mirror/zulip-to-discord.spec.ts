@@ -415,6 +415,19 @@ describe('splitDiscordContent', () => {
     ).toBe(`intro\n\`\`\`ts\n${code}\n\`\`\`\noutro`);
   });
 
+  it('should not reopen a code block that closed before the split', () => {
+    const snippet = '```js\nconst a = 1;\n```';
+    const prose = Array.from({ length: 700 }, (_, index) => `w${index % 10}xy`).join(' ');
+    const parts = splitDiscordContent(`${snippet}\n${prose}`);
+
+    expect(parts[0]).toBe(snippet);
+    expect(lengths(parts)).toEqual([22, 1994, 1504]);
+    for (const part of parts.slice(1)) {
+      expect(part).not.toContain('```');
+    }
+    expect(parts.slice(1).join(' ')).toBe(prose);
+  });
+
   it('should not end a part on the opening line of a code block', () => {
     const parts = splitDiscordContent(`${'a'.repeat(1990)}\n\`\`\`js\n${'b\n'.repeat(900)}\`\`\``);
     expect(parts[0]).toBe('a'.repeat(1990));
