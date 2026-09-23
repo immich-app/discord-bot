@@ -1128,7 +1128,7 @@ export class MirrorService implements OnModuleDestroy {
   private async recheckOnZulip(state: PairState, rows: MirrorMessage[]) {
     const { pair } = state;
     const hashes = new Map(rows.map(({ zulipMessageId, sourceHash }) => [zulipMessageId, sourceHash]));
-    const ids = [...hashes.keys()];
+    const ids = [...hashes.keys()].toSorted((a, b) => a - b);
     if (ids.length === 0 || !this.subscribedStreams.has(pair.zulipStreamId)) {
       return [];
     }
@@ -1145,6 +1145,8 @@ export class MirrorService implements OnModuleDestroy {
       return [];
     }
     const ops: Op[] = [];
+    // An unreadable message counts as deleted, as it does live: Zulip sends a delete_message event to a user who
+    // loses access to a moved message.
     const gone = ids.filter((id) => !found.has(id));
     if (found.size === 0) {
       return [];
@@ -1984,7 +1986,7 @@ export class MirrorService implements OnModuleDestroy {
             state,
             messageId,
             { uploads: added, spoilerUploads: rendered.spoilerUploads },
-            MAX_FILES - Math.min(earlier!.length, MAX_FILES),
+            await this.freeFileSlots(rows[0], earlier!.length),
           )
         : { files: [], notes: [] };
     let parts = withNotes(rendered.text, upload.notes);
@@ -2033,6 +2035,15 @@ export class MirrorService implements OnModuleDestroy {
     const complete = all.every(({ part, deletedAt }, index) => part === index && deletedAt === null);
     if (complete && parts.length > rows.length) {
       await this.appendParts(state, rows, parts.slice(rows.length), hash);
+    }
+  }
+
+  /** Uploads the first mirroring turned into notes left their slots free, so the copy itself is counted. */
+  private async freeFileSlots(row: MirrorMessage, earlierUploads: number) {
+    try {
+      return MAX_FILES - Math.min(await this.discordMirror.countMirrorAttachments(toTarget(row)), MAX_FILES);
+    } catch {
+      return MAX_FILES - Math.min(earlierUploads, MAX_FILES);
     }
   }
 
@@ -2297,18 +2308,17 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   /** Resolving a topic archives its thread, and unresolving it takes the thread out of the archive. */
-  private async archiveThread(state: PairState, conversation: MirrorConversation) {
+  private async archiveThread(state: PairState, conversation: MirrorConversation, attempt = 1) {
     const threadId = conversation.discordThreadId!;
     const archive = isResolvedTopic(conversation.zulipTopic);
-    const later = async () => {
+    const label = `${archive ? 'archiving' : 'unarchiving'} of Discord thread ${threadId}`;
+    const later = (next: number) => async () => {
       const current = await this.database.getMirrorConversation(conversation.id);
       if (current) {
-        await this.archiveThread(state, current);
+        await this.archiveThread(state, current, next);
       }
     };
-    if (
-      this.holdFor(state, 'Discord', `${archive ? 'archiving' : 'unarchiving'} of Discord thread ${threadId}`, later)
-    ) {
+    if (this.holdFor(state, 'Discord', label, later(attempt))) {
       return;
     }
     try {
@@ -2318,6 +2328,8 @@ export class MirrorService implements OnModuleDestroy {
     } catch (error) {
       if (isMirrorError(error, 'unknown-channel')) {
         await this.detach(state, conversation, 'the Discord thread no longer exists');
+      } else if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
+        this.retryOnDiscord(state, label, attempt, (next) => later(next)());
       } else {
         this.logger.warn(
           `${state.pair.key}: could not ${archive ? 'archive' : 'unarchive'} Discord thread ${threadId} after its Zulip topic was ${archive ? 'resolved' : 'unresolved'}: ${describe(error)}`,

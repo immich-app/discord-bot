@@ -121,6 +121,7 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
     target: DiscordMirrorTarget,
     edit: { content: string; suppressEmbeds: boolean; files?: File[] },
   ): Promise<void>;
+  countMirrorAttachments(target: DiscordMirrorTarget): Promise<number>;
   /** Through the webhook; through the bot (Manage Messages) when the target's webhook is gone or replaced. */
   deleteMirrorMessage(target: DiscordMirrorTarget): Promise<void>;
   startMirrorThread(channelId: string, messageId: string, name: string): Promise<string>;

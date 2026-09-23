@@ -512,6 +512,23 @@ describe(DiscordRepository.name, () => {
     });
   });
 
+  describe('countMirrorAttachments', () => {
+    beforeEach(resolveWebhook);
+
+    it('should count the attachments the copy has, in its thread', async () => {
+      webhook.fetchMessage.mockResolvedValue({ attachments: [{ id: '1' }, { id: '2' }] });
+
+      await expect(sut.countMirrorAttachments(target())).resolves.toBe(2);
+      expect(webhook.fetchMessage).toHaveBeenCalledWith('300000000000000001', { threadId });
+    });
+
+    it('should refuse a copy another webhook sent', async () => {
+      await expect(sut.countMirrorAttachments(target({ webhookId: '999' }))).rejects.toMatchObject({
+        kind: 'replaced-webhook',
+      });
+    });
+  });
+
   describe('editMirrorMessage', () => {
     beforeEach(resolveWebhook);
 

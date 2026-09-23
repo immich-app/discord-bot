@@ -301,6 +301,7 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
       const messageId = String(++snowflake);
       return { messageId, channelId: threadId ?? (threadName ? messageId : channelId), webhookId: WEBHOOK };
     }),
+    countMirrorAttachments: vitest.fn().mockResolvedValue(0),
     editMirrorMessage: vitest.fn().mockResolvedValue(undefined),
     deleteMirrorMessage: vitest.fn().mockResolvedValue(undefined),
     startMirrorThread: vitest.fn(async (_channelId: string, messageId: string) => messageId),
@@ -2695,6 +2696,41 @@ describe(MirrorService.name, () => {
         });
       });
 
+      it('should give an edit the file slots the Discord copy has free, not those its old uploads would take', async () => {
+        const old = Array.from({ length: 10 }, (_, index) => `[f${index}.png](/user_uploads/2/ab/cdef/f${index}.png)`);
+        await fromZulip(zulipMessage({ content: ['look', ...old].join('\n') }));
+        discord.countMirrorAttachments.mockResolvedValueOnce(7);
+        zulip.downloadUpload.mockClear();
+
+        await updateFromZulip({
+          messageId: 1001,
+          content: ['look', ...old, `[log.txt](${LOG})`].join('\n'),
+          origContent: ['look', ...old].join('\n'),
+        });
+
+        expect(discord.countMirrorAttachments).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ messageId: db.messages[0].discordMessageId }),
+        );
+        expect(zulip.downloadUpload.mock.calls.map(([path]) => path)).toEqual([LOG]);
+        expect(files(0)).toEqual(['log.txt']);
+      });
+
+      it('should fall back to its old uploads when the Discord copy cannot be counted', async () => {
+        const old = Array.from({ length: 10 }, (_, index) => `[f${index}.png](/user_uploads/2/ab/cdef/f${index}.png)`);
+        await fromZulip(zulipMessage({ content: ['look', ...old].join('\n') }));
+        discord.countMirrorAttachments.mockRejectedValueOnce(new DiscordMirrorError('unavailable'));
+        zulip.downloadUpload.mockClear();
+
+        await updateFromZulip({
+          messageId: 1001,
+          content: ['look', ...old, `[log.txt](${LOG})`].join('\n'),
+          origContent: ['look', ...old].join('\n'),
+        });
+
+        expect(zulip.downloadUpload).not.toHaveBeenCalled();
+        expect(discord.editMirrorMessage.mock.calls[0][1].content).toContain('*(attachment not mirrored: log.txt)*');
+      });
+
       it('should attach nothing to an edit it does not know the content before of', async () => {
         await fromZulip(zulipMessage({ content: 'look' }));
 
@@ -3392,6 +3428,21 @@ describe(MirrorService.name, () => {
       await updateFromZulip({ messageId: 1001, topic: 'Crash on start', propagateMode: 'change_all' });
       expect(discord.archiveMirrorThread).toHaveBeenCalledOnce();
       expect(discord.unarchiveMirrorThread).toHaveBeenCalledOnce();
+    });
+
+    it('should archive again soon when Discord fails for now', async () => {
+      vitest.useFakeTimers();
+      discord.archiveMirrorThread.mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+
+      await updateFromZulip({ messageId: 1001, topic: '✔ Crash', propagateMode: 'change_all' });
+      expect(discord.archiveMirrorThread).toHaveBeenCalledOnce();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(discord.archiveMirrorThread).toHaveBeenCalledTimes(2);
+      expect(discord.archiveMirrorThread).toHaveBeenLastCalledWith(threadId);
+      expect(error()).not.toHaveBeenCalled();
     });
 
     it('should say so when the thread cannot be archived, and archive it once Discord is back', async () => {

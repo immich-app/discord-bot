@@ -440,6 +440,19 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
+  async countMirrorAttachments(target: DiscordMirrorTarget) {
+    const webhook = this.getMirrorWebhook(target.channelId);
+    if (target.webhookId !== webhook.id) {
+      throw new DiscordMirrorError('replaced-webhook');
+    }
+    try {
+      const thread = target.threadId === null ? {} : { threadId: target.threadId };
+      return (await webhook.fetchMessage(target.messageId, thread)).attachments.length;
+    } catch (error) {
+      throw this.toWebhookError(target.channelId, webhook, error);
+    }
+  }
+
   async deleteMirrorMessage(target: DiscordMirrorTarget) {
     const webhook = this.mirrorWebhooks.get(target.channelId);
     if (webhook && target.webhookId === webhook.id) {
