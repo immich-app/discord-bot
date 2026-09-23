@@ -1042,8 +1042,10 @@ describe('ZulipRepository', () => {
       '/user_uploads/2/ab/cd/x\\y.txt',
       '/user_uploads/2/ab/cd/x.txt?download=1',
       '/user_uploads/2/ab/cd/x.txt#y',
-      '/user_uploads/2/ab/x.txt',
+      '/user_uploads/2/x.txt',
+      '/user_uploads/2/ab/cd/ef/x.txt',
       '/user_uploads/2/a.b/cd/x.txt',
+      '/user_uploads/2/a.b/x.txt',
       '/user_uploads/2/ab/cd/r%zz.txt',
       '/user_uploads/2/ab/cd/x\t.txt',
       '/user_uploads/2/ab/cd/.\t.',
@@ -1055,6 +1057,18 @@ describe('ZulipRepository', () => {
       await expect(sut.downloadUpload(path, 100)).rejects.toThrow(ZulipUploadRefused);
 
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the local storage backend', '/user_uploads/2/ab/qdRdXY3QKsb8yYyc9IIyFjmC/pixel.png'],
+      ['the S3 backend', '/user_uploads/2/qdRdXY3QKsb8yYyc9IIyFjmC/pixel.png'],
+    ])('should download a file stored by %s', async (_, path) => {
+      fetchMock.mockResolvedValue(file());
+
+      const result = await sut.downloadUpload(path, 100);
+
+      expect(result!.name).toBe('pixel.png');
+      expect(request(0).url).toBe(`https://zulip.example.com${path}`);
     });
 
     it.each([

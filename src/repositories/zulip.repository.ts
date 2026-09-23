@@ -39,7 +39,8 @@ const CLIENT_CAPABILITIES: unknown = { notification_settings_null: false, bulk_m
 
 type Clients = { bot: ZulipClient; user: ZulipClient; uploads: ZulipClient; events: ZulipClient };
 
-const UPLOAD_PATH = /^\/user_uploads\/\d+\/[\w-]+\/[\w-]+\/([^/?#\\]+)$/;
+/** The local storage backend puts a hashed directory before the random one; the S3 backend does not. */
+const UPLOAD_PATH = /^\/user_uploads\/\d+\/(?:[\w-]+\/)?[\w-]+\/([^/?#\\]+)$/;
 
 /**
  * The bot's credentials go with the request, so a path that URL normalisation or the server could steer to another
