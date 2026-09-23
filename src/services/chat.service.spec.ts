@@ -12,6 +12,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
@@ -1090,6 +1091,59 @@ describe('Bot test', () => {
         );
       });
 
+      describe('Zulip refusing the user account', () => {
+        const unauthorized = () =>
+          new ZulipApiError(401, 'UNAUTHORIZED', 'Malformed API key', 'POST /api/v1/realm/emoji/peped');
+        const REFUSED =
+          'Zulip refused the credentials of the user account that uploads emoji (Malformed API key), so no more emotes are uploaded to Zulip in this sync; check ZULIP_USER_USERNAME and ZULIP_USER_API_KEY';
+
+        it('should stop uploading to Zulip, log it once without the key, blame no emote, and keep syncing Mattermost', async () => {
+          const { interaction, reply } = newInteraction();
+          zulipMock.createEmote.mockRejectedValue(unauthorized());
+
+          await syncEmotes(interaction);
+
+          expect(zulipMock.createEmote).toHaveBeenCalledOnce();
+          expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
+          expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(REFUSED);
+          expect(reply.edit).toHaveBeenCalledWith(
+            'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: Zulip refused the credentials of the user account that uploads emoji), 3 uploaded to Mattermost',
+          );
+        });
+
+        it('should count what Zulip took before it refused, and report no rename it did not make', async () => {
+          const { interaction, reply } = newInteraction();
+          zulipMock.createEmote.mockResolvedValueOnce().mockRejectedValue(unauthorized());
+
+          await syncEmotes(interaction);
+
+          expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads.slice(0, 2));
+          expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(REFUSED);
+          expect(reply.edit).toHaveBeenCalledWith(
+            'Done syncing: 3 emotes, 1 uploaded to Zulip (skipped: Zulip refused the credentials of the user account that uploads emoji), 3 uploaded to Mattermost',
+          );
+        });
+
+        it('should still fail an emote on another Zulip error', async () => {
+          const { interaction, reply } = newInteraction();
+          zulipMock.createEmote.mockRejectedValueOnce(
+            new ZulipApiError(
+              400,
+              'BAD_REQUEST',
+              'Invalid characters in emoji name',
+              'POST /api/v1/realm/emoji/catjam',
+            ),
+          );
+
+          await syncEmotes(interaction);
+
+          expect(zulipMock.createEmote).toHaveBeenCalledTimes(3);
+          expect(reply.edit).toHaveBeenCalledWith(
+            `Done syncing: 3 emotes, 2 uploaded to Zulip, 3 uploaded to Mattermost, 1 failed: catJAM, ${renamed}`,
+          );
+        });
+      });
+
       it("should keep the report within Discord's message limit when every emote fails", async () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue(
@@ -1122,7 +1176,6 @@ describe('Bot test', () => {
       total: 3,
       zulipUploaded: 1,
       mattermostUploaded: 2,
-      zulipSkipped: false,
       failed: ['pepeD'],
       renamed: [],
       alreadyOnZulip: ['catJAM'],

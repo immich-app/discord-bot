@@ -16,6 +16,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
@@ -110,11 +111,18 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
 
 const MATTERMOST_DUPLICATE_EMOJI = 'api.emoji.create.duplicate.app_error';
 
+type ZulipSkipReason = 'unlisted' | 'refused';
+
+const ZULIP_SKIP_REASONS: Record<ZulipSkipReason, string> = {
+  unlisted: 'its emoji could not be listed',
+  refused: 'Zulip refused the credentials of the user account that uploads emoji',
+};
+
 export type EmoteSyncReport = {
   total: number;
   zulipUploaded: number;
   mattermostUploaded: number;
-  zulipSkipped: boolean;
+  zulipSkipped?: ZulipSkipReason;
   failed: string[];
   renamed: string[];
   alreadyOnZulip: string[];
@@ -140,7 +148,7 @@ export const formatEmoteSyncReport = (
   }
   const outcome = [
     plural(total, 'emote'),
-    `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ' (skipped: its emoji could not be listed)' : ''}`,
+    `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ` (skipped: ${ZULIP_SKIP_REASONS[zulipSkipped]})` : ''}`,
     `${mattermostUploaded} uploaded to Mattermost`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
@@ -778,6 +786,7 @@ ${formattedCode}
     const onMattermost = await this.listMattermostEmoji();
     const claimed = new Set<string>();
 
+    let zulipSkipped: ZulipSkipReason | undefined = existing ? undefined : 'unlisted';
     let zulipUploaded = 0;
     let mattermostUploaded = 0;
     const failed: string[] = [];
@@ -790,17 +799,22 @@ ${formattedCode}
 
       // One bad emote, or one platform being down, must not abort the rest of the sync.
       let zulipFailed = false;
-      if (existing) {
+      if (existing && !zulipSkipped) {
         const zulipName = claimZulipEmojiName(name, claimed);
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
         if (existing.has(zulipName)) {
           alreadyOnZulip.push(asZulip);
         } else {
-          if (asZulip !== name) {
-            renamed.push(asZulip);
+          const zulip = await this.uploadToZulip(name, zulipName, url);
+          if (zulip === 'refused') {
+            zulipSkipped = 'refused';
+          } else {
+            if (asZulip !== name) {
+              renamed.push(asZulip);
+            }
+            zulipUploaded += zulip === 'uploaded' ? 1 : 0;
+            zulipFailed = zulip === 'failed';
           }
-          zulipFailed = !(await this.syncEmote('Zulip', name, url, () => this.zulip.createEmote(zulipName, url)));
-          zulipUploaded += zulipFailed ? 0 : 1;
         }
       }
       const mattermost = onMattermost?.has(name) ? 'exists' : await this.uploadToMattermost(name, url);
@@ -818,7 +832,7 @@ ${formattedCode}
       total: emotes.length,
       zulipUploaded,
       mattermostUploaded,
-      zulipSkipped: !existing,
+      zulipSkipped,
       failed,
       renamed,
       alreadyOnZulip,
@@ -863,13 +877,24 @@ ${formattedCode}
     }
   }
 
-  private async syncEmote(platform: string, name: string, url: string, upload: () => Promise<void>) {
+  /** A refused key refuses every upload, so it is reported once, by Zulip's reason (never the key), rather than per emote. */
+  private async uploadToZulip(
+    name: string,
+    zulipName: string,
+    url: string,
+  ): Promise<'uploaded' | 'refused' | 'failed'> {
     try {
-      await upload();
-      return true;
+      await this.zulip.createEmote(zulipName, url);
+      return 'uploaded';
     } catch (error) {
-      this.logger.error(`Could not sync emote ${name} - ${url} to ${platform}`, error);
-      return false;
+      if (error instanceof ZulipApiError && error.status === 401) {
+        this.logger.error(
+          `Zulip refused the credentials of the user account that uploads emoji (${error.msg}), so no more emotes are uploaded to Zulip in this sync; check ZULIP_USER_USERNAME and ZULIP_USER_API_KEY`,
+        );
+        return 'refused';
+      }
+      this.logger.error(`Could not sync emote ${name} - ${url} to Zulip`, error);
+      return 'failed';
     }
   }
 
