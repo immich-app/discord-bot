@@ -642,6 +642,35 @@ describe(MirrorService.name, () => {
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
     });
 
+    it('should find a webhook it could not set up later, without using up the hourly recreation', async () => {
+      discord.ensureMirrorWebhook.mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+      await start();
+
+      discord.sendMirrorMessage.mockRejectedValueOnce(
+        new DiscordMirrorError('unknown-webhook', undefined, 'The mirror webhook is not resolved'),
+      );
+      await fromZulip(zulipMessage());
+      discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('unknown-webhook', 10_015));
+      await fromZulip(zulipMessage({ id: 1002 }));
+
+      expect(discord.ensureMirrorWebhook).toHaveBeenCalledTimes(5);
+      expect(db.messages.map(({ zulipMessageId }) => zulipMessageId)).toEqual([1001, 1002]);
+    });
+
+    it('should recreate a deleted webhook again when the last recreation failed', async () => {
+      await start();
+
+      discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('unknown-webhook', 10_015));
+      discord.ensureMirrorWebhook.mockRejectedValueOnce(new DiscordMirrorError('forbidden', 50_013));
+      await fromZulip(zulipMessage());
+      discord.sendMirrorMessage.mockRejectedValueOnce(
+        new DiscordMirrorError('unknown-webhook', undefined, 'The mirror webhook is not resolved'),
+      );
+      await fromZulip(zulipMessage({ id: 1002 }));
+
+      expect(db.messages.map(({ zulipMessageId }) => zulipMessageId)).toEqual([1002]);
+    });
+
     it('should warn about a mirror stream the Zulip bot is not subscribed to', async () => {
       sut.init();
       await sut.onDiscordReady();

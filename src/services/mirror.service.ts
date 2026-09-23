@@ -97,6 +97,8 @@ type PairState = {
   guildId?: string;
   channelName?: string;
   announced: boolean;
+  /** Whether the webhook was ever found, so that a missing one means Discord deleted it, not a failed first lookup. */
+  webhookFound: boolean;
   webhookRecreatedAt?: number;
   catchUpQueued: boolean;
   /** Live creates wait until catch-up has run: mirroring one first would move the high-water mark past what was missed. */
@@ -301,6 +303,7 @@ export class MirrorService implements OnModuleDestroy {
       queue: new SerialQueue(pair.key, this.logger),
       status: 'pending',
       announced: false,
+      webhookFound: false,
       catchUpQueued: false,
       caughtUp: false,
       generation: 0,
@@ -480,6 +483,7 @@ export class MirrorService implements OnModuleDestroy {
     state.channelName = channel.name;
     try {
       await this.discordMirror.ensureMirrorWebhook(pair.discordChannelId);
+      state.webhookFound = true;
     } catch (error) {
       this.fail(`${pair.key}: could not set up the mirror webhook in Discord channel ${pair.discordChannelId}`, error);
     }
@@ -853,12 +857,15 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async recreateWebhook(state: PairState) {
-    const now = Date.now();
-    if (state.webhookRecreatedAt !== undefined && now - state.webhookRecreatedAt < HOUR) {
+    const recreating = state.webhookFound;
+    if (recreating && state.webhookRecreatedAt !== undefined && Date.now() - state.webhookRecreatedAt < HOUR) {
       return false;
     }
-    state.webhookRecreatedAt = now;
     await this.discordMirror.ensureMirrorWebhook(state.pair.discordChannelId);
+    state.webhookFound = true;
+    if (recreating) {
+      state.webhookRecreatedAt = Date.now();
+    }
     return true;
   }
 
