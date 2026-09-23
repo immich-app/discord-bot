@@ -858,6 +858,7 @@ describe('ZulipRepository', () => {
             topic: undefined,
             propagateMode: undefined,
             content: 'see #4243',
+            origContent: 'see #4242',
           },
         },
         {

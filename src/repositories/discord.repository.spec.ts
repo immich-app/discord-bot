@@ -101,10 +101,11 @@ const makeWebhook = (id: string, overrides: Record<string, unknown> = {}) => {
     send: vitest.fn(),
     editMessage: vitest.fn(),
     deleteMessage: vitest.fn(),
+    fetchMessage: vitest.fn(),
     ...overrides,
   };
-  const { send, editMessage, deleteMessage } = webhook;
-  webhookClients.set(id, { id, send, editMessage, deleteMessage, destroy: vitest.fn() });
+  const { send, editMessage, deleteMessage, fetchMessage } = webhook;
+  webhookClients.set(id, { id, send, editMessage, deleteMessage, fetchMessage, destroy: vitest.fn() });
   return webhook;
 };
 
@@ -532,6 +533,26 @@ describe(DiscordRepository.name, () => {
         content: 'edited',
         allowedMentions: { parse: [], users: [] },
         flags: [],
+      });
+    });
+
+    it('should add files to the attachments the message keeps', async () => {
+      webhook.fetchMessage.mockResolvedValue({ attachments: [{ id: '900000000000000001', filename: 'shot.png' }] });
+
+      await sut.editMirrorMessage(target(), {
+        content: 'edited',
+        suppressEmbeds: false,
+        files: [new File(['bytes'], 'log.txt')],
+      });
+
+      expect(webhook.fetchMessage).toHaveBeenCalledWith('300000000000000001', { threadId });
+      expect(webhook.editMessage).toHaveBeenCalledWith('300000000000000001', {
+        content: 'edited',
+        allowedMentions: { parse: [], users: [] },
+        flags: [],
+        threadId,
+        files: [{ attachment: Buffer.from('bytes'), name: 'log.txt' }],
+        attachments: [{ id: '900000000000000001' }],
       });
     });
 

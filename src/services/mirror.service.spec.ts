@@ -2642,6 +2642,99 @@ describe(MirrorService.name, () => {
       expect(error()).not.toHaveBeenCalled();
     });
 
+    describe('files added by an edit', () => {
+      const SHOT = '/user_uploads/2/ab/cdef/shot.png';
+      const LOG = '/user_uploads/2/ab/cdef/log.txt';
+      const files = (call: number) =>
+        discord.editMirrorMessage.mock.calls[call][1].files?.map(({ name }) => name) ?? [];
+
+      it('should attach the uploads an edit adds to the first part, keeping the ones it had', async () => {
+        await fromZulip(zulipMessage({ content: `look\n[shot.png](${SHOT})` }));
+        const before = `look\n[shot.png](${SHOT})`;
+
+        await updateFromZulip({ messageId: 1001, content: `${before}\n[log.txt](${LOG})`, origContent: before });
+
+        expect(zulip.downloadUpload.mock.calls.map(([path]) => path)).toEqual([SHOT, LOG]);
+        expect(discord.editMirrorMessage).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ messageId: db.messages[0].discordMessageId }),
+          { content: 'look', suppressEmbeds: false, files: [expect.any(File)] },
+        );
+        expect(files(0)).toEqual(['log.txt']);
+        expect(log()).not.toHaveBeenCalledWith(expect.stringContaining('keeps the files it was sent with'));
+      });
+
+      it('should note an added upload it cannot attach, and say when an edit takes one away', async () => {
+        await fromZulip(zulipMessage({ content: `look\n[shot.png](${SHOT})` }));
+        zulip.downloadUpload.mockResolvedValueOnce(undefined);
+
+        await updateFromZulip({
+          messageId: 1001,
+          content: `look\n[log.txt](${LOG})`,
+          origContent: `look\n[shot.png](${SHOT})`,
+        });
+
+        expect(discord.editMirrorMessage).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+          content: 'look\n*(attachment not mirrored: log.txt)*',
+          suppressEmbeds: false,
+        });
+        expect(log()).toHaveBeenCalledWith(
+          `${DEV_CHANNEL}: Zulip message 1001 was edited; its Discord copy keeps the files it was sent with`,
+        );
+      });
+
+      it('should note the added files Discord finds too large and edit without them', async () => {
+        await fromZulip(zulipMessage({ content: 'look' }));
+        discord.editMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('too-large', 40_005));
+
+        await updateFromZulip({ messageId: 1001, content: `look\n[log.txt](${LOG})`, origContent: 'look' });
+
+        expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
+        expect(discord.editMirrorMessage.mock.calls[1][1]).toEqual({
+          content: 'look\n*(attachment not mirrored: log.txt)*',
+          suppressEmbeds: false,
+        });
+      });
+
+      it('should attach nothing to an edit it does not know the content before of', async () => {
+        await fromZulip(zulipMessage({ content: 'look' }));
+
+        await updateFromZulip({ messageId: 1001, content: `look\n[log.txt](${LOG})` });
+
+        expect(zulip.downloadUpload).not.toHaveBeenCalled();
+        expect(files(0)).toEqual([]);
+      });
+
+      it.each([
+        ['may have gone through', new DiscordMirrorError('unavailable'), []],
+        ['never reached Discord', new DiscordMirrorError('unreachable'), ['log.txt']],
+      ])('should attach the files again only if an edit that failed with them %s', async (_, failure, again) => {
+        await fromZulip(zulipMessage({ content: 'look' }));
+        vitest.useFakeTimers();
+        discord.editMirrorMessage.mockRejectedValueOnce(failure);
+
+        await updateFromZulip({ messageId: 1001, content: `look\n[log.txt](${LOG})`, origContent: 'look' });
+        await vitest.advanceTimersByTimeAsync(30_000);
+        await sut.whenIdle();
+
+        expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
+        expect([files(0), files(1)]).toEqual([['log.txt'], again]);
+      });
+
+      it('should not attach the files again when it edits again after a failure', async () => {
+        await fromZulip(zulipMessage({ content: paragraphs('a', 'b') }));
+        vitest.useFakeTimers();
+        discord.editMirrorMessage.mockResolvedValueOnce().mockRejectedValueOnce(new DiscordMirrorError('unavailable'));
+        const before = paragraphs('a', 'b');
+
+        await updateFromZulip({ messageId: 1001, content: `[log.txt](${LOG})\n${before}`, origContent: before });
+        await vitest.advanceTimersByTimeAsync(30_000);
+        await sut.whenIdle();
+
+        expect(discord.editMirrorMessage).toHaveBeenCalledTimes(4);
+        expect([0, 1, 2, 3].map(files)).toEqual([['log.txt'], [], [], []]);
+      });
+    });
+
     it('should give up on an edit Discord keeps failing after about ten minutes', async () => {
       await fromZulip(zulipMessage());
       vitest.useFakeTimers();

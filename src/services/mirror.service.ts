@@ -248,6 +248,11 @@ const transferDeadline = () => {
 
 const SPOILER_FILE = 'SPOILER_';
 
+const toNote = ({ name }: File): Note => ({
+  name: name.startsWith(SPOILER_FILE) ? name.slice(SPOILER_FILE.length) : name,
+  spoiler: name.startsWith(SPOILER_FILE),
+});
+
 const noteLine = ({ name, spoiler }: Note) => {
   const line = `*(attachment not mirrored: ${escapeDiscordInline(name)})*`;
   return spoiler ? `||${line}||` : line;
@@ -574,7 +579,9 @@ export class MirrorService implements OnModuleDestroy {
       received.topic === undefined ? received : { ...received, topic: this.fromZulipTopic(received.topic) };
     const { content, messageId } = update;
     if (content !== undefined) {
-      state.queue.push(`edit of Zulip message ${messageId}`, () => this.editFromZulip(state, messageId, content));
+      state.queue.push(`edit of Zulip message ${messageId}`, () =>
+        this.editFromZulip(state, messageId, content, 1, update.origContent),
+      );
     }
     if (update.topic !== undefined || update.newStreamId !== undefined) {
       state.queue.push(`move of Zulip message ${messageId}`, () => this.moveFromZulip(state, update));
@@ -1625,6 +1632,7 @@ export class MirrorService implements OnModuleDestroy {
     state: PairState,
     messageId: number,
     { uploads: paths, spoilerUploads }: { uploads: string[]; spoilerUploads: string[] },
+    slots = MAX_FILES,
   ) {
     const files: File[] = [];
     const notes: Note[] = [];
@@ -1632,7 +1640,7 @@ export class MirrorService implements OnModuleDestroy {
     const deadline = transferDeadline();
     for (const [index, path] of paths.entries()) {
       const note = { name: uploadName(path), spoiler: spoilerUploads.includes(path) };
-      if (index >= MAX_FILES || deadline.signal.aborted) {
+      if (index >= slots || deadline.signal.aborted) {
         notes.push(note);
         continue;
       }
@@ -1850,11 +1858,7 @@ export class MirrorService implements OnModuleDestroy {
       if (!isMirrorError(error, 'too-large') || files.length === 0) {
         throw error;
       }
-      const dropped = files.map(({ name }) => ({
-        name: name.startsWith(SPOILER_FILE) ? name.slice(SPOILER_FILE.length) : name,
-        spoiler: name.startsWith(SPOILER_FILE),
-      }));
-      parts = withNotes(outgoing.text, [...outgoing.notes, ...dropped]);
+      parts = withNotes(outgoing.text, [...outgoing.notes, ...files.map(toNote)]);
       files = [];
       sent = await send(parts[0], { ...first, files });
     }
@@ -1944,7 +1948,11 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
-  private async editFromZulip(state: PairState, messageId: number, content: string, attempt = 1) {
+  /**
+   * `before` is the content the edit replaced, which an edit event carries: the uploads it adds are attached to the
+   * first part. Without it, as when catch-up finds the edit, the copy keeps the files it has.
+   */
+  private async editFromZulip(state: PairState, messageId: number, content: string, attempt = 1, before?: string) {
     const { pair } = state;
     const label = `edit of Zulip message ${messageId}`;
     const all = (await this.database.getMirrorMessagesByZulipIds([messageId], { withDeleted: true })).filter(
@@ -1954,32 +1962,45 @@ export class MirrorService implements OnModuleDestroy {
     const hash = sha256(content);
     if (
       rows.length === 0 ||
-      this.holdFor(state, 'Discord', label, () => this.editFromZulip(state, messageId, content, attempt)) ||
+      this.holdFor(state, 'Discord', label, () => this.editFromZulip(state, messageId, content, attempt, before)) ||
       rows[0].sourceHash === hash
     ) {
       return;
     }
 
     const rendered = await this.renderForDiscord(state, content);
-    if (rendered.uploads.length > 0) {
+    const earlier = before === undefined ? undefined : parseZulipRefs(before, this.realmOrigin).uploads;
+    const added = earlier === undefined ? [] : rendered.uploads.filter((path) => !earlier.includes(path));
+    if (
+      earlier === undefined ? rendered.uploads.length > 0 : earlier.some((path) => !rendered.uploads.includes(path))
+    ) {
       this.logger.log(
         `${pair.key}: Zulip message ${messageId} was edited; its Discord copy keeps the files it was sent with`,
       );
     }
-    let parts = splitDiscordContent(rendered.text);
+    const upload =
+      added.length > 0 && rows[0].part === 0
+        ? await this.downloadUploads(
+            state,
+            messageId,
+            { uploads: added, spoilerUploads: rendered.spoilerUploads },
+            MAX_FILES - Math.min(earlier!.length, MAX_FILES),
+          )
+        : { files: [], notes: [] };
+    let parts = withNotes(rendered.text, upload.notes);
     if (parts.length === 0) {
       parts = [''];
     }
 
     const kept: MirrorMessage[] = [];
     let again = false;
+    let attached = false;
     for (const row of rows) {
       try {
         if (row.part < parts.length) {
-          const edit = { content: parts[row.part], suppressEmbeds: suppressEmbeds(parts[row.part]) };
-          await this.onDiscord(state, row.discordThreadId, () =>
-            this.discordMirror.editMirrorMessage(toTarget(row), edit),
-          );
+          const files = row.part === 0 ? upload.files : [];
+          attached =
+            (await this.editOnDiscord(state, row, parts[row.part], files, rendered.text, upload.notes)) || attached;
           kept.push(row);
         } else if (row.part > 0) {
           await this.onDiscord(state, row.discordThreadId, () => this.discordMirror.deleteMirrorMessage(toTarget(row)));
@@ -1988,6 +2009,7 @@ export class MirrorService implements OnModuleDestroy {
       } catch (error) {
         if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
           again = true;
+          attached ||= row.part === 0 && upload.files.length > 0 && mayHaveBeenCarriedOut(error);
           continue;
         }
         await this.discordEditFailed(state, row, error);
@@ -1997,7 +2019,10 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     if (again) {
-      this.retryOnDiscord(state, label, attempt, (next) => this.editFromZulip(state, messageId, content, next));
+      // Files the first part took, or may have, are not attached again: the retry sees them as there before the edit.
+      this.retryOnDiscord(state, label, attempt, (next) =>
+        this.editFromZulip(state, messageId, content, next, attached ? content : before),
+      );
       return;
     }
     await this.database.updateMirrorMessages(
@@ -2008,6 +2033,38 @@ export class MirrorService implements OnModuleDestroy {
     const complete = all.every(({ part, deletedAt }, index) => part === index && deletedAt === null);
     if (complete && parts.length > rows.length) {
       await this.appendParts(state, rows, parts.slice(rows.length), hash);
+    }
+  }
+
+  /**
+   * Discord keeps a message's attachments through an edit, and adds the files given; files it finds too large become
+   * notes. Resolves to whether files were attached.
+   */
+  private async editOnDiscord(
+    state: PairState,
+    row: MirrorMessage,
+    content: string,
+    files: File[],
+    text: string,
+    notes: Note[],
+  ) {
+    const edit = (body: string, withFiles: File[]) =>
+      this.onDiscord(state, row.discordThreadId, () =>
+        this.discordMirror.editMirrorMessage(toTarget(row), {
+          content: body,
+          suppressEmbeds: suppressEmbeds(body),
+          ...(withFiles.length > 0 ? { files: withFiles } : {}),
+        }),
+      );
+    try {
+      await edit(content, files);
+      return files.length > 0;
+    } catch (error) {
+      if (!isMirrorError(error, 'too-large') || files.length === 0) {
+        throw error;
+      }
+      await edit(withNotes(text, [...notes, ...files.map(toNote)])[0] ?? '', []);
+      return false;
     }
   }
 

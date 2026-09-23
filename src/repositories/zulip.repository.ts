@@ -488,6 +488,7 @@ const toEvent = (event: RawEvent): ZulipEvent => {
         topic: event.subject,
         propagateMode: event.propagate_mode,
         content: event.content,
+        origContent: event.orig_content,
       },
     };
   }

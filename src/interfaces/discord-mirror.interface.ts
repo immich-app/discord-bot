@@ -116,8 +116,11 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   getMirrorChannel(channelId: string): Promise<DiscordMirrorChannel | undefined>;
   ensureMirrorWebhook(channelId: string): Promise<void>;
   sendMirrorMessage(message: DiscordMirrorSend): Promise<DiscordMirrorSent>;
-  /** Always sends allowedMentions { parse: [], users: [] }. */
-  editMirrorMessage(target: DiscordMirrorTarget, edit: { content: string; suppressEmbeds: boolean }): Promise<void>;
+  /** Always sends allowedMentions { parse: [], users: [] }; `files` are added to the attachments the message has. */
+  editMirrorMessage(
+    target: DiscordMirrorTarget,
+    edit: { content: string; suppressEmbeds: boolean; files?: File[] },
+  ): Promise<void>;
   /** Through the webhook; through the bot (Manage Messages) when the target's webhook is gone or replaced. */
   deleteMirrorMessage(target: DiscordMirrorTarget): Promise<void>;
   startMirrorThread(channelId: string, messageId: string, name: string): Promise<string>;

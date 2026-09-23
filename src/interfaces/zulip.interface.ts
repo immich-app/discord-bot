@@ -83,6 +83,8 @@ export type ZulipMessageUpdated = {
   topic?: string;
   propagateMode?: 'change_one' | 'change_later' | 'change_all';
   content?: string;
+  /** The content the edit replaced. */
+  origContent?: string;
 };
 
 export type ZulipMessagesDeleted = { messageIds: number[]; streamId?: number; topic?: string };

@@ -185,6 +185,9 @@ const hasCode = (error: unknown, ...codes: number[]) =>
 /** `Routes` percent-encodes it. */
 const emojiRoute = ({ id, name }: DiscordReactionEmoji) => (id === null ? (name ?? '') : `${name ?? '_'}:${id}`);
 
+const toAttachments = (files: File[]) =>
+  Promise.all(files.map(async (file) => ({ attachment: Buffer.from(await file.arrayBuffer()), name: file.name })));
+
 const bySnowflake = (a: { id: string }, b: { id: string }) => {
   const [x, y] = [BigInt(a.id), BigInt(b.id)];
   return x < y ? -1 : x > y ? 1 : 0;
@@ -389,12 +392,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
   async sendMirrorMessage(message: DiscordMirrorSend): Promise<DiscordMirrorSent> {
     const webhook = this.getMirrorWebhook(message.channelId);
-    const files = await Promise.all(
-      (message.files ?? []).map(async (file) => ({
-        attachment: Buffer.from(await file.arrayBuffer()),
-        name: file.name,
-      })),
-    );
+    const files = await toAttachments(message.files ?? []);
 
     try {
       const sent = await webhook.send({
@@ -413,18 +411,29 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
-  async editMirrorMessage(target: DiscordMirrorTarget, edit: { content: string; suppressEmbeds: boolean }) {
+  async editMirrorMessage(
+    target: DiscordMirrorTarget,
+    edit: { content: string; suppressEmbeds: boolean; files?: File[] },
+  ) {
     const webhook = this.getMirrorWebhook(target.channelId);
     if (target.webhookId !== webhook.id) {
       throw new DiscordMirrorError('replaced-webhook');
     }
 
+    const thread = target.threadId === null ? {} : { threadId: target.threadId };
     try {
+      const files = await toAttachments(edit.files ?? []);
+      // An edit that sends files keeps only the attachments it names.
+      const attachments =
+        files.length > 0
+          ? (await webhook.fetchMessage(target.messageId, thread)).attachments.map(({ id }) => ({ id }))
+          : undefined;
       await webhook.editMessage(target.messageId, {
         content: edit.content,
         allowedMentions: { parse: [], users: [] },
         flags: edit.suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [],
-        ...(target.threadId === null ? {} : { threadId: target.threadId }),
+        ...thread,
+        ...(attachments ? { files, attachments } : {}),
       });
     } catch (error) {
       throw this.toWebhookError(target.channelId, webhook, error);
