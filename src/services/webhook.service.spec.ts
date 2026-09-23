@@ -94,6 +94,13 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   removeMirrorMessages: vitest.fn(),
   getMirrorZulipHighWater: vitest.fn(),
   getMirrorDiscordHighWater: vitest.fn(),
+  getMirrorLinks: vitest.fn(),
+  createMirrorLink: vitest.fn(),
+  setMirrorLinkAnnouncement: vitest.fn(),
+  removeMirrorLink: vitest.fn(),
+  getMirrorIdentities: vitest.fn(),
+  setMirrorIdentity: vitest.fn(),
+  removeMirrorIdentity: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({

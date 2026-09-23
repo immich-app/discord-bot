@@ -1368,7 +1368,6 @@ export class MirrorService implements OnModuleDestroy {
     }
     if (!existing) {
       const created = await this.database.createMirrorConversation({
-        pair: pair.key,
         discordChannelId: pair.discordChannelId,
         discordThreadId: null,
         zulipStreamId: pair.zulipStreamId,
@@ -1387,7 +1386,6 @@ export class MirrorService implements OnModuleDestroy {
   private async createThreadConversation(state: PairState, threadId: string, zulipTopic: string, anchor: number) {
     const { pair } = state;
     const conversation = await this.database.createMirrorConversation({
-      pair: pair.key,
       discordChannelId: pair.discordChannelId,
       discordThreadId: threadId,
       zulipStreamId: pair.zulipStreamId,

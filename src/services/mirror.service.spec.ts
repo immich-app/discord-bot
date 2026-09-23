@@ -461,7 +461,6 @@ describe(MirrorService.name, () => {
   const seedThread = (overrides: Partial<MirrorConversation> = {}) => {
     const conversation: MirrorConversation = {
       id: `seeded-${db.conversations.length + 1}`,
-      pair: 'Dev',
       discordChannelId: DEV_CHANNEL,
       discordThreadId: '200000000000000001',
       zulipStreamId: DEV_STREAM,
