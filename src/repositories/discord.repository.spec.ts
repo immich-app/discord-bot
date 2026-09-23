@@ -26,7 +26,6 @@ const bot = vitest.hoisted(() => ({
   guilds: { cache: new Map<string, unknown>() },
 }));
 
-/** What the repository executes each webhook through, by webhook ID. */
 const webhookClients = vitest.hoisted(() => new Map<string, object>());
 
 vitest.mock('discordx', () => ({

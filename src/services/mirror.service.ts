@@ -176,7 +176,6 @@ const isExpected = (error: unknown) => error instanceof DiscordMirrorError || is
 const isTransient = (error: unknown) =>
   isTransientZulipFailure(error) || isMirrorError(error, 'unavailable') || isMirrorError(error, 'unreachable');
 
-/** Failed without an answer, or with a 5xx: the other side may still have carried the request out. */
 const mayHaveBeenCarriedOut = (error: unknown) =>
   isMirrorError(error, 'unavailable') ||
   (error instanceof ZulipApiError ? error.status >= 500 : isZulipFailure(error) && !isConnectFailure(error));
@@ -708,8 +707,8 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   /**
-   * Reads back from the newest message to the high-water mark or the start of the catch-up window. The marks count
-   * Discord-origin rows only: a webhook copy posted while a Discord message was missed must not hide it.
+   * The high-water marks count Discord-origin rows only: a webhook copy posted while a Discord message was missed
+   * must not hide it.
    */
   private async missedOnDiscord(
     state: PairState,
@@ -789,9 +788,9 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   /**
-   * Reads back from the newest message to the high-water mark or the start of the catch-up window. The bot's own
-   * posts are left out by the server, so they never use up the pages. Moved messages are left out too, unless they were
-   * turned away here: they may have come from outside the mirror, which is never mirrored retroactively.
+   * The bot's own posts are left out by the server, so they never use up the pages. Moved messages are left out too,
+   * unless they were turned away here: they may have come from outside the mirror, which is never mirrored
+   * retroactively.
    */
   private async missedOnZulip(
     state: PairState,
@@ -854,7 +853,6 @@ export class MirrorService implements OnModuleDestroy {
     return side === 'Discord' ? this.discordReady(state) : this.zulip.isInitialised();
   }
 
-  /** Holds a change back, behind any held before it, until `side` is ready; `true` when it did. */
   private holdFor(state: PairState, side: Side, label: string, run: () => Promise<void>) {
     if (state.held[side].length === 0 && this.sideReady(state, side)) {
       return false;
@@ -1302,7 +1300,6 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
-  /** `undefined` for a topic that has no Discord thread yet. */
   private async conversationForZulip(state: PairState, message: ZulipReceivedMessage) {
     const { pair } = state;
     const key = topicKey(message.topic);
@@ -1766,7 +1763,6 @@ export class MirrorService implements OnModuleDestroy {
     return vanished;
   }
 
-  /** A conversation whose anchor is gone moves to its newest remaining message; without one, the next message is. */
   private async reanchor(state: PairState, deletedIds: number[]) {
     for (const conversation of await this.database.getMirrorConversationsByAnchors(deletedIds)) {
       const newest = await this.database.getNewestMirrorZulipMessageId(conversation.id);

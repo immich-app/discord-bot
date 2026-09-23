@@ -253,7 +253,7 @@ export class ZulipRepository implements IZulipInterface {
     return (data!.messages ?? []).map(toReceivedMessage);
   }
 
-  /** An undocumented static file, served without authentication; a missing or malformed entry is skipped. */
+  /** An undocumented static file, served without authentication. */
   async getEmojiCodes() {
     const { origin } = this.site;
     const response = await fetch(`${origin}/static/generated/emoji/emoji_codes.json`, {

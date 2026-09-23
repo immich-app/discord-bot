@@ -88,7 +88,6 @@ export class DiscordMirrorError extends Error {
 
 export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmotes'> {
   isReady(): boolean;
-  /** `undefined` when the channel does not exist or is not in a guild. */
   getMirrorChannel(channelId: string): Promise<DiscordMirrorChannel | undefined>;
   ensureMirrorWebhook(channelId: string): Promise<void>;
   sendMirrorMessage(message: DiscordMirrorSend): Promise<DiscordMirrorSent>;
@@ -99,8 +98,7 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   startMirrorThread(channelId: string, messageId: string, name: string): Promise<string>;
   renameMirrorThread(threadId: string, name: string): Promise<void>;
   unarchiveMirrorThread(threadId: string): Promise<void>;
-  /** `undefined` when the guild is not cached or the user is not a member of it. */
   getTeamMember(guildId: string, userId: string): Promise<DiscordTeamMember | undefined>;
-  /** The `limit` messages before `beforeId`, or the newest ones; `channelId` may be a thread. */
+  /** `channelId` may be a thread. */
   fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
 }

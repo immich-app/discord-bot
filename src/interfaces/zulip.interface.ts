@@ -7,7 +7,6 @@ export type ZulipConfig = {
 };
 export type MessagePayload = { stream: string | number; topic?: string; content: string };
 
-/** `streamId` is undefined for a direct message. */
 export type ZulipMessage = { id: number; topic: string; streamId?: number; senderFullName?: string };
 
 /** Zulip cannot change content and topic in one request, so a caller sends one or the other. */
@@ -45,7 +44,6 @@ export type ZulipReceivedMessage = {
   content: string;
   /** Seconds since the epoch. */
   timestamp: number;
-  /** Set once the message has been moved to another topic or stream. */
   movedAt?: number;
 };
 
@@ -96,7 +94,6 @@ export type ZulipEvent =
   | ZulipDeleteEvent
   | { id: number; type: string; message?: undefined; update?: undefined; deletion?: undefined };
 
-/** A download the repository will not make, or whose answer it will not use. */
 export class ZulipUploadRefused extends Error {
   constructor(message: string) {
     super(message);
@@ -126,7 +123,7 @@ export interface IZulipInterface {
    * but a plain `/user_uploads/` path, and for an answer that is not the file.
    */
   downloadUpload(path: string, maxBytes: number, signal?: AbortSignal): Promise<File | undefined>;
-  /** Up to `count` messages of the stream before `before`, or the newest ones, oldest first, as raw markdown. */
+  /** Oldest first, as raw markdown. */
   getStreamMessagesBefore(query: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]>;
   /** Emoji name to its Unicode string, from the realm's static emoji table. */
   getEmojiCodes(): Promise<Record<string, string>>;

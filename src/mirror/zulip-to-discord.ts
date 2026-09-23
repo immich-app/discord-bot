@@ -23,7 +23,6 @@ export type ZulipRenderContext = {
   deletedMessageIds: Set<number>;
   /** Verified team members only. */
   discordUserByZulipId: Map<number, string>;
-  /** Unicode, or `<:name:id>` / `<a:name:id>` for a custom emote. */
   emoji: (name: string) => string | undefined;
   /** Set when the message is mirrored late, as its Zulip `timestamp` in seconds. */
   lateTimestamp?: number;
@@ -442,10 +441,6 @@ const splitPoint = (chunk: string, room: number, after: number) => {
   return { end, next: end };
 };
 
-/**
- * Splits text into Discord messages of at most `max` UTF-16 units. A code block cut in two is closed at the end of one
- * part and reopened with the same opening line at the start of the next; the last part allowed is cut short with `…`.
- */
 export const splitDiscordContent = (text: string, max = 2000, maxParts = 6) => {
   const close = '\n```';
   const parts: string[] = [];

@@ -95,7 +95,6 @@ type MirrorMethods =
   | 'getMirrorZulipHighWater'
   | 'getMirrorDiscordHighWater';
 
-/** Behaves like the real tables, unique constraints included, and hands out copies as the database does. */
 const newMirrorDatabase = () => {
   const conversations: MirrorConversation[] = [];
   const messages: MirrorMessage[] = [];
@@ -2924,7 +2923,7 @@ describe(MirrorService.name, () => {
       return { promise, resolve };
     };
 
-    /** Pages like Discord: the `limit` messages before the anchor; a bare ID stands for a message that is no candidate. */
+    /** A bare ID stands for a message that is no mirror candidate. */
     const discordHistory = new Map<string, { id: string; message?: DiscordSourceMessage }[]>();
     const onDiscord = (channelId: string, ...items: (DiscordSourceMessage | string)[]) => {
       discordHistory.set(channelId, [
@@ -2933,7 +2932,6 @@ describe(MirrorService.name, () => {
       ]);
     };
 
-    /** Pages like Zulip: the `count` messages of the stream before the anchor, without the excluded sender. */
     const zulipHistory: ZulipReceivedMessage[] = [];
 
     beforeEach(() => {

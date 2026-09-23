@@ -7,7 +7,6 @@ export type EnabledPair = {
   kind: 'text' | 'forum';
   discordChannelId: string;
   zulipStreamId: number;
-  /** `null` for the forum pair, whose posts each get a topic of their own. */
   mainTopic: string | null;
   public: boolean;
 };

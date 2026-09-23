@@ -296,7 +296,6 @@ export const zulipAuthorHeader = (dto: DiscordSourceMessage, ctx: ZulipHeaderCon
   return `${author}${reply}${late}`;
 };
 
-/** What an edit keeps: the header, and the quote of the message replied to when there is one. */
 export const zulipMirrorLead = (header: string, replySnippet: string | null) =>
   replySnippet ? `${header}:\n${toZulipQuote(replySnippet)}\n` : header;
 
