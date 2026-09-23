@@ -1616,6 +1616,20 @@ describe(MirrorService.name, () => {
       );
     });
 
+    it('should re-anchor without complaint when the Zulip copy is already gone', async () => {
+      const thread = { threadId: '200000000000000001', threadName: 'Crash' };
+      await fromDiscord(discordMessage(thread));
+      await fromDiscord(discordMessage({ id: '300000000000000002', ...thread }));
+      zulip.deleteMessage.mockRejectedValue(new ZulipApiError(400, 'BAD_REQUEST', 'Invalid message(s)', 'DELETE'));
+
+      sut.onDiscordMessagesDeleted(DEV_CHANNEL, ['300000000000000001']);
+      await sut.whenIdle();
+
+      expect(warn()).not.toHaveBeenCalledWith(expect.stringContaining('refused'));
+      expect(error()).not.toHaveBeenCalled();
+      expect(db.conversations[0].zulipAnchorMessageId).toBe(5002);
+    });
+
     it('should retry a delete that failed on the way', async () => {
       await fromDiscord(discordMessage());
       vitest.useFakeTimers();

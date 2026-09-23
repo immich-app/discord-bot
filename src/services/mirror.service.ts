@@ -1732,16 +1732,16 @@ export class MirrorService implements OnModuleDestroy {
       try {
         await this.retryZulip(() => this.zulip.deleteMessage(row.zulipMessageId));
       } catch (error) {
-        if (isZulipRefusal(error)) {
+        if (isZulipMessageGone(error)) {
+          await this.reanchor(state, [row.zulipMessageId]);
+        } else if (isZulipRefusal(error)) {
           this.logger.warn(
             `${pair.key}: Zulip refused to delete ${about}; add the bot to the stream's can_delete_any_message_group`,
           );
-          continue;
-        }
-        if (!isZulipMessageGone(error)) {
+        } else {
           this.fail(`${pair.key}: could not delete Zulip ${about}`, error);
-          continue;
         }
+        continue;
       }
       await this.reanchor(state, [row.zulipMessageId]);
     }
