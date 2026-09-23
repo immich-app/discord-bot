@@ -180,6 +180,7 @@ export class ChatService {
   ) {}
 
   async init() {
+    this.discord.onHandlerError((error) => this.onError(error));
     // The Zulip clients are initialised once, by ZulipService.
     await this.mattermost.init();
     this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
@@ -302,9 +303,9 @@ ${messageParts.join('\n')}`,
     this.logger.verbose('DiscordBot.onReady');
   }
 
-  async onError(error: Error) {
+  async onError(error: unknown) {
     // thrown when trying to send a message to a not-yet-fully-initialized thread
-    if (error.name === 'DiscordAPIError[10008]') {
+    if (error instanceof Error && error.name === 'DiscordAPIError[10008]') {
       return;
     }
 

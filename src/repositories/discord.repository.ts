@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { IntentsBitField, MessageCreateOptions, MessageFlags, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { Constants } from 'src/constants';
+import { DiscordErrorHandler, reportErrors } from 'src/discord/guards';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 
 class DiscordLogger extends Logger {
@@ -26,6 +27,9 @@ class DiscordLogger extends Logger {
   }
 }
 
+const logger = new Logger('DiscordBot');
+let reportHandlerError: DiscordErrorHandler = async (error) => logger.error('Discord handler error', error);
+
 const bot = new Client({
   // Discord intents
   intents: [
@@ -47,6 +51,8 @@ const bot = new Client({
   },
 
   partials: [Partials.Message, Partials.Reaction],
+
+  guards: [reportErrors((error) => reportHandlerError(error))],
 });
 
 export class DiscordRepository implements IDiscordInterface {
@@ -76,6 +82,10 @@ export class DiscordRepository implements IDiscordInterface {
 
   isReady() {
     return bot.isReady();
+  }
+
+  onHandlerError(handler: DiscordErrorHandler) {
+    reportHandlerError = handler;
   }
 
   async sendMessage({
