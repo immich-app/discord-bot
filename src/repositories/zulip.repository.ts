@@ -76,16 +76,6 @@ const toEmoji = (codepoints: unknown) => {
 
 const notInitialised = () => new Error('Zulip client not initialised: call init() first');
 
-const toEmoji = (codepoints: unknown) => {
-  if (typeof codepoints !== 'string' || !/^[\da-f]{1,6}(-[\da-f]{1,6})*$/i.test(codepoints)) {
-    return undefined;
-  }
-  const points = codepoints.split('-').map((hex) => Number.parseInt(hex, 16));
-  return points.every((point) => point <= 0x10_ffff) ? String.fromCodePoint(...points) : undefined;
-};
-
-const notInitialised = () => new Error('Zulip client not initialised: call init() first');
-
 export class ZulipRepository implements IZulipInterface {
   private clients?: Clients;
   private botIdentity?: Omit<ZulipClientOptions, 'timeoutMs'>;

@@ -316,10 +316,6 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     await thread?.setArchived(archived);
   }
 
-  isReady() {
-    return bot.isReady();
-  }
-
   async getMirrorChannel(channelId: string): Promise<DiscordMirrorChannel | undefined> {
     try {
       const channel = await bot.channels.fetch(channelId);
