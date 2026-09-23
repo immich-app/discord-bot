@@ -19,6 +19,8 @@ export type ZulipMessageRef = {
 export type ZulipRenderContext = {
   realmOrigin: string;
   messages: Map<number, ZulipMessageRef>;
+  /** Mirrored messages deleted on either side, which a reply must not quote back. */
+  deletedMessageIds: Set<number>;
   /** Verified team members only. */
   discordUserByZulipId: Map<number, string>;
   /** Unicode, or `<:name:id>` / `<a:name:id>` for a custom emote. */
@@ -32,6 +34,7 @@ export type DiscordRendered = { text: string; uploads: string[]; spoilerUploads:
 
 type Lookups = {
   message: (id: number) => ZulipMessageRef | undefined;
+  deleted: (id: number) => boolean;
   discordUser: (zulipId: number) => string | undefined;
   emoji: (name: string) => string | undefined;
 };
@@ -326,6 +329,8 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
       pingUserIds.push(target.discordAuthorId);
     } else if (target) {
       head.push(`-# ↩ replying to ${escapeDiscordInline(target.authorName)} · [jump](${target.jumpUrl})`);
+    } else if (lookups.deleted(reply.messageId)) {
+      head.push('-# ↩ replying to a deleted message');
     } else {
       head.push(`-# ↩ ${escapeDiscordInline(reply.name.trim()) || 'someone'} said:`);
       const quote = visible([...output.keys()].slice(reply.fence.open + 1, reply.fence.close ?? lines.length));
@@ -360,6 +365,7 @@ export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
   const emojiNames = new Set<string>();
   const { uploads, reply } = render(raw, realmOrigin, {
     message: (id) => void messageIds.add(id),
+    deleted: () => false,
     discordUser: (id) => void userIds.add(id),
     emoji: (name) => void emojiNames.add(name),
   });
@@ -378,6 +384,7 @@ export const toDiscordMirrorContent = (raw: string, ctx: ZulipRenderContext): Di
     ctx.realmOrigin,
     {
       message: (id) => ctx.messages.get(id),
+      deleted: (id) => ctx.deletedMessageIds.has(id),
       discordUser: (id) => ctx.discordUserByZulipId.get(id),
       emoji: ctx.emoji,
     },

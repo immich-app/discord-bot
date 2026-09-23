@@ -1256,11 +1256,15 @@ describe(MirrorService.name, () => {
       expect(zulip.deleteMessage).not.toHaveBeenCalled();
     });
 
-    it('should ignore updates and deletions in a stream without a pair', async () => {
+    it('should ignore updates in a stream without a pair, and deletions there of messages it did not mirror', async () => {
       await updateFromZulip({ messageId: 42, content: 'edited', streamId: 107 });
-      await deleteFromZulip({ messageIds: [42], streamId: 107 });
-
       expect(db.repository.getMirrorMessagesByZulipIds).not.toHaveBeenCalled();
+
+      await deleteFromZulip({ messageIds: [42], streamId: 107 });
+      await deleteFromZulip({ messageIds: [43], streamId: undefined });
+
+      expect(db.repository.markMirrorMessagesDeleted).not.toHaveBeenCalled();
+      expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -1761,6 +1765,20 @@ describe(MirrorService.name, () => {
       expect(sent(0)).toEqual(expect.objectContaining({ username: 'Bea (Zulip)', content: 'b'.repeat(1500) }));
     });
 
+    it('should not quote back a message deleted since the reply to it was mirrored', async () => {
+      await fromZulip(zulipMessage({ content: 'said by mistake' }));
+      const reply = `@_**Bea|20** [said](https://zulip.example.com/#narrow/channel/900-dev/topic/.23dev/near/1001):\n\`\`\`quote\nsaid by mistake\n\`\`\`\nno worries`;
+      await fromZulip(zulipMessage({ id: 1002, content: reply }));
+      await deleteFromZulip({ messageIds: [1001] });
+
+      await updateFromZulip({ messageId: 1002, content: `${reply}!` });
+
+      expect(discord.editMirrorMessage).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+        content: '-# ↩ replying to a deleted message\nno worries!',
+        suppressEmbeds: false,
+      });
+    });
+
     it('should skip a Zulip edit that leaves the content as it was', async () => {
       await fromZulip(zulipMessage());
       await updateFromZulip({ messageId: 1001, content: 'hello' });
@@ -1930,6 +1948,20 @@ describe(MirrorService.name, () => {
 
       expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
       expect(db.messages).toEqual([expect.objectContaining({ deletedAt: expect.any(Date) })]);
+    });
+
+    it('should delete the copy of a message moved out of the stream once it is deleted there', async () => {
+      await fromZulip(zulipMessage());
+      await updateFromZulip({ messageId: 1001, newStreamId: 107, propagateMode: 'change_one' });
+
+      await updateFromZulip({ messageId: 1001, content: 'edited', streamId: 107 });
+      await deleteFromZulip({ messageIds: [1001], streamId: 107 });
+
+      expect(discord.editMirrorMessage).not.toHaveBeenCalled();
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ channelId: DEV_CHANNEL, messageId: db.messages[0].discordMessageId }),
+      );
+      expect(db.messages[0].deletedAt).toEqual(expect.any(Date));
     });
 
     it('should re-anchor a conversation whose anchor was deleted', async () => {

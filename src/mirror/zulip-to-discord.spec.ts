@@ -19,6 +19,7 @@ const ctx: ZulipRenderContext = {
     [101, { jumpUrl: JUMP_DISCORD, origin: 'discord', discordAuthorId: CONTRIBUTOR, authorName: 'Contrib' }],
     [102, { jumpUrl: JUMP_ZULIP, origin: 'zulip', discordAuthorId: null, authorName: 'Zack *Z*' }],
   ]),
+  deletedMessageIds: new Set([103]),
   discordUserByZulipId: new Map([[8, TEAM_MEMBER]]),
   emoji: (name) => ({ smile: '😄', catjam: '<a:catjam:333333333333333333>' })[name],
 };
@@ -232,6 +233,15 @@ describe('toDiscordMirrorContent', () => {
         pingUserIds: [],
       });
       expect(text(`${quoteReply(999, 'short', '~~~')}\nreply`)).toBe('-# ↩ Someone said:\n> short\nreply');
+    });
+
+    it('should never quote back a message that was deleted', () => {
+      expect(toDiscordMirrorContent(`${quoteReply(103, 'what was taken back')}\nreply`, ctx)).toEqual({
+        text: '-# ↩ replying to a deleted message\nreply',
+        uploads: [],
+        spoilerUploads: [],
+        pingUserIds: [],
+      });
     });
 
     it('should name an unnamed quote author someone, and escape a name', () => {

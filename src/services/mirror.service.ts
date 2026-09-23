@@ -402,11 +402,17 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private onZulipDeletion({ messageIds, streamId }: ZulipMessagesDeleted) {
+    if (messageIds.length === 0 || streamId === undefined) {
+      return;
+    }
+    const label = `deletion of Zulip messages ${messageIds.join(', ')}`;
     const state = this.byStream(streamId);
-    if (state && messageIds.length > 0) {
-      state.queue.push(`deletion of Zulip messages ${messageIds.join(', ')}`, () =>
-        this.deleteFromZulip(state, messageIds),
-      );
+    if (state) {
+      state.queue.push(label, () => this.deleteFromZulip(state, messageIds));
+      return;
+    }
+    for (const other of this.pairs.filter(({ status }) => status !== 'disabled')) {
+      other.queue.push(label, () => this.deleteMovedFromZulip(other, messageIds));
     }
   }
 
@@ -977,7 +983,12 @@ export class MirrorService implements OnModuleDestroy {
     const guildId = state.guildId!;
     const refs = parseZulipRefs(raw, this.realmOrigin);
     const messages = new Map<number, ZulipMessageRef>();
-    for (const row of await this.database.getMirrorMessagesByZulipIds(refs.messageIds)) {
+    const deleted = new Set<number>();
+    for (const row of await this.database.getMirrorMessagesByZulipIds(refs.messageIds, { withDeleted: true })) {
+      if (row.deletedAt !== null) {
+        deleted.add(row.zulipMessageId);
+        continue;
+      }
       if (messages.has(row.zulipMessageId)) {
         continue;
       }
@@ -997,6 +1008,7 @@ export class MirrorService implements OnModuleDestroy {
     return toDiscordMirrorContent(raw, {
       realmOrigin: this.realmOrigin,
       messages,
+      deletedMessageIds: new Set([...deleted].filter((id) => !messages.has(id))),
       discordUserByZulipId: this.membersOf(guildId).discordByZulip,
       emoji: (name) => custom?.get(name) ?? unicode?.[name],
       lateTimestamp,
@@ -1445,14 +1457,29 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async deleteFromZulip(state: PairState, messageIds: number[]) {
-    const { pair } = state;
     const rows = await this.database.getMirrorMessagesByZulipIds(messageIds);
     const vanished = await this.vanishedConversations(state, messageIds);
     await this.database.markMirrorMessagesDeleted(rows.map(({ discordMessageId }) => discordMessageId));
     for (const conversation of vanished) {
       await this.detach(state, conversation, 'Zulip removed every mirrored message of its topic');
     }
+    await this.deleteCopies(state, rows);
+    await this.reanchor(state, messageIds);
+  }
 
+  /** A message moved out of the mirror stream is deleted in the stream it was moved to, which no pair owns. */
+  private async deleteMovedFromZulip(state: PairState, messageIds: number[]) {
+    const rows = (await this.database.getMirrorMessagesByZulipIds(messageIds)).filter(
+      ({ discordChannelId }) => discordChannelId === state.pair.discordChannelId,
+    );
+    if (rows.length > 0) {
+      await this.database.markMirrorMessagesDeleted(rows.map(({ discordMessageId }) => discordMessageId));
+      await this.deleteCopies(state, rows);
+    }
+  }
+
+  private async deleteCopies(state: PairState, rows: MirrorMessage[]) {
+    const { pair } = state;
     const cutoff = Date.now() - Constants.Mirror.DeleteSyncMaxAgeDays * DAY;
     const copies = rows.filter(({ origin }) => origin === 'zulip');
     const old = copies.filter(({ createdAt }) => createdAt.getTime() < cutoff);
@@ -1479,8 +1506,6 @@ export class MirrorService implements OnModuleDestroy {
         }
       }
     }
-
-    await this.reanchor(state, messageIds);
   }
 
   /**
