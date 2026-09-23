@@ -28,6 +28,7 @@ import {
 } from 'src/interfaces/discord-mirror.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { isMirrorCandidate, toDiscordSourceMessage } from 'src/mirror/discord-message';
+import { readAtMost } from 'src/mirror/download';
 
 class DiscordLogger extends Logger {
   constructor() {
@@ -96,6 +97,8 @@ const mirrorErrorKinds: Partial<Record<number, DiscordMirrorErrorKind>> = {
 };
 
 const WEBHOOK_FAILURE_MS = 10 * 60 * 1000;
+const AVATAR_TIMEOUT_MS = 10_000;
+const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
 
 const mirrorPermissions: PermissionsString[] = [
   'ViewChannel',
@@ -146,6 +149,22 @@ const isNetworkFailure = (error: unknown) => {
     error.name === 'TimeoutError' ||
     (typeof code === 'string' && /^(?:E[A-Z]+|UND_ERR_\w+)$/.test(code))
   );
+};
+
+/** Given a URL, discord.js downloads the avatar itself, with no timeout and whatever the answer; none is better. */
+const fetchAvatar = async (url: string) => {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(AVATAR_TIMEOUT_MS) });
+    const type = response.headers.get('content-type')?.split(';')[0].trim() ?? '';
+    if (!response.ok || !type.startsWith('image/')) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const bytes = await readAtMost(response.body, MAX_AVATAR_BYTES);
+    return bytes && `data:${type};base64,${Buffer.from(bytes).toString('base64')}`;
+  } catch {
+    return undefined;
+  }
 };
 
 const hasCode = (error: unknown, ...codes: number[]) =>
@@ -444,6 +463,9 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
   async unarchiveMirrorThread(threadId: string) {
     try {
       const thread = await this.fetchThread(threadId);
+      if (thread.locked) {
+        throw new DiscordMirrorError('locked');
+      }
       await thread.setArchived(false);
     } catch (error) {
       throw toMirrorError(error);
@@ -513,7 +535,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       existing ??
       (await channel.createWebhook({
         name: 'Zulip mirror',
-        avatar: user.displayAvatarURL({ extension: 'png', size: 256 }),
+        avatar: await fetchAvatar(user.displayAvatarURL({ extension: 'png', size: 256 })),
         reason: 'Discord-Zulip mirror',
       }))
     );

@@ -155,7 +155,12 @@ export class ZulipRepository implements IZulipInterface {
       params: { path: { message_id: id }, query: { allow_empty_topic_name: true } },
     });
     const message = data!.message!;
-    return { id: message.id ?? id, topic: message.subject ?? '', streamId: message.stream_id };
+    return {
+      id: message.id ?? id,
+      topic: message.subject ?? '',
+      streamId: message.stream_id,
+      senderFullName: message.sender_full_name,
+    };
   }
 
   async updateMessage(

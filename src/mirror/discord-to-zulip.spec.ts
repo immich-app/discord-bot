@@ -236,6 +236,15 @@ describe('toZulipMirrorBody', () => {
       );
     });
 
+    it('should follow a link whose label names another site with the host it really goes to', () => {
+      expect(body('fix: [https://github.com/immich-app/immich/pull/1](https://github.com.evil.example/login)')).toBe(
+        'fix: [https://github.com/immich-app/immich/pull/1](https://github.com.evil.example/login) (github.com.evil.example)',
+      );
+      expect(
+        body('[github.com/immich-app](https://www.github.com/immich-app) [the docs](https://docs.immich.app)'),
+      ).toBe('[github.com/immich-app](https://www.github.com/immich-app) [the docs](https://docs.immich.app)');
+    });
+
     it('should leave a link whose label holds code to the final pass, which defuses it', () => {
       expect(body('[`c`](https://ex.com/@**all**)')).toBe(`&#91;\`c\`&#93;(https://ex.com/@${ZWSP}**all**)`);
     });

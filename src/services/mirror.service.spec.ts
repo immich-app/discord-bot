@@ -1273,6 +1273,34 @@ describe(MirrorService.name, () => {
       ]);
     });
 
+    it('should stop presenting a Discord user as a team member soon after they lose the role', async () => {
+      vitest.useFakeTimers();
+      const author = { id: TEAM_DISCORD_ID, username: 'alex.t', displayName: 'Alex' };
+      await fromDiscord(discordMessage({ author }));
+      discord.getTeamMember.mockResolvedValue({ ...TEAM_MEMBER, roleIds: [GUILD] });
+      await fromDiscord(discordMessage({ id: '300000000000000002', author }));
+      const checks = discord.getTeamMember.mock.calls.length;
+
+      vitest.advanceTimersByTime(10 * 60 * 1000);
+      await fromDiscord(
+        discordMessage({
+          id: '300000000000000003',
+          author: { id: CONTRIBUTOR, username: 'contrib123', displayName: 'Contrib' },
+          content: `<@${TEAM_DISCORD_ID}> hi`,
+          mentions: { users: { [TEAM_DISCORD_ID]: 'Alex' }, roles: {}, channels: {} },
+        }),
+      );
+      await fromDiscord(discordMessage({ id: '300000000000000004', author }));
+
+      expect(discord.getTeamMember).toHaveBeenCalledTimes(checks + 1);
+      expect(sentMessages().map(({ content }) => content)).toEqual([
+        `@_**|${TEAM_ZULIP_ID}**: hello`,
+        `@_**|${TEAM_ZULIP_ID}**: hello`,
+        '**Contrib** (&#64;contrib123): &#64;Alex hi',
+        '**Alex** (&#64;alex.t): hello',
+      ]);
+    });
+
     it('should mention the team member a contributor replies to on Zulip', async () => {
       await fromZulip(zulipMessage({ id: 55, senderId: TEAM_ZULIP_ID }));
       const copy = db.messages[0].discordMessageId;
@@ -1481,6 +1509,16 @@ describe(MirrorService.name, () => {
 
       expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
       expect(discord.sendMirrorMessage).toHaveBeenCalledTimes(3);
+    });
+
+    it("should ask Zulip for the sender's name when an edit grows a message mirrored before a restart", async () => {
+      seedRow({ zulipMessageId: 1001, zulipSenderId: 20, sourceHash: 'before the restart' });
+      zulip.getMessage.mockResolvedValue({ id: 1001, topic: '#dev', streamId: DEV_STREAM, senderFullName: 'Bea' });
+
+      await updateFromZulip({ messageId: 1001, content: paragraphs('a', 'b') });
+
+      expect(zulip.getMessage).toHaveBeenCalledWith(1001);
+      expect(sent(0)).toEqual(expect.objectContaining({ username: 'Bea (Zulip)', content: 'b'.repeat(1500) }));
     });
 
     it('should skip a Zulip edit that leaves the content as it was', async () => {
@@ -1836,6 +1874,19 @@ describe(MirrorService.name, () => {
         sendNotificationToNewThread: false,
       });
       expect(db.conversations[0].zulipTopic).toBe('✔ Crash on start (2)');
+    });
+
+    it('should count a rename Zulip had already made as done', async () => {
+      zulip.updateMessage.mockRejectedValue(new ZulipApiError(400, 'BAD_REQUEST', 'Nothing to change', 'PATCH'));
+
+      sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'Crash on start' });
+      await sut.whenIdle();
+
+      expect(db.conversations[0]).toEqual(
+        expect.objectContaining({ zulipTopic: 'Crash on start', zulipTopicKey: 'crash on start' }),
+      );
+      expect(warn()).not.toHaveBeenCalledWith(expect.stringContaining('refused'));
+      expect(error()).not.toHaveBeenCalled();
     });
 
     it('should keep the stored topic when Zulip refuses the rename', async () => {

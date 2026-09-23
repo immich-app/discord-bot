@@ -138,7 +138,7 @@ describe('ZulipRepository', () => {
       await sut.init(config);
     });
 
-    it('should fetch the message as the bot and return its ID, stream and current topic', async () => {
+    it('should fetch the message as the bot and return its ID, stream, sender name and current topic', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
@@ -147,6 +147,7 @@ describe('ZulipRepository', () => {
           message: {
             id: 42,
             stream_id: 120,
+            sender_full_name: 'Alice',
             subject: '#1234: feat: add thing',
             content: '<p>hello</p>',
             type: 'stream',
@@ -154,7 +155,12 @@ describe('ZulipRepository', () => {
         }),
       );
 
-      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '#1234: feat: add thing', streamId: 120 });
+      await expect(sut.getMessage(42)).resolves.toEqual({
+        id: 42,
+        topic: '#1234: feat: add thing',
+        streamId: 120,
+        senderFullName: 'Alice',
+      });
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(request(0).method).toBe('GET');

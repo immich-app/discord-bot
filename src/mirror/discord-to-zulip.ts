@@ -81,6 +81,23 @@ const zulipMention = (zulipUserId: number, silent: boolean) => protect(`@${silen
 
 const zulipLink = (label: string, url: string) => protect(`[${safeLabel(label)}](${safeUrl(url)})`);
 
+const DOMAIN = /(?:[a-z][\w+.-]*:\/\/)?((?:[a-z\d-]+\.)+[a-z]{2,})/gi;
+
+const bareHost = (host: string) => host.toLowerCase().replace(/^www\./, '');
+
+/** Zulip opens a link without asking first, so a label that names another site is followed by the real one. */
+const maskedLink = (label: string, url: string) => {
+  const link = zulipLink(label, url);
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return link;
+  }
+  const named = [...label.matchAll(DOMAIN)].map(([, domain]) => bareHost(domain));
+  return named.some((domain) => domain !== bareHost(host)) ? `${link} (${escapeZulipInline(host)})` : link;
+};
+
 const zulipFence = (kind: string, content: string) => {
   const longestRun = Math.max(0, ...[...content.matchAll(/~+/g)].map(([run]) => run.length));
   const fence = '~'.repeat(Math.max(3, longestRun + 1));
@@ -117,7 +134,7 @@ const translateInline = (part: string, message: TranslatedMessage, ctx: DiscordR
       if (!/^https?:\/\//i.test(url)) {
         return neutraliseZulipLabel(groups.label);
       }
-      return groups.label.trim() ? zulipLink(groups.label, url) : url;
+      return groups.label.trim() ? maskedLink(groups.label, url) : url;
     }
     if (groups.bare !== undefined) {
       return groups.bare;

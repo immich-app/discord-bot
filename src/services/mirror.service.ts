@@ -212,6 +212,7 @@ export class MirrorService implements OnModuleDestroy {
   private realmOrigin = '';
   private teamMembers = new Map<number, string>();
   private members = new Map<string, TeamMemberMaps>();
+  private memberCheckedAt = new Map<string, number>();
   private identities = new Map<string, { identity: Identity; expiresAt: number }>();
   private senderNames = new Map<number, string>();
   private verifiedConversations = new Set<string>();
@@ -749,8 +750,20 @@ export class MirrorService implements OnModuleDestroy {
     return maps;
   }
 
-  private renderContext(guildId: string): DiscordRenderContext {
-    return { zulipUserByDiscordId: this.membersOf(guildId).zulipByDiscord };
+  /** A removed role only shows when the member is checked again, so the ones a message involves are, once stale. */
+  private async renderContext(dto: DiscordSourceMessage): Promise<DiscordRenderContext> {
+    const involved = new Set([dto.author.id, ...Object.keys(dto.mentions.users)]);
+    for (const [zulipId, discordId] of this.teamMembers) {
+      const checkedAt = this.memberCheckedAt.get(`${dto.guildId}:${zulipId}`) ?? 0;
+      if (involved.has(discordId) && Date.now() - checkedAt >= IDENTITY_CACHE_MS) {
+        try {
+          await this.verifiedMember(dto.guildId, zulipId, discordId);
+        } catch (error) {
+          this.fail(`Could not look up Discord user ${discordId} for Zulip user ${zulipId}`, error);
+        }
+      }
+    }
+    return { zulipUserByDiscordId: this.membersOf(dto.guildId).zulipByDiscord };
   }
 
   private async verifyTeamMembers(guildId: string) {
@@ -769,6 +782,7 @@ export class MirrorService implements OnModuleDestroy {
     const verified: DiscordTeamMember | undefined =
       member && (member.roleIds.includes(Team) || member.roleIds.includes(Immich)) ? member : undefined;
     const maps = this.membersOf(guildId);
+    this.memberCheckedAt.set(`${guildId}:${zulipId}`, Date.now());
     if (verified) {
       maps.discordByZulip.set(zulipId, discordId);
       maps.zulipByDiscord.set(discordId, zulipId);
@@ -1263,7 +1277,7 @@ export class MirrorService implements OnModuleDestroy {
     const threadId = conversation ? conversation.discordThreadId : rows.at(-1)!.discordThreadId;
     const senderId = first.zulipSenderId ?? 0;
     const identity = await this.resolveIdentity(
-      { id: senderId, fullName: this.senderNames.get(senderId) ?? '' },
+      { id: senderId, fullName: await this.senderName(senderId, first.zulipMessageId) },
       state.guildId!,
     );
     for (const [index, content] of extra.entries()) {
@@ -1288,6 +1302,21 @@ export class MirrorService implements OnModuleDestroy {
         );
         return;
       }
+    }
+  }
+
+  /** Names are only learned from new messages, so after a restart an edit has to ask for its sender's. */
+  private async senderName(senderId: number, messageId: number) {
+    const known = this.senderNames.get(senderId);
+    if (known !== undefined || this.teamMembers.has(senderId)) {
+      return known ?? '';
+    }
+    try {
+      const { senderFullName = '' } = await this.retryZulip(() => this.zulip.getMessage(messageId));
+      this.senderNames.set(senderId, senderFullName);
+      return senderFullName;
+    } catch {
+      return '';
     }
   }
 
@@ -1556,7 +1585,7 @@ export class MirrorService implements OnModuleDestroy {
         conversation = found && (await this.verifyConversation(state, found));
       }
 
-      const ctx = this.renderContext(dto.guildId);
+      const ctx = await this.renderContext(dto);
       const body = toZulipMirrorBody(dto, ctx);
       if (body.trim() === '' && dto.attachments.length === 0) {
         return;
@@ -1664,7 +1693,7 @@ export class MirrorService implements OnModuleDestroy {
 
     const content = zulipMirrorContent(
       row.zulipHeader ?? '',
-      toZulipMirrorBody(dto, this.renderContext(dto.guildId)),
+      toZulipMirrorBody(dto, await this.renderContext(dto)),
       row.zulipAttachments ?? '',
     );
     try {
@@ -1758,14 +1787,16 @@ export class MirrorService implements OnModuleDestroy {
           }),
         );
       } catch (error) {
-        if (isZulipRefusal(error)) {
-          this.logger.warn(
-            `${pair.key}: Zulip refused to rename the topic of Discord thread ${thread.threadId}: ${describe(error)}`,
-          );
-        } else {
-          this.fail(`${pair.key}: could not rename the Zulip topic of Discord thread ${thread.threadId}`, error);
+        if (!isNothingToChange(error)) {
+          if (isZulipRefusal(error)) {
+            this.logger.warn(
+              `${pair.key}: Zulip refused to rename the topic of Discord thread ${thread.threadId}: ${describe(error)}`,
+            );
+          } else {
+            this.fail(`${pair.key}: could not rename the Zulip topic of Discord thread ${thread.threadId}`, error);
+          }
+          return;
         }
-        return;
       }
     }
     await this.database.updateMirrorConversation(conversation.id, {

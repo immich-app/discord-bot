@@ -133,11 +133,13 @@ describe(DiscordRepository.name, () => {
     channel = makeChannel();
     webhook = makeWebhook('700000000000000001');
     bot.channels.fetch.mockResolvedValue(channel);
+    vitest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
     sut = new DiscordRepository();
   });
 
   afterEach(() => {
     vitest.useRealTimers();
+    vitest.restoreAllMocks();
   });
 
   describe('isReady', () => {
@@ -237,17 +239,41 @@ describe(DiscordRepository.name, () => {
       expect(newer.send).not.toHaveBeenCalled();
     });
 
-    it('should create a webhook when the bot owns none', async () => {
+    it("should create a webhook with the bot's avatar when the bot owns none", async () => {
+      const fetchMock = vitest
+        .mocked(fetch)
+        .mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } }));
       channel.createWebhook.mockResolvedValue(webhook);
 
       await sut.ensureMirrorWebhook(channelId);
 
       expect(channel.createWebhook).toHaveBeenCalledWith({
         name: 'Zulip mirror',
-        avatar: 'https://cdn.discordapp.com/avatars/bot.png',
+        avatar: 'data:image/png;base64,AQID',
         reason: 'Discord-Zulip mirror',
       });
       expect(bot.user?.displayAvatarURL).toHaveBeenCalledWith({ extension: 'png', size: 256 });
+      expect(fetchMock).toHaveBeenCalledWith('https://cdn.discordapp.com/avatars/bot.png', {
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    it.each([
+      ['an error page', () => new Response('<html>', { status: 503, headers: { 'content-type': 'text/html' } })],
+      ['something that is no image', () => new Response('<html>', { headers: { 'content-type': 'text/html' } })],
+      [
+        'a timeout',
+        () => {
+          throw new DOMException('The operation timed out.', 'TimeoutError');
+        },
+      ],
+    ])('should create the webhook without an avatar when the download gets %s', async (_, answer) => {
+      vitest.mocked(fetch).mockImplementation(async () => answer());
+      channel.createWebhook.mockResolvedValue(webhook);
+
+      await sut.ensureMirrorWebhook(channelId);
+
+      expect(channel.createWebhook).toHaveBeenCalledWith(expect.objectContaining({ avatar: undefined }));
     });
 
     it('should work in a forum', async () => {
@@ -589,6 +615,13 @@ describe(DiscordRepository.name, () => {
     it('should unarchive the thread', async () => {
       await sut.unarchiveMirrorThread(threadId);
       expect(thread.setArchived).toHaveBeenCalledWith(false);
+    });
+
+    it('should leave a locked thread archived', async () => {
+      bot.channels.fetch.mockResolvedValue(makeThread({ locked: true }));
+
+      await expect(sut.unarchiveMirrorThread(threadId)).rejects.toMatchObject({ kind: 'locked' });
+      expect(thread.setArchived).not.toHaveBeenCalled();
     });
 
     it('should refuse a channel that is not a thread', async () => {
