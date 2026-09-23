@@ -27,7 +27,8 @@ export type ZulipRenderContext = {
   lateTimestamp?: number;
 };
 
-export type DiscordRendered = { text: string; uploads: string[]; pingUserIds: string[] };
+/** `spoilerUploads` are the uploads linked inside a spoiler, which Discord hides only by their file name. */
+export type DiscordRendered = { text: string; uploads: string[]; spoilerUploads: string[]; pingUserIds: string[] };
 
 type Lookups = {
   message: (id: number) => ZulipMessageRef | undefined;
@@ -133,7 +134,21 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
   const replyEnd = reply ? (lineOffsets[reply.last + 1] ?? text.length) : 0;
 
   const uploads: string[] = [];
+  const spoilerUploads = new Set<string>();
   const pingUserIds: string[] = [];
+
+  const enclosedBy = (index: number, test: (fence: ZulipFence) => boolean) => {
+    let fence = lineFences[index];
+    if (fence && (index === fence.open || index === fence.close)) {
+      fence = fence.parent;
+    }
+    for (; fence; fence = fence.parent) {
+      if (test(fence)) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   const realmUrl = (url: string) => {
     try {
@@ -156,6 +171,14 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
     }
     if (!uploads.includes(path)) {
       uploads.push(path);
+    }
+    if (
+      enclosedBy(
+        lineOffsets.findLastIndex((offset) => offset <= start),
+        isSpoilerFence,
+      )
+    ) {
+      spoilerUploads.add(path);
     }
     return true;
   };
@@ -285,20 +308,8 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
     }
   }
 
-  const quoted = (index: number) => {
-    let fence = lineFences[index];
-    if (fence && (index === fence.open || index === fence.close)) {
-      fence = fence.parent;
-    }
-    for (; fence; fence = fence.parent) {
-      if (isQuoteFence(fence) && fence !== reply?.fence) {
-        return true;
-      }
-    }
-    return false;
-  };
   for (const [index, line] of output.entries()) {
-    if (quoted(index) && !DROPPED_LINE.test(line)) {
+    if (enclosedBy(index, (fence) => isQuoteFence(fence) && fence !== reply?.fence) && !DROPPED_LINE.test(line)) {
       output[index] = `> ${line}`;
     }
   }
@@ -340,7 +351,7 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
   if (lateTimestamp !== undefined) {
     result = `${result}${result ? '\n' : ''}-# sent <t:${lateTimestamp}:f>`;
   }
-  return { text: result, uploads, pingUserIds, reply };
+  return { text: result, uploads, spoilerUploads: [...spoilerUploads], pingUserIds, reply };
 };
 
 export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
@@ -362,7 +373,7 @@ export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
 };
 
 export const toDiscordMirrorContent = (raw: string, ctx: ZulipRenderContext): DiscordRendered => {
-  const { text, uploads, pingUserIds } = render(
+  const { text, uploads, spoilerUploads, pingUserIds } = render(
     raw,
     ctx.realmOrigin,
     {
@@ -372,7 +383,7 @@ export const toDiscordMirrorContent = (raw: string, ctx: ZulipRenderContext): Di
     },
     ctx.lateTimestamp,
   );
-  return { text, uploads, pingUserIds };
+  return { text, uploads, spoilerUploads, pingUserIds };
 };
 
 const openFenceAtEnd = (text: string) => {

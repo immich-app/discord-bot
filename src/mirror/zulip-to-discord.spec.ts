@@ -42,6 +42,7 @@ describe('toDiscordMirrorContent', () => {
         expect(toDiscordMirrorContent(`hi ${mention}!`, ctx)).toEqual({
           text: `hi <@${TEAM_MEMBER}>!`,
           uploads: [],
+          spoilerUploads: [],
           pingUserIds: [],
         });
       },
@@ -150,6 +151,23 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent(raw, ctx)).toEqual({
         text: 'look a.png here',
         uploads: ['/user_uploads/2/ab/xyz/a.png', '/user_uploads/2/cd/uvw/b.txt', '/user_uploads/2/ef/rst/c.pdf'],
+        spoilerUploads: [],
+        pingUserIds: [],
+      });
+    });
+
+    it('should name the uploads linked inside a spoiler, which Discord hides by their file name only', () => {
+      const raw = [
+        '[a.png](/user_uploads/2/ab/xyz/a.png)',
+        '```spoiler Plot twist',
+        '[b.png](/user_uploads/2/ab/xyz/b.png)',
+        '> see [c.png](/user_uploads/2/ab/xyz/c.png)',
+        '```',
+      ].join('\n');
+      expect(toDiscordMirrorContent(raw, ctx)).toEqual({
+        text: '**Plot twist**\n||> see c.png||',
+        uploads: ['/user_uploads/2/ab/xyz/a.png', '/user_uploads/2/ab/xyz/b.png', '/user_uploads/2/ab/xyz/c.png'],
+        spoilerUploads: ['/user_uploads/2/ab/xyz/b.png', '/user_uploads/2/ab/xyz/c.png'],
         pingUserIds: [],
       });
     });
@@ -170,6 +188,7 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent('`[a](/user_uploads/2/ab/xyz/a.png)`', ctx)).toEqual({
         text: '`[a](/user_uploads/2/ab/xyz/a.png)`',
         uploads: [],
+        spoilerUploads: [],
         pingUserIds: [],
       });
     });
@@ -179,6 +198,7 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent(raw, ctx)).toEqual({
         text: '-# ↩ Someone said:\n> old.png\nmine',
         uploads: [],
+        spoilerUploads: [],
         pingUserIds: [],
       });
     });
@@ -189,6 +209,7 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent(`${quoteReply(101, 'their text @**all**')}\nthanks`, ctx)).toEqual({
         text: `-# ↩ replying to <@${CONTRIBUTOR}> · [jump](${JUMP_DISCORD})\nthanks`,
         uploads: [],
+        spoilerUploads: [],
         pingUserIds: [CONTRIBUTOR],
       });
     });
@@ -197,6 +218,7 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent(`${quoteReply(102, 'x')}\nthanks`, ctx)).toEqual({
         text: `-# ↩ replying to Zack \\*Z\\* · [jump](${JUMP_ZULIP})\nthanks`,
         uploads: [],
+        spoilerUploads: [],
         pingUserIds: [],
       });
     });
@@ -206,6 +228,7 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent(`${quoteReply(999, body, '````')}\nreply`, ctx)).toEqual({
         text: '-# ↩ Someone said:\n> one\n> two *(Zulip link)*\n> three\n> four\n> five …\nreply',
         uploads: [],
+        spoilerUploads: [],
         pingUserIds: [],
       });
       expect(text(`${quoteReply(999, 'short', '~~~')}\nreply`)).toBe('-# ↩ Someone said:\n> short\nreply');
@@ -276,6 +299,7 @@ describe('toDiscordMirrorContent', () => {
       expect(toDiscordMirrorContent(raw, ctx)).toEqual({
         text: raw,
         uploads: [],
+        spoilerUploads: [],
         pingUserIds: [],
       });
     });

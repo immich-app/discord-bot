@@ -1037,6 +1037,30 @@ describe(MirrorService.name, () => {
       expect(db.messages).toHaveLength(1);
     });
 
+    it('should attach an upload linked inside a spoiler as a spoiler, and hide its note too', async () => {
+      zulip.downloadUpload.mockImplementation(async (path) =>
+        path.endsWith('big.zip') ? undefined : new File(['bytes'], 'shot.png', { type: 'image/png' }),
+      );
+
+      await fromZulip(
+        zulipMessage({
+          content:
+            'look\n```spoiler Plot twist\n[shot.png](/user_uploads/2/ab/cdef/shot.png)\n[big.zip](/user_uploads/2/ab/cdef/big.zip)\n```',
+        }),
+      );
+
+      expect(sent(0).files?.map(({ name, type }) => [name, type])).toEqual([['SPOILER_shot.png', 'image/png']]);
+      expect(sent(0).content).toBe('look\n**Plot twist**\n||*(attachment not mirrored: big.zip)*||');
+    });
+
+    it('should keep the note of a spoilered file hidden when Discord finds the message too large', async () => {
+      discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('too-large', 40_005));
+
+      await fromZulip(zulipMessage({ content: '```spoiler\n[shot.png](/user_uploads/2/ab/cdef/shot.png)\n```' }));
+
+      expect(sent(1).content).toBe('**Spoiler**\n||*(attachment not mirrored: shot.png)*||');
+    });
+
     it('should recreate a deleted webhook and retry once, at most once an hour', async () => {
       discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('unknown-webhook', 10_015));
       await fromZulip(zulipMessage());

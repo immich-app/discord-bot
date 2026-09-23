@@ -119,11 +119,13 @@ type Identity = { username: string; avatarUrl?: string };
 
 type TeamMemberMaps = { discordByZulip: Map<number, string>; zulipByDiscord: Map<string, number> };
 
+type Note = { name: string; spoiler: boolean };
+
 type OutgoingZulipMessage = {
   text: string;
   pingUserIds: string[];
   files: File[];
-  notes: string[];
+  notes: Note[];
   identity: Identity;
 };
 
@@ -185,11 +187,16 @@ const transferDeadline = () => {
   return { signal: controller.signal, done: () => clearTimeout(timer) };
 };
 
-const noteLine = (name: string) => `*(attachment not mirrored: ${escapeDiscordInline(name)})*`;
+const SPOILER_FILE = 'SPOILER_';
+
+const noteLine = ({ name, spoiler }: Note) => {
+  const line = `*(attachment not mirrored: ${escapeDiscordInline(name)})*`;
+  return spoiler ? `||${line}||` : line;
+};
 
 /** The notes about files that could not be attached go on part 0, next to the files that could. */
-const withNotes = (text: string, noteNames: string[]) => {
-  const notes = noteNames.map(noteLine).join('\n');
+const withNotes = (text: string, noteList: Note[]) => {
+  const notes = noteList.map(noteLine).join('\n');
   const parts = splitDiscordContent(text);
   if (!notes) {
     return parts;
@@ -996,27 +1003,31 @@ export class MirrorService implements OnModuleDestroy {
     });
   }
 
-  private async downloadUploads(state: PairState, messageId: number, paths: string[]) {
+  private async downloadUploads(
+    state: PairState,
+    messageId: number,
+    { uploads: paths, spoilerUploads }: { uploads: string[]; spoilerUploads: string[] },
+  ) {
     const files: File[] = [];
-    const notes: string[] = [];
+    const notes: Note[] = [];
     let total = 0;
     const deadline = transferDeadline();
     for (const [index, path] of paths.entries()) {
-      const name = uploadName(path);
+      const note = { name: uploadName(path), spoiler: spoilerUploads.includes(path) };
       if (index >= MAX_FILES || deadline.signal.aborted) {
-        notes.push(name);
+        notes.push(note);
         continue;
       }
       try {
         const file = await this.zulip.downloadUpload(path, Constants.Mirror.MaxFileBytes, deadline.signal);
         if (file && total + file.size <= MAX_TOTAL_FILE_BYTES) {
           total += file.size;
-          files.push(file);
+          files.push(note.spoiler ? new File([file], `${SPOILER_FILE}${file.name}`, { type: file.type }) : file);
         } else {
-          notes.push(name);
+          notes.push(note);
         }
       } catch (error) {
-        notes.push(name);
+        notes.push(note);
         this.logger.warn(
           `${state.pair.key}: could not download upload ${index + 1} of Zulip message ${messageId}: ${describe(error)}`,
         );
@@ -1050,7 +1061,7 @@ export class MirrorService implements OnModuleDestroy {
       const outgoing: OutgoingZulipMessage = {
         text: rendered.text,
         pingUserIds: rendered.pingUserIds,
-        ...(await this.downloadUploads(state, message.id, rendered.uploads)),
+        ...(await this.downloadUploads(state, message.id, rendered)),
         identity: await this.resolveIdentity(
           { id: message.senderId, fullName: message.senderFullName },
           state.guildId!,
@@ -1217,7 +1228,11 @@ export class MirrorService implements OnModuleDestroy {
       if (!isMirrorError(error, 'too-large') || files.length === 0) {
         throw error;
       }
-      parts = withNotes(outgoing.text, [...outgoing.notes, ...files.map(({ name }) => name)]);
+      const dropped = files.map(({ name }) => ({
+        name: name.startsWith(SPOILER_FILE) ? name.slice(SPOILER_FILE.length) : name,
+        spoiler: name.startsWith(SPOILER_FILE),
+      }));
+      parts = withNotes(outgoing.text, [...outgoing.notes, ...dropped]);
       files = [];
       sent = await send(parts[0], { ...first, files });
     }
