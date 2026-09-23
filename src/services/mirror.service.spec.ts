@@ -3070,6 +3070,28 @@ describe(MirrorService.name, () => {
         expect(discord.removeMirrorReaction).not.toHaveBeenCalled();
       });
 
+      it('should keep the emotes it has when reading them again fails, and wait a minute before trying again', async () => {
+        vitest.useFakeTimers({ toFake: ['Date'] });
+        const fire = { name: 'fire2', code: '3', type: 'realm_emoji', userId: 20 };
+        const unsynced = { name: 'unsynced', code: '4', type: 'realm_emoji', userId: 20 };
+        zulipReactions([fire]);
+        await reactOnZulip(70);
+        expect(zulip.listEmoji).toHaveBeenCalledOnce();
+
+        vitest.setSystemTime(Date.now() + 61_000);
+        zulip.listEmoji.mockRejectedValue(new Error('Zulip is down'));
+        discord.addMirrorReaction.mockClear();
+        discord.getMirrorReactions.mockResolvedValue([]);
+        zulipReactions([fire, unsynced]);
+        await reactOnZulip(70);
+        await reactOnZulip(70);
+
+        const reads = zulip.listEmoji.mock.calls.length;
+        await reactOnZulip(70);
+        expect(zulip.listEmoji).toHaveBeenCalledTimes(reads);
+        expect(discord.addMirrorReaction).toHaveBeenCalledWith(target, { id: EMOTE, name: 'fire', animated: false });
+      });
+
       it('should read the emotes again, at most once a minute, for a realm emoji they do not have yet', async () => {
         vitest.useFakeTimers({ toFake: ['Date'] });
         const unsynced = { name: 'unsynced', code: '4', type: 'realm_emoji', userId: 20 };

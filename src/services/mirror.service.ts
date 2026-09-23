@@ -337,7 +337,7 @@ export class MirrorService implements OnModuleDestroy {
   private failedCreates = new Map<string, number>();
   private emojiCodes?: ZulipEmojiCodes;
   private emojiRetryAt = 0;
-  private emotes = new Map<string, { maps: EmoteMaps; loadedAt: number }>();
+  private emotes = new Map<string, { maps: EmoteMaps; loadedAt: number; triedAt: number }>();
   /** Reaction syncs queued and not started yet, which another change to the same message need not queue again. */
   private pendingReactions = new Set<string>();
   private active = false;
@@ -1565,28 +1565,38 @@ export class MirrorService implements OnModuleDestroy {
   /** An emote synced or uploaded since the maps were read is found by reading them again, at most once a minute. */
   private async emoteMaps(guildId: string, lacks?: (maps: EmoteMaps) => boolean): Promise<EmoteMaps | undefined> {
     const cached = this.emotes.get(guildId);
-    const age = cached ? Date.now() - cached.loadedAt : Infinity;
-    if (cached && age < HOUR && (age < MINUTE || !lacks?.(cached.maps))) {
+    const now = Date.now();
+    if (cached && (now - cached.triedAt < MINUTE || (now - cached.loadedAt < HOUR && !lacks?.(cached.maps)))) {
       return cached.maps;
     }
+    if (cached) {
+      cached.triedAt = now;
+    }
+    // Maps that could not be read again are still better than none: they hold every emote known until then.
+    const maps = await this.readEmoteMaps(guildId);
+    if (!maps) {
+      return cached?.maps;
+    }
+    this.emotes.set(guildId, { maps, loadedAt: now, triedAt: now });
+    return maps;
+  }
+
+  private async readEmoteMaps(guildId: string) {
     const codes = await this.emojiTables();
     if (!codes) {
       return undefined;
     }
-    let maps: EmoteMaps;
     try {
       const emotes = await this.discordMirror.getEmotes(guildId);
       if (!emotes) {
         return undefined;
       }
       const realm = await this.retryZulip(() => this.zulip.listEmoji());
-      maps = toEmoteMaps(emotes, zulipBuiltInEmoji(codes), realm);
+      return toEmoteMaps(emotes, zulipBuiltInEmoji(codes), realm);
     } catch (error) {
       this.fail(`Could not match the Discord emotes of guild ${guildId} with the Zulip realm emoji`, error);
       return undefined;
     }
-    this.emotes.set(guildId, { maps, loadedAt: Date.now() });
-    return maps;
   }
 
   private async renderForDiscord(state: PairState, raw: string, lateTimestamp?: number) {
