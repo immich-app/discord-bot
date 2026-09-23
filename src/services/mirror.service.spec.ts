@@ -671,6 +671,34 @@ describe(MirrorService.name, () => {
       expect(db.messages.map(({ zulipMessageId }) => zulipMessageId)).toEqual([1002]);
     });
 
+    it('should turn a pair off as soon as its channel becomes visible to everyone', async () => {
+      vitest.useFakeTimers();
+      await start();
+      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
+        ...mirrorChannel(channelId),
+        everyoneCanView: channelId === DEV_CHANNEL,
+      }));
+
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(error()).toHaveBeenCalledWith(
+        `Dev: Discord channel ${DEV_CHANNEL} is visible to @everyone and the pair is not marked public, so the pair is off`,
+      );
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
+      expect(sut.handlesChannel(OFF_TOPIC_CHANNEL)).toBe(true);
+    });
+
+    it('should keep a pair on while its channel cannot be checked', async () => {
+      vitest.useFakeTimers();
+      await start();
+      discord.getMirrorChannel.mockRejectedValue(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(error()).toHaveBeenCalledWith(`Dev: could not check Discord channel ${DEV_CHANNEL}: unavailable`);
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
+    });
+
     it('should warn about a mirror stream the Zulip bot is not subscribed to', async () => {
       sut.init();
       await sut.onDiscordReady();

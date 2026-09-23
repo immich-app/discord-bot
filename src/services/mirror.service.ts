@@ -5,6 +5,7 @@ import { Constants } from 'src/constants';
 import { isResolvedTopic, plural, unresolveTopic, ZULIP_RESOLVED_PREFIX, zulipNarrowLink } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import {
+  DiscordMirrorChannel,
   DiscordMirrorError,
   DiscordMirrorErrorKind,
   DiscordMirrorSend,
@@ -73,6 +74,7 @@ const CATCH_UP_RETRY_MS = 30_000;
 const MAX_CATCH_UP_RETRY_MS = 10 * MINUTE;
 const MAX_CREATE_ATTEMPTS = 3;
 const RESUME_MS = 30_000;
+const CHANNEL_CHECK_MS = 10 * MINUTE;
 const DISCORD_EPOCH = 1_420_070_400_000n;
 const ACTIVE_THREAD_DAYS = 7;
 const ACTIVE_THREAD_LIMIT = 20;
@@ -249,6 +251,23 @@ const zulipOriginRow = (
   zulipAttachments: null,
 });
 
+/** Why the pair must be off with this channel, or `undefined`. */
+const channelProblem = (pair: EnabledPair, channel: DiscordMirrorChannel | undefined) => {
+  if (!channel || !Constants.Discord.Servers.includes(channel.guildId)) {
+    return 'does not exist or is not in an Immich server';
+  }
+  if (channel.kind !== (pair.kind === 'text' ? 'text' : 'forum')) {
+    return `is not a ${pair.kind === 'text' ? 'text channel' : 'forum'}`;
+  }
+  if (channel.categoryId === Constants.Discord.Categories.Team) {
+    return 'is in the Team category';
+  }
+  if (channel.everyoneCanView && !pair.public) {
+    return 'is visible to @everyone and the pair is not marked public';
+  }
+  return undefined;
+};
+
 const toTarget = (row: MirrorMessage): DiscordMirrorTarget => ({
   channelId: row.discordChannelId,
   threadId: row.discordThreadId,
@@ -273,6 +292,7 @@ export class MirrorService implements OnModuleDestroy {
   private emojiRetryAt = 0;
   private emotes = new Map<string, { byName: Map<string, string>; expiresAt: number }>();
   private zulipRegistered = false;
+  private channelCheck?: NodeJS.Timeout;
 
   constructor(
     @Inject(IZulipInterface) private zulip: IZulipInterface,
@@ -323,6 +343,8 @@ export class MirrorService implements OnModuleDestroy {
     this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
     this.zulipService.onMessagesDeleted((deletion) => this.onZulipDeletion(deletion));
     this.zulipService.onQueueRegistered((registration) => this.onZulipQueueRegistered(registration));
+    this.channelCheck = setInterval(() => void this.recheckChannels(), CHANNEL_CHECK_MS);
+    this.channelCheck.unref();
   }
 
   async onDiscordReady() {
@@ -380,6 +402,7 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    clearInterval(this.channelCheck);
     for (const state of this.pairs) {
       state.queue.close();
       clearTimeout(state.retryTimer);
@@ -462,17 +485,7 @@ export class MirrorService implements OnModuleDestroy {
   private async checkDiscordChannel(state: PairState) {
     const { pair } = state;
     const channel = await this.discordMirror.getMirrorChannel(pair.discordChannelId);
-    const expected = pair.kind === 'text' ? 'text' : 'forum';
-    let problem: string | undefined;
-    if (!channel || !Constants.Discord.Servers.includes(channel.guildId)) {
-      problem = 'does not exist or is not in an Immich server';
-    } else if (channel.kind !== expected) {
-      problem = `is not a ${pair.kind === 'text' ? 'text channel' : 'forum'}`;
-    } else if (channel.categoryId === Constants.Discord.Categories.Team) {
-      problem = 'is in the Team category';
-    } else if (channel.everyoneCanView && !pair.public) {
-      problem = 'is visible to @everyone and the pair is not marked public';
-    }
+    const problem = channelProblem(pair, channel);
     if (!channel || problem) {
       state.status = 'disabled';
       this.logger.error(`${pair.key}: Discord channel ${pair.discordChannelId} ${problem}, so the pair is off`);
@@ -508,6 +521,22 @@ export class MirrorService implements OnModuleDestroy {
       this.logger.log(
         `${pair.key}: mirroring Discord channel ${pair.discordChannelId} with Zulip stream ${pair.zulipStreamId}${topic}`,
       );
+    }
+  }
+
+  /** Who can see a channel, and where it sits, can change without a new gateway session. */
+  private async recheckChannels() {
+    for (const state of this.pairs.filter((state) => this.discordReady(state))) {
+      const { pair } = state;
+      try {
+        const problem = channelProblem(pair, await this.discordMirror.getMirrorChannel(pair.discordChannelId));
+        if (problem) {
+          state.status = 'disabled';
+          this.logger.error(`${pair.key}: Discord channel ${pair.discordChannelId} ${problem}, so the pair is off`);
+        }
+      } catch (error) {
+        this.fail(`${pair.key}: could not check Discord channel ${pair.discordChannelId}`, error);
+      }
     }
   }
 
