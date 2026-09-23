@@ -29,6 +29,7 @@ import {
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { isMirrorCandidate, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { readAtMost } from 'src/mirror/download';
+import { isConnectFailure } from 'src/mirror/network';
 
 class DiscordLogger extends Logger {
   constructor() {
@@ -135,7 +136,8 @@ const toMirrorError = (error: unknown): DiscordMirrorError => {
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  return new DiscordMirrorError(isNetworkFailure(error) ? 'unavailable' : 'other', undefined, message);
+  const kind = isConnectFailure(error) ? 'unreachable' : isNetworkFailure(error) ? 'unavailable' : 'other';
+  return new DiscordMirrorError(kind, undefined, message);
 };
 
 /** What @discordjs/rest throws once its own retries of a request that never got an answer run out. */

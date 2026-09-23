@@ -344,6 +344,8 @@ const discordMessage = (overrides: Partial<DiscordSourceMessage> = {}): DiscordS
 
 const paragraphs = (...letters: string[]) => letters.map((letter) => letter.repeat(1500)).join('\n\n');
 
+const refused = () => Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:443'), { code: 'ECONNREFUSED' });
+
 describe(MirrorService.name, () => {
   let sut: MirrorService;
   let zulip: Mocked<IZulipInterface>;
@@ -1578,17 +1580,29 @@ describe(MirrorService.name, () => {
       expect(db.messages.map(({ discordMessageId }) => discordMessageId)).toEqual(['300000000000000002']);
     });
 
-    it('should hold the next messages back for catch-up after a post failed on the way', async () => {
-      zulip.sendMessage.mockRejectedValueOnce(new ZulipApiError(500, 'BAD_GATEWAY', 'down', 'POST /messages'));
+    it('should hold the next messages back for catch-up after a post Zulip never took', async () => {
+      zulip.sendMessage.mockRejectedValueOnce(
+        new ZulipApiError(429, 'RATE_LIMIT_HIT', 'API usage exceeded rate limit', 'POST /messages'),
+      );
 
       await fromDiscord(discordMessage());
       await fromDiscord(discordMessage({ id: '300000000000000002' }));
 
       expect(error()).toHaveBeenCalledWith(
-        'Dev: could not mirror Discord message 300000000000000001 to Zulip: Zulip POST /messages failed with 500 BAD_GATEWAY: down',
+        'Dev: could not mirror Discord message 300000000000000001 to Zulip: Zulip POST /messages failed with 429 RATE_LIMIT_HIT: API usage exceeded rate limit',
       );
       expect(zulip.sendMessage).toHaveBeenCalledOnce();
       expect(db.messages).toEqual([]);
+    });
+
+    it('should carry on after a post Zulip may have taken', async () => {
+      zulip.sendMessage.mockRejectedValueOnce(new ZulipApiError(502, 'BAD_GATEWAY', 'down', 'POST /messages'));
+
+      await fromDiscord(discordMessage());
+      await fromDiscord(discordMessage({ id: '300000000000000002' }));
+
+      expect(zulip.sendMessage).toHaveBeenCalledTimes(2);
+      expect(db.messages.map(({ discordMessageId }) => discordMessageId)).toEqual(['300000000000000002']);
     });
 
     it('should not wait for Zulip when it is not ready, and say so once', async () => {
@@ -2459,11 +2473,11 @@ describe(MirrorService.name, () => {
       expect(posted()).toEqual(['missed while down', 'posted during startup']);
     });
 
-    it('should catch up again after a message fails to reach Zulip on the way', async () => {
+    it('should catch up again after a message could not reach Zulip', async () => {
       seedHighWaters();
       await start();
       vitest.useFakeTimers();
-      zulip.sendMessage.mockRejectedValueOnce(new TypeError('fetch failed'));
+      zulip.sendMessage.mockRejectedValueOnce(new TypeError('fetch failed', { cause: refused() }));
       const first = missedOnDiscord({ content: 'first' });
       const second = missedOnDiscord({ id: snowflake(Date.now() - 1000), content: 'second' });
       onDiscord(DEV_CHANNEL, first, second);
@@ -2480,13 +2494,13 @@ describe(MirrorService.name, () => {
       expect(posted()).toEqual(['first', 'first', 'second']);
     });
 
-    it('should catch up again, later each time, while Discord keeps failing', async () => {
+    it('should catch up again, later each time, while Discord cannot be reached', async () => {
       seedHighWaters();
       await start();
       vitest.useFakeTimers();
       discord.sendMirrorMessage
-        .mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'))
-        .mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+        .mockRejectedValueOnce(new DiscordMirrorError('unreachable', undefined, 'connect ECONNREFUSED'))
+        .mockRejectedValueOnce(new DiscordMirrorError('unreachable', undefined, 'connect ECONNREFUSED'));
       zulipHistory.push(missedOnZulip({ content: 'first' }), missedOnZulip({ id: 1002, content: 'second' }));
 
       await fromZulip(zulipHistory[0]);
@@ -2509,7 +2523,7 @@ describe(MirrorService.name, () => {
       vitest.useFakeTimers();
       zulip.sendMessage.mockImplementation(async ({ content }) => {
         if (content.includes('poison')) {
-          throw new ZulipApiError(500, 'BAD_GATEWAY', 'down', 'POST /messages');
+          throw new ZulipApiError(429, 'RATE_LIMIT_HIT', 'API usage exceeded rate limit', 'POST /messages');
         }
         return { id: 6000 + zulip.sendMessage.mock.calls.length };
       });
@@ -2529,6 +2543,329 @@ describe(MirrorService.name, () => {
       await vitest.advanceTimersByTimeAsync(10 * 60_000);
       await sut.whenIdle();
       expect(zulip.sendMessage).toHaveBeenCalledTimes(4);
+    });
+
+    it('should never send a message again after Zulip may have taken it', async () => {
+      seedHighWaters();
+      await start();
+      const first = missedOnDiscord({ content: 'first' });
+      onDiscord(DEV_CHANNEL, first);
+      zulip.sendMessage.mockRejectedValueOnce(
+        new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      );
+
+      await fromDiscord(first);
+      await register();
+
+      expect(posted()).toEqual(['first']);
+      expect(log()).not.toHaveBeenCalledWith(expect.stringContaining('catching up again'));
+    });
+
+    it('should never send a message again after Discord may have taken it', async () => {
+      seedHighWaters();
+      await start();
+      zulipHistory.push(missedOnZulip({ content: 'first' }));
+      discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+
+      await fromZulip(zulipHistory[0]);
+      await register();
+
+      expect(contents()).toEqual(['first']);
+    });
+
+    it('should catch up the start of a new thread it turned away while catch-up was due', async () => {
+      seedHighWaters();
+      await start();
+      vitest.useFakeTimers();
+      discord.sendMirrorMessage.mockRejectedValueOnce(
+        new DiscordMirrorError('unreachable', undefined, 'connect ECONNREFUSED'),
+      );
+      zulipHistory.push(missedOnZulip({ content: 'team' }));
+      await fromZulip(zulipHistory[0]);
+      const threadId = snowflake(Date.now() - 1000);
+      const inThread = { threadId, threadName: 'New idea' };
+      const starter = missedOnDiscord({ id: threadId, ...inThread, content: 'starter' });
+      onDiscord(threadId, starter);
+
+      await fromDiscord(starter);
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+      await fromDiscord(missedOnDiscord({ id: snowflake(Date.now()), ...inThread, content: 'reply' }));
+
+      expect(posted()).toEqual(['starter', 'reply']);
+      expect(sentMessages().map(({ topic }) => topic)).toEqual(['New idea', 'New idea']);
+      expect(contents()).toEqual(['team', 'team']);
+    });
+
+    it('should catch up a thread it turned away even when it is long idle', async () => {
+      const idle = seedThread({ id: 'idle' });
+      seedRow({
+        conversationId: idle.id,
+        discordThreadId: idle.discordThreadId,
+        createdAt: new Date(Date.now() - 30 * DAY),
+      });
+      seedHighWaters();
+      sut.init();
+      await register();
+      const message = missedOnDiscord({ threadId: idle.discordThreadId, threadName: 'Crash on upload' });
+      onDiscord(idle.discordThreadId!, message);
+
+      await fromDiscord(message);
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+
+      expect(sentMessages()).toEqual([expect.objectContaining({ topic: 'Crash on upload' })]);
+      expect(db.messages.find(({ discordMessageId }) => discordMessageId === message.id)?.conversationId).toBe('idle');
+    });
+
+    it('should quietly pass over a thread it turned away that no longer exists', async () => {
+      seedHighWaters();
+      sut.init();
+      await register();
+      const threadId = snowflake(Date.now() - 1000);
+      discord.fetchMirrorMessagesBefore.mockImplementation(async (channelId) => {
+        if (channelId === threadId) {
+          throw new DiscordMirrorError('unknown-channel', 10_003);
+        }
+        return { messages: [], oldestId: null, full: false };
+      });
+
+      await fromDiscord(missedOnDiscord({ id: threadId, threadId, threadName: 'Gone' }));
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+
+      expect(discord.fetchMirrorMessagesBefore).toHaveBeenCalledWith(threadId, undefined, 100);
+      expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should catch up a Zulip message it turned away in a stream it has not mirrored from yet', async () => {
+      await start();
+      vitest.useFakeTimers();
+      zulip.sendMessage.mockRejectedValueOnce(new TypeError('fetch failed', { cause: refused() }));
+      const postId = snowflake(Date.now() - 1000);
+      const post = discordMessage({
+        id: postId,
+        channelId: FORUM,
+        threadId: postId,
+        threadName: 'Plugins',
+        content: 'post',
+      });
+      onDiscord(postId, post);
+      await fromDiscord(post);
+      const team = zulipMessage({ id: 2001, streamId: FORUM_STREAM, topic: 'Roadmap', content: 'team' });
+      zulipHistory.push(team);
+
+      await fromZulip(team);
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['post', 'post']);
+      expect(sent(0)).toEqual(expect.objectContaining({ channelId: FORUM, threadName: 'Roadmap', content: 'team' }));
+    });
+
+    it('should catch up a Zulip message it turned away even after its topic was resolved', async () => {
+      seedHighWaters();
+      await start();
+      vitest.useFakeTimers();
+      discord.sendMirrorMessage.mockRejectedValueOnce(
+        new DiscordMirrorError('unreachable', undefined, 'connect ECONNREFUSED'),
+      );
+      const first = missedOnZulip({ content: 'first' });
+      const second = missedOnZulip({ id: 1002, topic: 'Crash', content: 'second' });
+      zulipHistory.push(first, { ...second, topic: '✔ Crash', movedAt: Math.floor(Date.now() / 1000) });
+
+      await fromZulip(first);
+      await fromZulip(second);
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(contents()).toEqual(['first', 'first', 'second']);
+      expect(discord.startMirrorThread).toHaveBeenCalledWith(DEV_CHANNEL, expect.any(String), '✔ Crash');
+    });
+
+    it('should read a thread again when the catch-up that found it went out of date', async () => {
+      seedHighWaters();
+      sut.init();
+      await register();
+      const threadId = snowflake(Date.now() - 1000);
+      const inMain = missedOnDiscord({ content: 'in the channel' });
+      const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
+      onDiscord(DEV_CHANNEL, inMain);
+      onDiscord(threadId, starter);
+      await fromDiscord(starter);
+      const send = deferred<{ id: number }>();
+      zulip.sendMessage.mockReturnValueOnce(send.promise);
+
+      const ready = sut.onDiscordReady();
+      await vitest.waitFor(() => expect(zulip.sendMessage).toHaveBeenCalled());
+      for (const handler of stub.handlers.registration) {
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+      }
+      send.resolve({ id: 5001 });
+      await ready;
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['in the channel', 'starter']);
+    });
+
+    it('should drop what a catch-up read once the mirror lost track again, and leave it to the next one', async () => {
+      seedHighWaters();
+      const page = deferred<DiscordMirrorPage>();
+      discord.fetchMirrorMessagesBefore.mockReturnValueOnce(page.promise);
+      sut.init();
+      await sut.onDiscordReady();
+      for (const handler of stub.handlers.registration) {
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+      }
+      await vitest.waitFor(() => expect(discord.fetchMirrorMessagesBefore).toHaveBeenCalled());
+      const missed = missedOnDiscord({ content: 'missed in the second gap' });
+      const live = missedOnDiscord({ id: snowflake(Date.now() - 1000), content: 'live' });
+      onDiscord(DEV_CHANNEL, missed, live);
+
+      sut.onDiscordMessage(live);
+      const ready = sut.onDiscordReady();
+      page.resolve({ messages: [], oldestId: null, full: false });
+      await ready;
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['missed in the second gap', 'live']);
+    });
+
+    it('should read a thread it turned away again when the catch-up that read it went out of date', async () => {
+      seedHighWaters();
+      sut.init();
+      await register();
+      const threadId = snowflake(Date.now() - 1000);
+      const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
+      onDiscord(threadId, starter);
+      await fromDiscord(starter);
+      const page = deferred<DiscordMirrorPage>();
+      discord.fetchMirrorMessagesBefore.mockReturnValueOnce(page.promise);
+
+      const first = sut.onDiscordReady();
+      await vitest.waitFor(() => expect(discord.fetchMirrorMessagesBefore).toHaveBeenCalled());
+      const second = sut.onDiscordReady();
+      page.resolve({ messages: [], oldestId: null, full: false });
+      await Promise.all([first, second]);
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['starter']);
+    });
+
+    it('should read a thread it turned away again when that read fails on the way', async () => {
+      seedHighWaters();
+      sut.init();
+      await register();
+      const threadId = snowflake(Date.now() - 1000);
+      const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
+      onDiscord(threadId, starter);
+      await fromDiscord(starter);
+      const read = discord.fetchMirrorMessagesBefore.getMockImplementation()!;
+      discord.fetchMirrorMessagesBefore
+        .mockImplementationOnce(read)
+        .mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+      vitest.useFakeTimers();
+
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+      expect(posted()).toEqual(['starter']);
+    });
+
+    it('should never send a message again once it reached Zulip, even when storing its copy failed', async () => {
+      seedHighWaters();
+      await start();
+      const first = missedOnDiscord({ content: 'first' });
+      onDiscord(DEV_CHANNEL, first);
+      db.repository.createMirrorMessages.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+      await fromDiscord(first);
+      await register();
+
+      expect(posted()).toEqual(['first']);
+    });
+
+    it('should hold live messages back while it cannot read Discord, and read again soon', async () => {
+      seedHighWaters();
+      onDiscord(DEV_CHANNEL, missedOnDiscord({ content: 'missed' }));
+      discord.fetchMirrorMessagesBefore.mockRejectedValueOnce(
+        new DiscordMirrorError('unavailable', undefined, 'HTTP 503'),
+      );
+      vitest.useFakeTimers();
+      await start();
+      const live = missedOnDiscord({ id: snowflake(Date.now() - 1000), content: 'live' });
+      onDiscord(DEV_CHANNEL, live);
+
+      await fromDiscord(live);
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+      expect(posted()).toEqual(['missed', 'live']);
+    });
+
+    it('should hold live messages back while it cannot read Zulip, and read again soon', async () => {
+      seedHighWaters();
+      zulipHistory.push(missedOnZulip({ content: 'missed' }));
+      const unavailable = new ZulipApiError(503, 'UNKNOWN_ERROR', 'Service Unavailable', 'GET /messages');
+      zulip.getStreamMessagesBefore
+        .mockRejectedValueOnce(unavailable)
+        .mockRejectedValueOnce(unavailable)
+        .mockRejectedValueOnce(unavailable);
+      vitest.useFakeTimers();
+      sut.init();
+      await sut.onDiscordReady();
+      for (const handler of stub.handlers.registration) {
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+      }
+      await vitest.advanceTimersByTimeAsync(6000);
+      const live = missedOnZulip({ id: 1002, content: 'live' });
+      zulipHistory.push(live);
+
+      await fromZulip(live);
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+      expect(contents()).toEqual(['missed', 'live']);
+    });
+
+    it('should catch up again when catch-up itself fails, and bring what it turned away meanwhile', async () => {
+      seedHighWaters();
+      db.repository.getMirrorDiscordHighWater.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+      vitest.useFakeTimers();
+      sut.init();
+      await register();
+      const threadId = snowflake(Date.now() - 1000);
+      const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
+      onDiscord(threadId, starter);
+      await fromDiscord(starter);
+
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      const live = missedOnZulip({ content: 'live on zulip' });
+      zulipHistory.push(live);
+      await fromZulip(live);
+
+      expect(error()).toHaveBeenCalledWith(
+        'Dev: catch-up failed: Connection terminated unexpectedly',
+        expect.any(Error),
+      );
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['starter']);
+      expect(contents()).toEqual(['live on zulip']);
     });
 
     it('should skip messages older than 6 hours and say how many', async () => {

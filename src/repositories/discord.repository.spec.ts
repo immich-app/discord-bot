@@ -432,7 +432,9 @@ describe(DiscordRepository.name, () => {
       [apiError(50_035), 'other', 50_035],
       [new HTTPError(503, 'Service Unavailable', 'POST', secretUrl, {}), 'unavailable', undefined],
       [new DOMException('This operation was aborted', 'AbortError'), 'unavailable', undefined],
-      [Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }), 'unavailable', undefined],
+      [Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }), 'unreachable', undefined],
+      [Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }), 'unreachable', undefined],
+      [Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }), 'unavailable', undefined],
       [Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }), 'unavailable', undefined],
       [new TypeError('Cannot read properties of undefined'), 'other', undefined],
     ])('should map %s', async (error, kind, code) => {

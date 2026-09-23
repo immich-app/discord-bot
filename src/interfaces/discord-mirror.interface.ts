@@ -72,6 +72,7 @@ export type DiscordMirrorErrorKind =
   | 'forum'
   | 'replaced-webhook'
   | 'unavailable'
+  | 'unreachable'
   | 'other';
 
 export class DiscordMirrorError extends Error {

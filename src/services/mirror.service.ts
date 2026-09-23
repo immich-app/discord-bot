@@ -41,6 +41,7 @@ import {
   topicKey,
   toZulipTopicName,
 } from 'src/mirror/names';
+import { isConnectFailure } from 'src/mirror/network';
 import { EnabledPair, validateMirrorConfig } from 'src/mirror/pairs';
 import { SerialQueue } from 'src/mirror/queue';
 import {
@@ -101,11 +102,18 @@ type PairState = {
   caughtUp: boolean;
   /** Changes whenever the mirror may have missed something, which makes a catch-up already read out of date. */
   generation: number;
+  /** Where creates were turned away since the last complete catch-up, which reads there as well. */
+  turnedAway: TurnedAway;
   retryTimer?: NodeJS.Timeout;
   retryDelayMs: number;
 };
 
+/** The first message turned away per Discord channel or thread, and every Zulip message turned away. */
+type TurnedAway = { discord: Map<string, bigint>; zulip: Set<number> };
+
 type Missed<T> = { messages: T[]; complete: boolean };
+
+type CreateAttempt = { posted: boolean; uncertain: boolean };
 
 type Identity = { username: string; avatarUrl?: string };
 
@@ -139,7 +147,15 @@ const describe = (error: unknown) => {
 
 const isExpected = (error: unknown) => error instanceof DiscordMirrorError || isZulipFailure(error);
 
-const isTransient = (error: unknown) => isTransientZulipFailure(error) || isMirrorError(error, 'unavailable');
+const isTransient = (error: unknown) =>
+  isTransientZulipFailure(error) || isMirrorError(error, 'unavailable') || isMirrorError(error, 'unreachable');
+
+/** Failed without an answer, or with a 5xx: the other side may still have carried the request out. */
+const mayHaveBeenCarriedOut = (error: unknown) =>
+  isMirrorError(error, 'unavailable') ||
+  (error instanceof ZulipApiError ? error.status >= 500 : isZulipFailure(error) && !isConnectFailure(error));
+
+const noneTurnedAway = (): TurnedAway => ({ discord: new Map(), zulip: new Set() });
 
 const snowflakeAt = (ms: number) => (BigInt(ms) - DISCORD_EPOCH) << 22n;
 
@@ -274,6 +290,7 @@ export class MirrorService implements OnModuleDestroy {
       catchUpQueued: false,
       caughtUp: false,
       generation: 0,
+      turnedAway: noneTurnedAway(),
       retryDelayMs: CATCH_UP_RETRY_MS,
     }));
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
@@ -484,18 +501,40 @@ export class MirrorService implements OnModuleDestroy {
     }, delay);
   }
 
-  /** Queues what was missed while either side was away, through the normal create path, right after this op. */
   private async catchUp(state: PairState) {
     state.catchUpQueued = false;
     const { pair } = state;
     const generation = state.generation;
-    const since = Date.now() - Constants.Mirror.CatchUpMaxAgeHours * HOUR;
-    const discord = await this.missedOnDiscord(state, since);
-    const zulip = await this.missedOnZulip(state, since);
-    if (state.generation !== generation) {
-      return;
+    const turnedAway = state.turnedAway;
+    state.turnedAway = noneTurnedAway();
+    try {
+      const since = Date.now() - Constants.Mirror.CatchUpMaxAgeHours * HOUR;
+      const discord = await this.missedOnDiscord(state, since, turnedAway.discord);
+      const zulip = await this.missedOnZulip(state, since, turnedAway.zulip);
+      if (state.generation !== generation) {
+        this.turnAway(state, turnedAway);
+        return;
+      }
+      this.queueMissed(state, generation, discord, zulip, since);
+      if (!discord.complete || !zulip.complete) {
+        this.turnAway(state, turnedAway);
+        this.retryCatchUp(state);
+      }
+    } catch (error) {
+      this.turnAway(state, turnedAway);
+      this.fail(`${pair.key}: catch-up failed`, error);
+      this.retryCatchUp(state);
     }
+  }
 
+  private queueMissed(
+    state: PairState,
+    generation: number,
+    discord: Missed<DiscordSourceMessage>,
+    zulip: Missed<ZulipReceivedMessage>,
+    since: number,
+  ) {
+    const { pair } = state;
     const recentDiscord = discord.messages.filter(({ createdTimestamp }) => createdTimestamp >= since);
     const recentZulip = zulip.messages.filter(({ timestamp }) => timestamp * 1000 >= since);
     const skipped = discord.messages.length - recentDiscord.length + zulip.messages.length - recentZulip.length;
@@ -509,11 +548,7 @@ export class MirrorService implements OnModuleDestroy {
         `${pair.key}: catching up ${plural(recentDiscord.length, 'Discord message')} and ${plural(recentZulip.length, 'Zulip message')}`,
       );
     }
-    if (discord.complete && zulip.complete) {
-      state.caughtUp = true;
-    } else {
-      this.retryCatchUp(state);
-    }
+    state.caughtUp = discord.complete && zulip.complete;
     state.queue.pushNext([
       ...recentDiscord.map((dto) => ({
         label: `Discord message ${dto.id}`,
@@ -530,13 +565,24 @@ export class MirrorService implements OnModuleDestroy {
    * Reads back from the newest message to the high-water mark or the start of the catch-up window. The marks count
    * Discord-origin rows only: a webhook copy posted while a Discord message was missed must not hide it.
    */
-  private async missedOnDiscord(state: PairState, since: number): Promise<Missed<DiscordSourceMessage>> {
+  private async missedOnDiscord(
+    state: PairState,
+    since: number,
+    turnedAway: Map<string, bigint>,
+  ): Promise<Missed<DiscordSourceMessage>> {
     const { pair } = state;
-    const locations: { channelId: string; after: string; thread?: MirrorConversation }[] = [];
+    const locations = new Map<string, { after: bigint; thread?: MirrorConversation }>();
+    const read = (channelId: string, after: bigint, thread?: MirrorConversation) => {
+      const known = locations.get(channelId);
+      locations.set(channelId, {
+        after: known && known.after < after ? known.after : after,
+        thread: known?.thread ?? thread,
+      });
+    };
     const mainHighWater =
       pair.kind === 'text' ? await this.database.getMirrorDiscordHighWater(pair.discordChannelId, null) : undefined;
     if (mainHighWater !== undefined) {
-      locations.push({ channelId: pair.discordChannelId, after: mainHighWater });
+      read(pair.discordChannelId, BigInt(mainHighWater));
     }
     const active = new Date(Date.now() - ACTIVE_THREAD_DAYS * DAY);
     for (const thread of await this.database.getActiveMirrorThreads(
@@ -546,14 +592,20 @@ export class MirrorService implements OnModuleDestroy {
     )) {
       const threadId = thread.discordThreadId!;
       const highWater = await this.database.getMirrorDiscordHighWater(pair.discordChannelId, threadId);
-      locations.push({ channelId: threadId, after: highWater ?? threadId, thread });
+      read(threadId, BigInt(highWater ?? threadId), thread);
+    }
+    for (const [channelId, first] of turnedAway) {
+      const thread =
+        channelId === pair.discordChannelId || locations.has(channelId)
+          ? undefined
+          : await this.database.getMirrorConversationByDiscord(pair.discordChannelId, channelId);
+      read(channelId, first - 1n, thread);
     }
 
     const windowStart = snowflakeAt(since);
     const missed: DiscordSourceMessage[] = [];
     let complete = true;
-    for (const { channelId, after, thread } of locations) {
-      const highWater = BigInt(after);
+    for (const [channelId, { after: highWater, thread }] of locations) {
       const stop = highWater > windowStart ? highWater : windowStart;
       try {
         const found: DiscordSourceMessage[] = [];
@@ -577,8 +629,10 @@ export class MirrorService implements OnModuleDestroy {
         }
         missed.push(...found);
       } catch (error) {
-        if (thread && isMirrorError(error, 'unknown-channel')) {
-          await this.detach(state, thread, 'the Discord thread no longer exists');
+        if (channelId !== pair.discordChannelId && isMirrorError(error, 'unknown-channel')) {
+          if (thread) {
+            await this.detach(state, thread, 'the Discord thread no longer exists');
+          }
         } else {
           complete &&= !isTransient(error);
           this.fail(`${pair.key}: catch-up could not read Discord channel ${channelId}`, error);
@@ -590,12 +644,18 @@ export class MirrorService implements OnModuleDestroy {
 
   /**
    * Reads back from the newest message to the high-water mark or the start of the catch-up window. The bot's own
-   * posts are left out by the server, so they never use up the pages. Moved messages are left out too: they may have
-   * come from outside the mirror, which is never mirrored retroactively.
+   * posts are left out by the server, so they never use up the pages. Moved messages are left out too, unless they were
+   * turned away here: they may have come from outside the mirror, which is never mirrored retroactively.
    */
-  private async missedOnZulip(state: PairState, since: number): Promise<Missed<ZulipReceivedMessage>> {
+  private async missedOnZulip(
+    state: PairState,
+    since: number,
+    turnedAway: Set<number>,
+  ): Promise<Missed<ZulipReceivedMessage>> {
     const { pair } = state;
-    const highWater = await this.database.getMirrorZulipHighWater(pair.zulipStreamId);
+    const known = await this.database.getMirrorZulipHighWater(pair.zulipStreamId);
+    const below = turnedAway.size > 0 ? Math.min(...turnedAway) - 1 : undefined;
+    const highWater = below === undefined || (known !== undefined && known < below) ? known : below;
     if (highWater === undefined) {
       return { messages: [], complete: true };
     }
@@ -635,7 +695,7 @@ export class MirrorService implements OnModuleDestroy {
         message.senderId !== self &&
         !isBotSender(message) &&
         !this.isCommand(message.content) &&
-        message.movedAt === undefined,
+        (message.movedAt === undefined || turnedAway.has(message.id)),
     );
     return { messages, complete: true };
   }
@@ -652,21 +712,46 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  private turnAway(state: PairState, { discord, zulip }: TurnedAway) {
+    for (const [location, id] of discord) {
+      const first = state.turnedAway.discord.get(location);
+      if (first === undefined || id < first) {
+        state.turnedAway.discord.set(location, id);
+      }
+    }
+    for (const id of zulip) {
+      state.turnedAway.zulip.add(id);
+    }
+  }
+
   /**
    * `generation` is set for the creates a catch-up queues, which only run while that catch-up is the current one. A
    * message that keeps failing is given up on, so that it cannot hold the pair back until it leaves the window.
    */
-  private mayCreate(state: PairState, source: string, generation: number | undefined) {
+  private mayCreate(state: PairState, source: string, generation: number | undefined, turnAway: () => void) {
     if ((this.failedCreates.get(source) ?? 0) >= MAX_CREATE_ATTEMPTS) {
       return false;
     }
-    if (generation !== undefined) {
-      return generation === state.generation;
+    if (generation === undefined ? state.caughtUp : generation === state.generation) {
+      return true;
     }
-    if (!state.caughtUp && this.throttle(`not-ready:${state.pair.key}`, THROTTLE_MS)) {
+    turnAway();
+    if (generation === undefined && this.throttle(`not-ready:${state.pair.key}`, THROTTLE_MS)) {
       this.logger.warn(`${state.pair.key}: not mirroring yet: catch-up has to run first, and picks it up`);
     }
-    return state.caughtUp;
+    return false;
+  }
+
+  /** A create that may have been carried out is never sent again: that could post it twice. */
+  private async creating<T>(attempt: CreateAttempt, call: () => Promise<T>) {
+    try {
+      const result = await call();
+      attempt.posted = true;
+      return result;
+    } catch (error) {
+      attempt.uncertain ||= mayHaveBeenCarriedOut(error);
+      throw error;
+    }
   }
 
   private created(state: PairState, source: string) {
@@ -674,7 +759,11 @@ export class MirrorService implements OnModuleDestroy {
     this.failedCreates.delete(source);
   }
 
-  private createFailed(state: PairState, source: string, error: unknown) {
+  private createFailed(state: PairState, source: string, error: unknown, attempt: CreateAttempt, turnAway: () => void) {
+    if (attempt.posted || attempt.uncertain) {
+      this.failedCreates.set(source, MAX_CREATE_ATTEMPTS);
+      return;
+    }
     if (!isTransient(error)) {
       return;
     }
@@ -684,6 +773,7 @@ export class MirrorService implements OnModuleDestroy {
       this.logger.error(`${state.pair.key}: gave up on ${source} after ${attempts} attempts`);
       return;
     }
+    turnAway();
     this.lostTrack(state);
     this.retryCatchUp(state);
   }
@@ -937,12 +1027,14 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async mirrorZulipMessage(state: PairState, message: ZulipReceivedMessage, generation?: number) {
+    const turnAway = () => state.turnedAway.zulip.add(message.id);
     if (!this.discordReady(state)) {
+      turnAway();
       this.notReady(state, 'Discord');
       return;
     }
     const source = `Zulip message ${message.id}`;
-    if (!this.mayCreate(state, source, generation)) {
+    if (!this.mayCreate(state, source, generation, turnAway)) {
       return;
     }
     if ((await this.database.getMirrorMessagesByZulipIds([message.id], { withDeleted: true })).length > 0) {
@@ -950,6 +1042,7 @@ export class MirrorService implements OnModuleDestroy {
     }
     this.senderNames.set(message.senderId, message.senderFullName);
 
+    const attempt: CreateAttempt = { posted: false, uncertain: false };
     try {
       const conversation = await this.conversationForZulip(state, message);
       const late = message.timestamp > 0 && Date.now() - message.timestamp * 1000 > LATE_MS;
@@ -964,7 +1057,7 @@ export class MirrorService implements OnModuleDestroy {
         ),
       };
       try {
-        await this.deliverToDiscord(state, message, outgoing, conversation);
+        await this.deliverToDiscord(state, message, outgoing, conversation, attempt);
       } catch (error) {
         if (!conversation?.discordThreadId || !isMirrorError(error, 'unknown-channel')) {
           throw error;
@@ -973,11 +1066,11 @@ export class MirrorService implements OnModuleDestroy {
         this.logger.log(
           `${state.pair.key}: Discord thread ${conversation.discordThreadId} no longer exists, so its Zulip topic starts a new one`,
         );
-        await this.deliverToDiscord(state, message, outgoing, undefined);
+        await this.deliverToDiscord(state, message, outgoing, undefined, attempt);
       }
       this.created(state, source);
     } catch (error) {
-      this.createFailed(state, source, error);
+      this.createFailed(state, source, error, attempt, turnAway);
       await this.zulipCreateFailed(state, message, error);
     }
   }
@@ -1085,6 +1178,7 @@ export class MirrorService implements OnModuleDestroy {
     message: ZulipReceivedMessage,
     outgoing: OutgoingZulipMessage,
     conversation: MirrorConversation | undefined,
+    attempt: CreateAttempt,
   ) {
     const { pair } = state;
     let files = outgoing.files;
@@ -1098,15 +1192,17 @@ export class MirrorService implements OnModuleDestroy {
 
     const send = (content: string, options: Partial<DiscordMirrorSend>) =>
       this.onDiscord(state, options.threadId, () =>
-        this.discordMirror.sendMirrorMessage({
-          channelId: pair.discordChannelId,
-          username: outgoing.identity.username,
-          avatarUrl: outgoing.identity.avatarUrl,
-          content,
-          pingUserIds: [],
-          suppressEmbeds: suppressEmbeds(content),
-          ...options,
-        }),
+        this.creating(attempt, () =>
+          this.discordMirror.sendMirrorMessage({
+            channelId: pair.discordChannelId,
+            username: outgoing.identity.username,
+            avatarUrl: outgoing.identity.avatarUrl,
+            content,
+            pingUserIds: [],
+            suppressEmbeds: suppressEmbeds(content),
+            ...options,
+          }),
+        ),
       );
     const first: Partial<DiscordMirrorSend> = {
       threadId: conversation?.discordThreadId ?? undefined,
@@ -1574,18 +1670,22 @@ export class MirrorService implements OnModuleDestroy {
 
   private async mirrorDiscordMessage(state: PairState, dto: DiscordSourceMessage, generation?: number) {
     const { pair } = state;
+    const turnAway = () =>
+      this.turnAway(state, { discord: new Map([[dto.threadId ?? dto.channelId, BigInt(dto.id)]]), zulip: new Set() });
     if (!this.zulip.isInitialised()) {
+      turnAway();
       this.notReady(state, 'Zulip');
       return;
     }
     const source = `Discord message ${dto.id}`;
-    if (!this.mayCreate(state, source, generation)) {
+    if (!this.mayCreate(state, source, generation, turnAway)) {
       return;
     }
     if ((await this.database.getMirrorMessagesByDiscordIds([dto.id], { withDeleted: true })).length > 0) {
       return;
     }
 
+    const attempt: CreateAttempt = { posted: false, uncertain: false };
     try {
       let conversation: MirrorConversation | undefined;
       if (dto.threadId === null) {
@@ -1620,11 +1720,13 @@ export class MirrorService implements OnModuleDestroy {
         return;
       }
 
-      const { id } = await this.zulip.sendMessage({
-        stream: pair.zulipStreamId,
-        topic,
-        content: zulipMirrorContent(lead, body, attachments),
-      });
+      const { id } = await this.creating(attempt, () =>
+        this.zulip.sendMessage({
+          stream: pair.zulipStreamId,
+          topic,
+          content: zulipMirrorContent(lead, body, attachments),
+        }),
+      );
       conversation ??= await this.createThreadConversation(state, dto.threadId!, topic, id);
       await this.database.createMirrorMessages([
         {
@@ -1649,7 +1751,7 @@ export class MirrorService implements OnModuleDestroy {
       }
       this.created(state, source);
     } catch (error) {
-      this.createFailed(state, source, error);
+      this.createFailed(state, source, error, attempt, turnAway);
       this.fail(`${pair.key}: could not mirror Discord message ${dto.id} to Zulip`, error);
     }
   }
