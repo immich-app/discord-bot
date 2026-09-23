@@ -1458,6 +1458,8 @@ describe('Bot test', () => {
       vitest.restoreAllMocks();
     });
 
+    // The announcement reads package.json from disk, which can outlast waitFor's 1s default on a loaded machine.
+    const ANNOUNCE_WAIT_MS = 10_000;
     const alive =
       "I'm alive, running 1.0.0@[01234567](https://github.com/immich-app/discord-bot/commit/0123456789abcdef)!";
     const announced = { stream: 113, topic: 'bot', content: alive };
@@ -1475,7 +1477,9 @@ describe('Bot test', () => {
       await loggingIn;
 
       expect(discordMock.login).toHaveBeenCalledExactlyOnceWith('token');
-      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced));
+      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced), {
+        timeout: ANNOUNCE_WAIT_MS,
+      });
       expect(discordMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         channelId: DiscordChannel.BotSpam,
         message: alive,
@@ -1487,7 +1491,9 @@ describe('Bot test', () => {
 
       await sut.loginToDiscord();
 
-      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced));
+      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced), {
+        timeout: ANNOUNCE_WAIT_MS,
+      });
       expect(discordMock.login).not.toHaveBeenCalled();
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
       expect(errorMock).not.toHaveBeenCalled();
@@ -1523,7 +1529,9 @@ describe('Bot test', () => {
       expect(version).not.toHaveBeenCalled();
       await vitest.advanceTimersByTimeAsync(1);
 
-      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced));
+      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced), {
+        timeout: ANNOUNCE_WAIT_MS,
+      });
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
     });
 
