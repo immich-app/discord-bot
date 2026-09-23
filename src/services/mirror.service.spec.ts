@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { Constants, MirrorPairConfig, MirrorPairKey } from 'src/constants';
-import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IDatabaseRepository, MirrorMessageQuery } from 'src/interfaces/database.interface';
 import {
   DiscordMirrorChannel,
   DiscordMirrorError,
@@ -87,6 +87,7 @@ type MirrorMethods =
   | 'getMirrorMessagesByZulipIds'
   | 'getNewestMirrorZulipMessageId'
   | 'updateMirrorMessages'
+  | 'markMirrorMessagesDeleted'
   | 'removeMirrorMessages'
   | 'getMirrorZulipHighWater'
   | 'getMirrorDiscordHighWater';
@@ -98,6 +99,8 @@ const newMirrorDatabase = () => {
   let sequence = 0;
   const conversation = (id: string) => conversations.find((row) => row.id === id);
   const copy = <T extends object>(row: T | undefined) => (row ? { ...row } : undefined);
+  const visible = (options?: MirrorMessageQuery) => (row: MirrorMessage) =>
+    options?.withDeleted === true || row.deletedAt === null;
 
   const repository: Mocked<Pick<IDatabaseRepository, MirrorMethods>> = {
     getMirrorConversation: vitest.fn(async (id: string) => copy(conversation(id))),
@@ -166,25 +169,37 @@ const newMirrorDatabase = () => {
         ) {
           throw new Error('duplicate key value violates unique constraint');
         }
-        messages.push({ createdAt: new Date(), ...row, part } as MirrorMessage);
+        messages.push({ createdAt: new Date(), deletedAt: null, ...row, part } as MirrorMessage);
       }
     }),
-    getMirrorMessagesByDiscordIds: vitest.fn(async (ids: string[]) =>
-      messages.filter(({ discordMessageId }) => ids.includes(discordMessageId)).map((row) => ({ ...row })),
-    ),
-    getMirrorMessagesByZulipIds: vitest.fn(async (ids: number[]) =>
+    getMirrorMessagesByDiscordIds: vitest.fn(async (ids: string[], options?: MirrorMessageQuery) =>
       messages
+        .filter(visible(options))
+        .filter(({ discordMessageId }) => ids.includes(discordMessageId))
+        .map((row) => ({ ...row })),
+    ),
+    getMirrorMessagesByZulipIds: vitest.fn(async (ids: number[], options?: MirrorMessageQuery) =>
+      messages
+        .filter(visible(options))
         .filter(({ zulipMessageId }) => ids.includes(zulipMessageId))
         .sort((a, b) => a.zulipMessageId - b.zulipMessageId || a.part - b.part)
         .map((row) => ({ ...row })),
     ),
     getNewestMirrorZulipMessageId: vitest.fn(async (id: string) => {
-      const ids = messages.filter(({ conversationId }) => conversationId === id).map((row) => row.zulipMessageId);
+      const ids = messages
+        .filter(visible())
+        .filter(({ conversationId }) => conversationId === id)
+        .map((row) => row.zulipMessageId);
       return ids.length > 0 ? Math.max(...ids) : undefined;
     }),
     updateMirrorMessages: vitest.fn(async (ids: string[], changes: UpdateMirrorMessage) => {
       for (const message of messages.filter(({ discordMessageId }) => ids.includes(discordMessageId))) {
         Object.assign(message, changes);
+      }
+    }),
+    markMirrorMessagesDeleted: vitest.fn(async (ids: string[]) => {
+      for (const message of messages.filter(({ discordMessageId }) => ids.includes(discordMessageId))) {
+        message.deletedAt ??= new Date();
       }
     }),
     removeMirrorMessages: vitest.fn(async (ids: string[]) => {
@@ -451,6 +466,7 @@ describe(MirrorService.name, () => {
       zulipHeader: null,
       zulipAttachments: null,
       createdAt: new Date(),
+      deletedAt: null,
       ...overrides,
     };
     db.messages.push(row);
@@ -1435,24 +1451,37 @@ describe(MirrorService.name, () => {
 
       await updateFromZulip({ messageId: 1001, content: 'edited' });
 
-      expect(db.messages).toEqual([]);
+      expect(db.messages).toEqual([expect.objectContaining({ deletedAt: expect.any(Date) })]);
+      await updateFromZulip({ messageId: 1001, content: 'edited again' });
+      expect(discord.editMirrorMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should not post the last part again after a Discord moderator removed it', async () => {
+      await fromZulip(zulipMessage({ content: paragraphs('a', 'b', 'c') }));
+      sut.onDiscordMessagesDeleted(DEV_CHANNEL, [db.messages[2].discordMessageId]);
+      await sut.whenIdle();
+
+      await updateFromZulip({ messageId: 1001, content: paragraphs('a', 'b', 'c', 'd') });
+
+      expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
+      expect(discord.sendMirrorMessage).toHaveBeenCalledTimes(3);
     });
   });
 
   describe('deletions', () => {
     beforeEach(start);
 
-    it('should delete the Zulip copy of a deleted Discord message, removing the row first', async () => {
+    it('should delete the Zulip copy of a deleted Discord message, marking the row deleted first', async () => {
       await fromDiscord(discordMessage());
 
       sut.onDiscordMessagesDeleted(DEV_CHANNEL, ['300000000000000001']);
       await sut.whenIdle();
 
       expect(zulip.deleteMessage).toHaveBeenCalledExactlyOnceWith(5001);
-      expect(db.repository.removeMirrorMessages.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(db.repository.markMirrorMessagesDeleted.mock.invocationCallOrder[0]).toBeLessThan(
         zulip.deleteMessage.mock.invocationCallOrder[0],
       );
-      expect(db.messages).toEqual([]);
+      expect(db.messages).toEqual([expect.objectContaining({ deletedAt: expect.any(Date) })]);
 
       await deleteFromZulip({ messageIds: [5001] });
       expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
@@ -1491,7 +1520,7 @@ describe(MirrorService.name, () => {
       sut.onDiscordMessagesDeleted(DEV_CHANNEL, [db.messages[0].discordMessageId]);
       await sut.whenIdle();
 
-      expect(db.messages).toEqual([]);
+      expect(db.messages).toEqual([expect.objectContaining({ deletedAt: expect.any(Date) })]);
       expect(zulip.deleteMessage).not.toHaveBeenCalled();
     });
 
@@ -1507,7 +1536,7 @@ describe(MirrorService.name, () => {
       await deleteFromZulip({ messageIds: [1001] });
 
       expect(discord.deleteMirrorMessage.mock.calls).toEqual(targets.map((target) => [target]));
-      expect(db.messages).toEqual([]);
+      expect(db.messages.map(({ deletedAt }) => deletedAt)).toEqual([expect.any(Date), expect.any(Date)]);
     });
 
     it('should not delete Discord copies older than 7 days', async () => {
@@ -1532,7 +1561,7 @@ describe(MirrorService.name, () => {
       await deleteFromZulip({ messageIds: [5001] });
 
       expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
-      expect(db.messages).toEqual([]);
+      expect(db.messages).toEqual([expect.objectContaining({ deletedAt: expect.any(Date) })]);
     });
 
     it('should re-anchor a conversation whose anchor was deleted', async () => {
@@ -1828,6 +1857,40 @@ describe(MirrorService.name, () => {
 
       expect(zulip.getStreamMessagesAfter).toHaveBeenCalled();
       expect(discord.sendMirrorMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should not mirror a Zulip message again after a Discord moderator deleted its copy', async () => {
+      seedHighWaters();
+      sut.init();
+      await sut.onDiscordReady();
+      await register();
+      await fromZulip(missedOnZulip());
+      sut.onDiscordMessagesDeleted(DEV_CHANNEL, [db.messages.at(-1)!.discordMessageId]);
+      await sut.whenIdle();
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM ? [missedOnZulip()] : [],
+      );
+
+      await register();
+
+      expect(zulip.getStreamMessagesAfter).toHaveBeenCalledWith(DEV_STREAM, 1001, 100);
+      expect(discord.sendMirrorMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should not mirror a Discord message again after Zulip deleted its copy', async () => {
+      seedHighWaters();
+      sut.init();
+      await sut.onDiscordReady();
+      await register();
+      await fromDiscord(missedOnDiscord());
+      await deleteFromZulip({ messageIds: [db.messages.at(-1)!.zulipMessageId] });
+      discord.fetchMirrorMessagesAfter.mockResolvedValue([missedOnDiscord()]);
+
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+
+      expect(discord.fetchMirrorMessagesAfter).toHaveBeenCalledWith(DEV_CHANNEL, '300000000000000002', 50);
+      expect(zulip.sendMessage).toHaveBeenCalledOnce();
     });
 
     it('should skip messages older than 6 hours and say how many', async () => {

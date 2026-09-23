@@ -29,6 +29,8 @@ import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
 
+export type MirrorMessageQuery = { withDeleted?: boolean };
+
 export type ReportOptions = {
   day?: DateTime;
   week?: DateTime;
@@ -83,14 +85,18 @@ export interface IDatabaseRepository {
   updateMirrorConversation(id: string, changes: UpdateMirrorConversation): Promise<void>;
   removeMirrorConversation(id: string): Promise<void>;
   createMirrorMessages(rows: NewMirrorMessage[]): Promise<void>;
-  getMirrorMessagesByDiscordIds(ids: string[]): Promise<MirrorMessage[]>;
+  getMirrorMessagesByDiscordIds(ids: string[], options?: MirrorMessageQuery): Promise<MirrorMessage[]>;
   /** Ordered by zulipMessageId, then part. */
-  getMirrorMessagesByZulipIds(ids: number[]): Promise<MirrorMessage[]>;
+  getMirrorMessagesByZulipIds(ids: number[], options?: MirrorMessageQuery): Promise<MirrorMessage[]>;
   getNewestMirrorZulipMessageId(conversationId: string): Promise<number | undefined>;
   updateMirrorMessages(discordMessageIds: string[], changes: UpdateMirrorMessage): Promise<void>;
+  markMirrorMessagesDeleted(discordMessageIds: string[]): Promise<void>;
   removeMirrorMessages(discordMessageIds: string[]): Promise<void>;
-  /** max("zulipMessageId") of origin 'zulip' rows in the stream. */
+  /** max("zulipMessageId") of origin 'zulip' rows in the stream, deleted ones included. */
   getMirrorZulipHighWater(zulipStreamId: number): Promise<number | undefined>;
-  /** Newest origin 'discord' row in the channel or thread, ordered by (length("discordMessageId"), "discordMessageId"). */
+  /**
+   * Newest origin 'discord' row in the channel or thread, deleted ones included, ordered by
+   * (length("discordMessageId"), "discordMessageId").
+   */
   getMirrorDiscordHighWater(discordChannelId: string, discordThreadId: string | null): Promise<string | undefined>;
 }

@@ -6,7 +6,7 @@ import path from 'node:path';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { getConfig } from 'src/config';
-import { IDatabaseRepository, ReportOptions } from 'src/interfaces/database.interface';
+import { IDatabaseRepository, MirrorMessageQuery, ReportOptions } from 'src/interfaces/database.interface';
 import {
   Database,
   DiscordLink,
@@ -366,15 +366,26 @@ export class DatabaseRepository implements IDatabaseRepository {
     await this.db.insertInto('mirror_message').values(rows).execute();
   }
 
-  async getMirrorMessagesByDiscordIds(ids: string[]): Promise<MirrorMessage[]> {
+  async getMirrorMessagesByDiscordIds(
+    ids: string[],
+    { withDeleted = false }: MirrorMessageQuery = {},
+  ): Promise<MirrorMessage[]> {
     if (ids.length === 0) {
       return [];
     }
 
-    return this.db.selectFrom('mirror_message').selectAll().where('discordMessageId', 'in', ids).execute();
+    return this.db
+      .selectFrom('mirror_message')
+      .selectAll()
+      .where('discordMessageId', 'in', ids)
+      .$if(!withDeleted, (qb) => qb.where('deletedAt', 'is', null))
+      .execute();
   }
 
-  async getMirrorMessagesByZulipIds(ids: number[]): Promise<MirrorMessage[]> {
+  async getMirrorMessagesByZulipIds(
+    ids: number[],
+    { withDeleted = false }: MirrorMessageQuery = {},
+  ): Promise<MirrorMessage[]> {
     if (ids.length === 0) {
       return [];
     }
@@ -383,6 +394,7 @@ export class DatabaseRepository implements IDatabaseRepository {
       .selectFrom('mirror_message')
       .selectAll()
       .where('zulipMessageId', 'in', ids)
+      .$if(!withDeleted, (qb) => qb.where('deletedAt', 'is', null))
       .orderBy('zulipMessageId')
       .orderBy('part')
       .execute();
@@ -393,6 +405,7 @@ export class DatabaseRepository implements IDatabaseRepository {
       .selectFrom('mirror_message')
       .select((eb) => eb.fn.max('zulipMessageId').as('newest'))
       .where('conversationId', '=', conversationId)
+      .where('deletedAt', 'is', null)
       .executeTakeFirstOrThrow();
     return newest ?? undefined;
   }
@@ -406,6 +419,19 @@ export class DatabaseRepository implements IDatabaseRepository {
       .updateTable('mirror_message')
       .set(changes)
       .where('discordMessageId', 'in', discordMessageIds)
+      .execute();
+  }
+
+  async markMirrorMessagesDeleted(discordMessageIds: string[]): Promise<void> {
+    if (discordMessageIds.length === 0) {
+      return;
+    }
+
+    await this.db
+      .updateTable('mirror_message')
+      .set({ deletedAt: sql<Date>`now()` })
+      .where('discordMessageId', 'in', discordMessageIds)
+      .where('deletedAt', 'is', null)
       .execute();
   }
 

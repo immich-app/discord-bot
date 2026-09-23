@@ -48,4 +48,8 @@ export class MirrorMessageTable {
 
   @CreateDateColumn()
   createdAt!: Generated<Date>;
+
+  /** Kept after a deletion, so that catch-up never mirrors the message again. */
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  deletedAt!: Date | null;
 }

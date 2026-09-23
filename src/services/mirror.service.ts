@@ -787,7 +787,7 @@ export class MirrorService implements OnModuleDestroy {
       this.notReady(state, 'Discord');
       return;
     }
-    if ((await this.database.getMirrorMessagesByZulipIds([message.id])).length > 0) {
+    if ((await this.database.getMirrorMessagesByZulipIds([message.id], { withDeleted: true })).length > 0) {
       return;
     }
     this.senderNames.set(message.senderId, message.senderFullName);
@@ -1033,9 +1033,10 @@ export class MirrorService implements OnModuleDestroy {
 
   private async editFromZulip(state: PairState, messageId: number, content: string) {
     const { pair } = state;
-    const rows = (await this.database.getMirrorMessagesByZulipIds([messageId])).filter(
+    const all = (await this.database.getMirrorMessagesByZulipIds([messageId], { withDeleted: true })).filter(
       ({ origin }) => origin === 'zulip',
     );
+    const rows = all.filter(({ deletedAt }) => deletedAt === null);
     const hash = sha256(content);
     if (rows.length === 0 || rows[0].sourceHash === hash) {
       return;
@@ -1081,7 +1082,7 @@ export class MirrorService implements OnModuleDestroy {
       { sourceHash: hash },
     );
 
-    const complete = rows.every(({ part }, index) => part === index);
+    const complete = all.every(({ part, deletedAt }, index) => part === index && deletedAt === null);
     if (complete && parts.length > rows.length) {
       await this.appendParts(state, rows, parts.slice(rows.length), hash);
     }
@@ -1091,7 +1092,7 @@ export class MirrorService implements OnModuleDestroy {
     const { key } = state.pair;
     const about = `Discord message ${row.discordMessageId} (the copy of Zulip message ${row.zulipMessageId})`;
     if (isMirrorError(error, 'unknown-message')) {
-      await this.database.removeMirrorMessages([row.discordMessageId]);
+      await this.database.markMirrorMessagesDeleted([row.discordMessageId]);
     } else if (isMirrorError(error, 'locked')) {
       this.logger.warn(`${key}: could not update ${about}: the Discord thread is locked`);
     } else if (isMirrorError(error, 'replaced-webhook')) {
@@ -1140,7 +1141,7 @@ export class MirrorService implements OnModuleDestroy {
   private async deleteFromZulip(state: PairState, messageIds: number[]) {
     const { pair } = state;
     const rows = await this.database.getMirrorMessagesByZulipIds(messageIds);
-    await this.database.removeMirrorMessages(rows.map(({ discordMessageId }) => discordMessageId));
+    await this.database.markMirrorMessagesDeleted(rows.map(({ discordMessageId }) => discordMessageId));
 
     const cutoff = Date.now() - Constants.Mirror.DeleteSyncMaxAgeDays * DAY;
     const copies = rows.filter(({ origin }) => origin === 'zulip');
@@ -1322,7 +1323,7 @@ export class MirrorService implements OnModuleDestroy {
       this.notReady(state, 'Zulip');
       return;
     }
-    if ((await this.database.getMirrorMessagesByDiscordIds([dto.id])).length > 0) {
+    if ((await this.database.getMirrorMessagesByDiscordIds([dto.id], { withDeleted: true })).length > 0) {
       return;
     }
 
@@ -1470,8 +1471,8 @@ export class MirrorService implements OnModuleDestroy {
   private async deleteFromDiscord(state: PairState, messageIds: string[]) {
     const { pair } = state;
     for (const row of await this.database.getMirrorMessagesByDiscordIds(messageIds)) {
-      // Removed first: Zulip reports the bot's own deletion back as an event, which must find nothing.
-      await this.database.removeMirrorMessages([row.discordMessageId]);
+      // Marked first: Zulip reports the bot's own deletion back as an event, which must find nothing.
+      await this.database.markMirrorMessagesDeleted([row.discordMessageId]);
       if (row.origin === 'zulip') {
         continue;
       }

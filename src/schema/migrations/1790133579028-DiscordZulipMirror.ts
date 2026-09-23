@@ -34,6 +34,7 @@ export async function up(db: Kysely<any>): Promise<void> {
   "zulipHeader" text,
   "zulipAttachments" text,
   "createdAt" timestamp with time zone NOT NULL DEFAULT now(),
+  "deletedAt" timestamp with time zone,
   CONSTRAINT "mirror_message_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "mirror_conversation" ("id") ON UPDATE NO ACTION ON DELETE SET NULL,
   CONSTRAINT "mirror_message_zulipMessageId_part_uq" UNIQUE ("zulipMessageId", "part"),
   CONSTRAINT "mirror_message_pkey" PRIMARY KEY ("discordMessageId")

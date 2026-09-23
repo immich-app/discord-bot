@@ -121,6 +121,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getMirrorMessagesByZulipIds: vitest.fn(),
   getNewestMirrorZulipMessageId: vitest.fn(),
   updateMirrorMessages: vitest.fn(),
+  markMirrorMessagesDeleted: vitest.fn(),
   removeMirrorMessages: vitest.fn(),
   getMirrorZulipHighWater: vitest.fn(),
   getMirrorDiscordHighWater: vitest.fn(),
