@@ -172,7 +172,6 @@ describe(DiscordRepository.name, () => {
         guildId,
         name: 'dev',
         kind: 'text',
-        categoryId,
         everyoneCanView: false,
         missingPermissions: [],
       });

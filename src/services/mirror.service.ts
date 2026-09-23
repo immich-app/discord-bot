@@ -44,7 +44,7 @@ import {
   toZulipTopicName,
 } from 'src/mirror/names';
 import { isConnectFailure } from 'src/mirror/network';
-import { EnabledPair, validateMirrorConfig } from 'src/mirror/pairs';
+import { EnabledPair, toEnabledPair } from 'src/mirror/pairs';
 import { SerialQueue } from 'src/mirror/queue';
 import {
   escapeDiscordInline,
@@ -54,7 +54,7 @@ import {
   ZulipMessageRef,
 } from 'src/mirror/zulip-to-discord';
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
-import { MirrorConversation, MirrorMessage, NewMirrorMessage } from 'src/schema';
+import { MirrorConversation, MirrorIdentity, MirrorLink, MirrorMessage, NewMirrorMessage } from 'src/schema';
 import { hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { parseCommand } from 'src/services/zulip-command.service';
 import { isBotSender, ZulipService } from 'src/services/zulip.service';
@@ -264,20 +264,17 @@ const zulipOriginRow = (
 });
 
 const channelProblem = (pair: EnabledPair, channel: DiscordMirrorChannel | undefined) => {
-  if (!channel || !Constants.Discord.Servers.includes(channel.guildId)) {
-    return 'does not exist or is not in an Immich server';
+  if (!channel) {
+    return 'does not exist';
   }
-  if (channel.kind !== (pair.kind === 'text' ? 'text' : 'forum')) {
+  if (channel.kind !== pair.kind) {
     return `is not a ${pair.kind === 'text' ? 'text channel' : 'forum'}`;
-  }
-  if (channel.categoryId === Constants.Discord.Categories.Team) {
-    return 'is in the Team category';
-  }
-  if (channel.everyoneCanView && !pair.public) {
-    return 'is visible to @everyone and the pair is not marked public';
   }
   return undefined;
 };
+
+const toTeamMembers = (identities: MirrorIdentity[]) =>
+  new Map(identities.map(({ zulipUserId, discordUserId }) => [zulipUserId, discordUserId]));
 
 const toTarget = (row: MirrorMessage): DiscordMirrorTarget => ({
   channelId: row.discordChannelId,
@@ -304,6 +301,7 @@ export class MirrorService implements OnModuleDestroy {
   private emojiCodes?: Record<string, string>;
   private emojiRetryAt = 0;
   private emotes = new Map<string, { byName: Map<string, string>; expiresAt: number }>();
+  private active = false;
   private zulipRegistered = false;
   private discordConnected = false;
   private channelCheck?: NodeJS.Timeout;
@@ -315,32 +313,82 @@ export class MirrorService implements OnModuleDestroy {
     private zulipService: ZulipService,
   ) {}
 
-  init() {
+  async init() {
     const { bot, zulip } = getConfig();
     if (bot.token === 'dev' || zulip.bot.apiKey === 'dev' || zulip.user.apiKey === 'dev') {
       this.logger.log('The Discord-Zulip mirror is off: Discord or Zulip is not configured');
       return;
     }
 
-    const { enabled, placeholders, problems, teamMembers } = validateMirrorConfig(
-      Constants.Mirror.Pairs,
-      Constants.Mirror.TeamMembers,
-    );
-    if (placeholders.length > 0) {
-      this.logger.warn(
-        `The Discord-Zulip mirror is off for ${placeholders.join(', ')} until their placeholder IDs in Constants.Mirror.Pairs are filled in`,
-      );
+    this.active = true;
+    this.realmOrigin = new URL(zulip.realm).origin;
+    this.teamMembers = toTeamMembers(await this.database.getMirrorIdentities());
+    this.pairs = (await this.database.getMirrorLinks()).map((link) => this.newPairState(toEnabledPair(link)));
+    this.logger.log(`The Discord-Zulip mirror has ${plural(this.pairs.length, 'link')}`);
+    this.zulipService.onMessage((message) => this.onZulipMessage(message));
+    this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
+    this.zulipService.onMessagesDeleted((deletion) => this.onZulipDeletion(deletion));
+    this.zulipService.onQueueRegistered((registration) => this.onZulipQueueRegistered(registration));
+    this.channelCheck = setInterval(() => void this.recheckChannels(), CHANNEL_CHECK_MS);
+    this.channelCheck.unref();
+  }
+
+  isActive() {
+    return this.active;
+  }
+
+  /** Resolves to whether the pair is on: it stays off while its Discord channel fails the check, which says why. */
+  async enable(link: MirrorLink) {
+    if (!this.active) {
+      return false;
     }
-    for (const problem of problems) {
-      this.logger.error(problem);
+    const existing = this.pairs.find(({ pair }) => pair.key === link.discordChannelId);
+    if (existing) {
+      return existing.status === 'ready';
     }
-    if (enabled.length === 0) {
+    const state = this.newPairState(toEnabledPair(link));
+    this.pairs.push(state);
+    this.verifiedConversations.clear();
+    this.logger.log(`${state.pair.key}: linked with Zulip stream ${state.pair.zulipStreamId}`);
+    if (this.discordConnected && this.discordMirror.isReady()) {
+      await this.checkDiscordChannel(state);
+      this.lostTrack(state);
+      this.maybeCatchUp(state);
+      this.resume(state);
+    }
+    return state.status === 'ready';
+  }
+
+  /** Nothing new is queued for the pair from now on; what is already queued finishes. */
+  disable(discordChannelId: string) {
+    const state = this.pairs.find(({ pair }) => pair.key === discordChannelId);
+    if (!state) {
       return;
     }
+    this.pairs = this.pairs.filter((other) => other !== state);
+    state.queue.close();
+    clearTimeout(state.retryTimer);
+    clearTimeout(state.resumeTimer);
+    this.verifiedConversations.clear();
+    this.logger.log(`${state.pair.key}: unlinked from Zulip stream ${state.pair.zulipStreamId}`);
+  }
 
-    this.realmOrigin = new URL(zulip.realm).origin;
-    this.teamMembers = teamMembers;
-    this.pairs = enabled.map((pair) => ({
+  async refreshIdentities() {
+    if (!this.active) {
+      return;
+    }
+    this.teamMembers = toTeamMembers(await this.database.getMirrorIdentities());
+    this.members.clear();
+    this.memberCheckedAt.clear();
+    this.identities.clear();
+    const guildIds = new Set(this.pairs.flatMap(({ guildId }) => (guildId ? [guildId] : [])));
+    for (const guildId of guildIds) {
+      await this.verifyTeamMembers(guildId);
+    }
+  }
+
+  private newPairState(pair: EnabledPair): PairState {
+    return {
       pair,
       queue: new SerialQueue(pair.key, this.logger),
       status: 'pending',
@@ -352,13 +400,7 @@ export class MirrorService implements OnModuleDestroy {
       turnedAway: noneTurnedAway(),
       retryDelayMs: CATCH_UP_RETRY_MS,
       held: { Discord: [], Zulip: [] },
-    }));
-    this.zulipService.onMessage((message) => this.onZulipMessage(message));
-    this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
-    this.zulipService.onMessagesDeleted((deletion) => this.onZulipDeletion(deletion));
-    this.zulipService.onQueueRegistered((registration) => this.onZulipQueueRegistered(registration));
-    this.channelCheck = setInterval(() => void this.recheckChannels(), CHANNEL_CHECK_MS);
-    this.channelCheck.unref();
+    };
   }
 
   async onDiscordReady() {
@@ -624,7 +666,7 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private retryCatchUp(state: PairState) {
-    if (state.retryTimer) {
+    if (state.retryTimer || !this.pairs.includes(state)) {
       return;
     }
     const delay = state.retryDelayMs;
@@ -646,7 +688,7 @@ export class MirrorService implements OnModuleDestroy {
     const turnedAway = state.turnedAway;
     state.turnedAway = noneTurnedAway();
     try {
-      const since = Date.now() - Constants.Mirror.CatchUpMaxAgeHours * HOUR;
+      const since = Math.max(Date.now() - Constants.Mirror.CatchUpMaxAgeHours * HOUR, pair.linkedAt);
       const discord = await this.missedOnDiscord(state, since, turnedAway.discord);
       const zulip = await this.missedOnZulip(state, since, turnedAway.zulip);
       if (state.generation !== generation) {
@@ -685,7 +727,7 @@ export class MirrorService implements OnModuleDestroy {
     const skipped = discord.length - recentDiscord.length + zulip.length - recentZulip.length;
     if (skipped > 0) {
       this.logger.log(
-        `${pair.key}: catch-up skipped ${plural(skipped, 'message')} older than ${Constants.Mirror.CatchUpMaxAgeHours} hours`,
+        `${pair.key}: catch-up skipped ${plural(skipped, 'message')} older than ${Constants.Mirror.CatchUpMaxAgeHours} hours or than the link`,
       );
     }
     if (recentDiscord.length + recentZulip.length > 0) {
@@ -1106,8 +1148,8 @@ export class MirrorService implements OnModuleDestroy {
       maps.discordByZulip.delete(zulipId);
       maps.zulipByDiscord.delete(discordId);
       if (this.throttle(`unverified:${zulipId}`, Infinity)) {
-        this.logger.error(
-          `Constants.Mirror.TeamMembers maps Zulip user ${zulipId} to Discord user ${discordId}, who is not in the guild or holds neither the Team nor the Immich role`,
+        this.logger.warn(
+          `Zulip user ${zulipId} is linked to Discord user ${discordId}, who is not in the guild or holds neither the Team nor the Immich role, so the link is not used`,
         );
       }
     }
@@ -1127,7 +1169,7 @@ export class MirrorService implements OnModuleDestroy {
     if (discordId === undefined) {
       if (this.throttle(`unmapped:${sender.id}`, Infinity)) {
         this.logger.warn(
-          `Zulip user ${sender.id} is not in Constants.Mirror.TeamMembers; their messages appear on Discord as "Name (Zulip)"`,
+          `Zulip user ${sender.id} has not linked a Discord account; their messages appear on Discord as "Name (Zulip)"`,
         );
       }
     } else {

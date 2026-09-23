@@ -28,7 +28,6 @@ export type DiscordMirrorChannel = {
   guildId: string;
   name: string;
   kind: 'text' | 'forum' | 'other';
-  categoryId: string | null;
   everyoneCanView: boolean;
   missingPermissions: string[];
 };

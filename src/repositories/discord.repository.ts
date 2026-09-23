@@ -335,7 +335,6 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
         guildId: channel.guildId,
         name: channel.name,
         kind,
-        categoryId: channel.parentId,
         everyoneCanView: channel.permissionsFor(guild.roles.everyone).has('ViewChannel'),
         missingPermissions: channel.permissionsFor(me).missing(required),
       };

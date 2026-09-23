@@ -40,7 +40,7 @@ export class AppModule implements OnModuleInit {
     await this.githubService.init();
     await this.databaseService.runMigrations();
     // Every Zulip handler registers in its service's init, which must run before ZulipService.init starts the loop, or it silently misses messages.
-    this.mirrorService.init();
+    await this.mirrorService.init();
     await this.chatService.init();
     await this.scheduledMessageService.init();
     await this.zulipCommandService.init();

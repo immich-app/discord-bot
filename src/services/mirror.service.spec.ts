@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { Constants, MirrorPairConfig, MirrorPairKey } from 'src/constants';
+import { Constants } from 'src/constants';
 import { IDatabaseRepository, MirrorMessageQuery } from 'src/interfaces/database.interface';
 import {
   DiscordMirrorChannel,
@@ -21,6 +21,8 @@ import { toDiscordThreadName } from 'src/mirror/names';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import {
   MirrorConversation,
+  MirrorIdentity,
+  MirrorLink,
   MirrorMessage,
   NewMirrorConversation,
   NewMirrorMessage,
@@ -93,9 +95,28 @@ type MirrorMethods =
   | 'markMirrorMessagesDeleted'
   | 'removeMirrorMessages'
   | 'getMirrorZulipHighWater'
-  | 'getMirrorDiscordHighWater';
+  | 'getMirrorDiscordHighWater'
+  | 'getMirrorLinks'
+  | 'getMirrorIdentities';
+
+const link = (overrides: Partial<MirrorLink> & Pick<MirrorLink, 'discordChannelId' | 'zulipStreamId'>): MirrorLink => ({
+  kind: 'text',
+  mainTopic: null,
+  createdBy: 'Alex (Discord user 400000000000000012)',
+  discordAnnouncementId: null,
+  createdAt: new Date(0),
+  ...overrides,
+});
 
 const newMirrorDatabase = () => {
+  const links: MirrorLink[] = [
+    link({ discordChannelId: DEV_CHANNEL, zulipStreamId: DEV_STREAM, mainTopic: '#dev' }),
+    link({ discordChannelId: OFF_TOPIC_CHANNEL, zulipStreamId: OFF_TOPIC_STREAM, mainTopic: '#dev-off-topic' }),
+    link({ discordChannelId: FORUM, zulipStreamId: FORUM_STREAM, kind: 'forum' }),
+  ];
+  const identities: MirrorIdentity[] = [
+    { zulipUserId: TEAM_ZULIP_ID, discordUserId: TEAM_DISCORD_ID, createdAt: new Date(0) },
+  ];
   const conversations: MirrorConversation[] = [];
   const messages: MirrorMessage[] = [];
   let sequence = 0;
@@ -242,8 +263,10 @@ const newMirrorDatabase = () => {
         .sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : 1))
         .at(-1),
     ),
+    getMirrorLinks: vitest.fn(async () => links.map((row) => ({ ...row }))),
+    getMirrorIdentities: vitest.fn(async () => identities.map((row) => ({ ...row }))),
   };
-  return { conversations, messages, repository };
+  return { links, identities, conversations, messages, repository };
 };
 
 const mirrorChannel = (channelId: string): DiscordMirrorChannel => ({
@@ -251,7 +274,6 @@ const mirrorChannel = (channelId: string): DiscordMirrorChannel => ({
   guildId: GUILD,
   name: channelId === FORUM ? 'dev-focus-topic' : 'dev',
   kind: channelId === FORUM ? 'forum' : 'text',
-  categoryId: null,
   everyoneCanView: false,
   missingPermissions: [],
 });
@@ -364,7 +386,6 @@ describe(MirrorService.name, () => {
   let discord: Mocked<IDiscordMirrorInterface>;
   let db: ReturnType<typeof newMirrorDatabase>;
   let stub: ReturnType<typeof newZulipServiceStub>;
-  let savedPairs: Record<MirrorPairKey, MirrorPairConfig>;
 
   const log = () => vitest.mocked(Logger.prototype.log);
   const warn = () => vitest.mocked(Logger.prototype.warn);
@@ -374,18 +395,6 @@ describe(MirrorService.name, () => {
     for (const level of ['log', 'warn', 'error', 'debug'] as const) {
       vitest.spyOn(Logger.prototype, level).mockImplementation(() => {});
     }
-    savedPairs = structuredClone(Constants.Mirror.Pairs);
-    Object.assign(Constants.Mirror.Pairs, {
-      Dev: { kind: 'text', discordChannelId: DEV_CHANNEL, zulipStreamId: DEV_STREAM, mainTopic: '#dev' },
-      DevOffTopic: {
-        kind: 'text',
-        discordChannelId: OFF_TOPIC_CHANNEL,
-        zulipStreamId: OFF_TOPIC_STREAM,
-        mainTopic: '#dev-off-topic',
-      },
-      DevFocusTopic: { kind: 'forum', discordChannelId: FORUM, zulipStreamId: FORUM_STREAM },
-    });
-    Constants.Mirror.TeamMembers[TEAM_ZULIP_ID] = TEAM_DISCORD_ID;
     config.bot.token = 'bot-token';
     config.zulip.bot.apiKey = 'bot-key';
     vitest.mocked(downloadDiscordAttachment).mockReset();
@@ -407,8 +416,6 @@ describe(MirrorService.name, () => {
   });
 
   afterEach(() => {
-    Object.assign(Constants.Mirror.Pairs, savedPairs);
-    delete Constants.Mirror.TeamMembers[TEAM_ZULIP_ID];
     vitest.restoreAllMocks();
     vitest.useRealTimers();
   });
@@ -421,7 +428,7 @@ describe(MirrorService.name, () => {
   };
 
   const start = async () => {
-    sut.init();
+    await sut.init();
     await sut.onDiscordReady();
     await register();
   };
@@ -503,50 +510,171 @@ describe(MirrorService.name, () => {
   const sentMessages = () => zulip.sendMessage.mock.calls.map(([payload]) => payload);
 
   describe('modes', () => {
-    it('should register nothing when Discord runs with the dev token', () => {
+    it('should register nothing when Discord runs with the dev token', async () => {
       config.bot.token = 'dev';
-      sut.init();
+      await sut.init();
 
       expect(log()).toHaveBeenCalledWith('The Discord-Zulip mirror is off: Discord or Zulip is not configured');
       expect(stub.service.onMessage).not.toHaveBeenCalled();
+      expect(db.repository.getMirrorLinks).not.toHaveBeenCalled();
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
+      expect(sut.isActive()).toBe(false);
+      expect(await sut.enable(db.links[0])).toBe(false);
     });
 
-    it('should register nothing when Zulip runs with the dev keys', () => {
+    it('should register nothing when Zulip runs with the dev keys', async () => {
       config.zulip.bot.apiKey = 'dev';
-      sut.init();
+      await sut.init();
 
       expect(stub.service.onQueueRegistered).not.toHaveBeenCalled();
       expect(warn()).not.toHaveBeenCalled();
     });
 
-    it('should warn exactly once and stay inert with the placeholder IDs', async () => {
-      Object.assign(Constants.Mirror.Pairs, savedPairs);
-      delete Constants.Mirror.TeamMembers[TEAM_ZULIP_ID];
+    it('should listen without links, so that a link made later works', async () => {
+      db.links.splice(0);
 
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
 
-      expect(warn()).toHaveBeenCalledExactlyOnceWith(
-        'The Discord-Zulip mirror is off for Dev, DevOffTopic, DevFocusTopic until their placeholder IDs in Constants.Mirror.Pairs are filled in',
-      );
-      expect(error()).not.toHaveBeenCalled();
-      for (const method of Object.values(stub.service).filter((value) => typeof value === 'function')) {
-        expect(method).not.toHaveBeenCalled();
-      }
+      expect(log()).toHaveBeenCalledWith('The Discord-Zulip mirror has 0 links');
+      expect(stub.service.onMessage).toHaveBeenCalledOnce();
+      expect(stub.service.onQueueRegistered).toHaveBeenCalledOnce();
       expect(sut.handlesChannel(FORUM)).toBe(false);
       expect(discord.getMirrorChannel).not.toHaveBeenCalled();
+      expect(error()).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('links at runtime', () => {
+    const NEW_CHANNEL = '100000000000000003';
+    const NEW_STREAM = 903;
+
+    it('should mirror a new link at once', async () => {
+      await start();
+      const created = link({ discordChannelId: NEW_CHANNEL, zulipStreamId: NEW_STREAM, mainTopic: '#new' });
+
+      expect(await sut.enable(created)).toBe(true);
+      await sut.whenIdle();
+
+      expect(discord.ensureMirrorWebhook).toHaveBeenCalledWith(NEW_CHANNEL);
+      expect(log()).toHaveBeenCalledWith(`${NEW_CHANNEL}: linked with Zulip stream ${NEW_STREAM}`);
+      expect(sut.handlesChannel(NEW_CHANNEL)).toBe(true);
+      await fromZulip(zulipMessage({ streamId: NEW_STREAM, topic: '#new' }));
+      expect(sent(0)).toEqual(expect.objectContaining({ channelId: NEW_CHANNEL }));
+      expect(await sut.enable(created)).toBe(true);
+      expect(discord.ensureMirrorWebhook).toHaveBeenCalledTimes(4);
     });
 
-    it('should log each configuration problem as an error and leave the pair off', () => {
-      Constants.Mirror.Pairs.Dev.zulipStreamId = Constants.Zulip.TeamStreams.ImmichGeneral;
-      sut.init();
+    it('should leave the setup of a new link to shardReady while Discord is not connected', async () => {
+      await sut.init();
+      await register();
 
+      expect(await sut.enable(link({ discordChannelId: NEW_CHANNEL, zulipStreamId: NEW_STREAM }))).toBe(false);
+      expect(discord.getMirrorChannel).not.toHaveBeenCalled();
+
+      await sut.onDiscordReady();
+      expect(sut.handlesChannel(NEW_CHANNEL)).toBe(true);
+    });
+
+    it('should report a new link whose channel fails the check as off', async () => {
+      await start();
+      discord.getMirrorChannel.mockResolvedValue(undefined);
+
+      expect(await sut.enable(link({ discordChannelId: NEW_CHANNEL, zulipStreamId: NEW_STREAM }))).toBe(false);
       expect(error()).toHaveBeenCalledWith(
-        'Dev: Zulip stream 107 is an internal stream in Constants.Zulip, so the pair is off',
+        `${NEW_CHANNEL}: Discord channel ${NEW_CHANNEL} does not exist, so the pair is off`,
       );
+    });
+
+    it('should stop mirroring an unlinked pair at once and find its conversations again on a new link', async () => {
+      await start();
+      await fromZulip(zulipMessage());
+      const [main] = db.conversations;
+
+      sut.disable(DEV_CHANNEL);
+      sut.disable(DEV_CHANNEL);
+
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
-      expect(sut.handlesChannel(FORUM)).toBe(true);
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: unlinked from Zulip stream ${DEV_STREAM}`);
+      await fromZulip(zulipMessage({ id: 1002 }));
+      await fromDiscord(discordMessage());
+      expect(discord.sendMirrorMessage).toHaveBeenCalledOnce();
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+
+      await sut.enable(link({ discordChannelId: DEV_CHANNEL, zulipStreamId: DEV_STREAM, mainTopic: '#dev' }));
+      await sut.whenIdle();
+      await fromZulip(zulipMessage({ id: 1003 }));
+
+      expect(db.conversations).toEqual([main]);
+      expect(db.messages.map(({ zulipMessageId, conversationId }) => [zulipMessageId, conversationId])).toEqual([
+        [1001, main.id],
+        [1003, main.id],
+      ]);
+    });
+
+    it('should not retry the catch-up of a pair unlinked while it ran', async () => {
+      vitest.useFakeTimers();
+      seedRow({ zulipMessageId: 70 });
+      const unavailable = new ZulipApiError(503, 'BAD_GATEWAY', 'Service unavailable', 'GET /messages');
+      let fail: (error: Error) => void = () => {};
+      zulip.getStreamMessagesBefore.mockImplementation(({ stream }) =>
+        stream === DEV_STREAM ? Promise.reject(unavailable) : Promise.resolve([]),
+      );
+      zulip.getStreamMessagesBefore.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+      await sut.init();
+      await sut.onDiscordReady();
+      for (const handler of stub.handlers.registration) {
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+      }
+      await vitest.advanceTimersByTimeAsync(0);
+
+      sut.disable(DEV_CHANNEL);
+      fail(unavailable);
+      await vitest.advanceTimersByTimeAsync(30 * 60 * 1000);
+
+      expect(log().mock.calls.filter(([message]) => String(message).includes('catching up again'))).toEqual([]);
+    });
+
+    it('should not catch up what was posted before the link was made', async () => {
+      const now = Date.now();
+      seedRow({ zulipMessageId: 70 });
+      zulip.getStreamMessagesBefore.mockImplementation(async ({ stream }) =>
+        stream === DEV_STREAM
+          ? [
+              zulipMessage({ id: 71, timestamp: Math.floor((now - 120_000) / 1000) }),
+              zulipMessage({ id: 72, timestamp: Math.floor((now - 30_000) / 1000) }),
+            ]
+          : [],
+      );
+      db.links[0].createdAt = new Date(now - 60_000);
+
+      await start();
+
+      expect(db.messages.map(({ zulipMessageId }) => zulipMessageId)).toEqual([70, 72]);
+      expect(log()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: catch-up skipped 1 message older than 6 hours or than the link`,
+      );
+    });
+
+    it('should use a newly linked identity at once, and stop using a removed one', async () => {
+      db.identities.splice(0);
+      await start();
+      await fromZulip(zulipMessage({ senderId: TEAM_ZULIP_ID, senderFullName: 'Alex Tran' }));
+
+      db.identities.push({ zulipUserId: TEAM_ZULIP_ID, discordUserId: TEAM_DISCORD_ID, createdAt: new Date() });
+      await sut.refreshIdentities();
+      await fromZulip(zulipMessage({ id: 1002, senderId: TEAM_ZULIP_ID, senderFullName: 'Alex Tran' }));
+
+      db.identities.splice(0);
+      await sut.refreshIdentities();
+      await fromZulip(zulipMessage({ id: 1003, senderId: TEAM_ZULIP_ID, senderFullName: 'Alex Tran' }));
+
+      expect([0, 1, 2].map((index) => sent(index).username)).toEqual([
+        'Alex Tran (Zulip)',
+        'Alex',
+        'Alex Tran (Zulip)',
+      ]);
+      expect(discord.getTeamMember).toHaveBeenCalledWith(GUILD, TEAM_DISCORD_ID);
     });
   });
 
@@ -559,48 +687,46 @@ describe(MirrorService.name, () => {
       expect(discord.ensureMirrorWebhook).toHaveBeenCalledWith(FORUM);
       const announcements = log().mock.calls.filter(([message]) => String(message).includes('mirroring Discord'));
       expect(announcements).toEqual([
-        [`Dev: mirroring Discord channel ${DEV_CHANNEL} with Zulip stream ${DEV_STREAM} (main topic "#dev")`],
         [
-          `DevOffTopic: mirroring Discord channel ${OFF_TOPIC_CHANNEL} with Zulip stream ${OFF_TOPIC_STREAM} (main topic "#dev-off-topic")`,
+          `${DEV_CHANNEL}: mirroring Discord channel ${DEV_CHANNEL} with Zulip stream ${DEV_STREAM} (main topic "#dev")`,
         ],
-        [`DevFocusTopic: mirroring Discord channel ${FORUM} with Zulip stream ${FORUM_STREAM}`],
+        [
+          `${OFF_TOPIC_CHANNEL}: mirroring Discord channel ${OFF_TOPIC_CHANNEL} with Zulip stream ${OFF_TOPIC_STREAM} (main topic "#dev-off-topic")`,
+        ],
+        [`${FORUM}: mirroring Discord channel ${FORUM} with Zulip stream ${FORUM_STREAM}`],
       ]);
     });
 
     it.each([
-      ['is missing', undefined, 'does not exist or is not in an Immich server'],
-      ['is in another guild', { guildId: '999999999999999999' }, 'does not exist or is not in an Immich server'],
+      ['is missing', undefined, 'does not exist'],
       ['is not a text channel', { kind: 'forum' }, 'is not a text channel'],
-      ['is in the Team category', { categoryId: Constants.Discord.Categories.Team }, 'is in the Team category'],
-      [
-        'is visible to everyone',
-        { everyoneCanView: true },
-        'is visible to @everyone and the pair is not marked public',
-      ],
     ])('should turn the pair off when the channel %s', async (_, overrides, problem) => {
       discord.getMirrorChannel.mockImplementation(async (channelId) =>
         channelId === DEV_CHANNEL && overrides === undefined
           ? undefined
           : ({ ...mirrorChannel(channelId), ...overrides } as DiscordMirrorChannel),
       );
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
 
-      expect(error()).toHaveBeenCalledWith(`Dev: Discord channel ${DEV_CHANNEL} ${problem}, so the pair is off`);
+      expect(error()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: Discord channel ${DEV_CHANNEL} ${problem}, so the pair is off`,
+      );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
       await fromZulip(zulipMessage());
       expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
     });
 
-    it('should accept a public channel when the pair says so', async () => {
-      Constants.Mirror.Pairs.Dev.public = true;
+    it('should mirror a channel whoever can see it and wherever it is', async () => {
       discord.getMirrorChannel.mockImplementation(async (channelId) => ({
         ...mirrorChannel(channelId),
+        guildId: '999999999999999999',
         everyoneCanView: true,
       }));
       await start();
 
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
+      expect(error()).not.toHaveBeenCalled();
     });
 
     it('should warn about missing permissions and keep the pair when it can still work', async () => {
@@ -610,7 +736,9 @@ describe(MirrorService.name, () => {
       }));
       await start();
 
-      expect(warn()).toHaveBeenCalledWith(`Dev: the bot is missing EmbedLinks in Discord channel ${DEV_CHANNEL}`);
+      expect(warn()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: the bot is missing EmbedLinks in Discord channel ${DEV_CHANNEL}`,
+      );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
     });
 
@@ -622,7 +750,7 @@ describe(MirrorService.name, () => {
       await start();
 
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: the bot is missing ${permission}, EmbedLinks in Discord channel ${DEV_CHANNEL}, so the pair is off`,
+        `${DEV_CHANNEL}: the bot is missing ${permission}, EmbedLinks in Discord channel ${DEV_CHANNEL}, so the pair is off`,
       );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
     });
@@ -637,7 +765,7 @@ describe(MirrorService.name, () => {
       await start();
 
       expect(error()).toHaveBeenCalledWith(
-        `Dev: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001), so the pair is off`,
+        `${DEV_CHANNEL}: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001), so the pair is off`,
       );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
       await fromZulip(zulipMessage());
@@ -651,7 +779,7 @@ describe(MirrorService.name, () => {
       await start();
 
       expect(error()).toHaveBeenCalledWith(
-        `Dev: could not set up the mirror webhook in Discord channel ${DEV_CHANNEL}: max-webhooks (30007)`,
+        `${DEV_CHANNEL}: could not set up the mirror webhook in Discord channel ${DEV_CHANNEL}: max-webhooks (30007)`,
       );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
     });
@@ -685,18 +813,17 @@ describe(MirrorService.name, () => {
       expect(db.messages.map(({ zulipMessageId }) => zulipMessageId)).toEqual([1002]);
     });
 
-    it('should turn a pair off as soon as its channel becomes visible to everyone', async () => {
+    it('should turn a pair off as soon as its channel is deleted', async () => {
       vitest.useFakeTimers();
       await start();
-      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
-        ...mirrorChannel(channelId),
-        everyoneCanView: channelId === DEV_CHANNEL,
-      }));
+      discord.getMirrorChannel.mockImplementation(async (channelId) =>
+        channelId === DEV_CHANNEL ? undefined : mirrorChannel(channelId),
+      );
 
       await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
 
       expect(error()).toHaveBeenCalledWith(
-        `Dev: Discord channel ${DEV_CHANNEL} is visible to @everyone and the pair is not marked public, so the pair is off`,
+        `${DEV_CHANNEL}: Discord channel ${DEV_CHANNEL} does not exist, so the pair is off`,
       );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
       expect(sut.handlesChannel(OFF_TOPIC_CHANNEL)).toBe(true);
@@ -710,7 +837,7 @@ describe(MirrorService.name, () => {
             ...mirrorChannel(DEV_CHANNEL),
             missingPermissions: ['ViewChannel'],
           }),
-        `Dev: the bot is missing ViewChannel in Discord channel ${DEV_CHANNEL}, so the pair is off`,
+        `${DEV_CHANNEL}: the bot is missing ViewChannel in Discord channel ${DEV_CHANNEL}, so the pair is off`,
       ],
       [
         'is denied Manage Webhooks',
@@ -719,12 +846,12 @@ describe(MirrorService.name, () => {
             ...mirrorChannel(DEV_CHANNEL),
             missingPermissions: ['ManageWebhooks', 'EmbedLinks'],
           }),
-        `Dev: the bot is missing ManageWebhooks, EmbedLinks in Discord channel ${DEV_CHANNEL}, so the pair is off`,
+        `${DEV_CHANNEL}: the bot is missing ManageWebhooks, EmbedLinks in Discord channel ${DEV_CHANNEL}, so the pair is off`,
       ],
       [
         'loses access to the channel',
         () => discord.getMirrorChannel.mockRejectedValue(new DiscordMirrorError('forbidden', 50_001)),
-        `Dev: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001), so the pair is off`,
+        `${DEV_CHANNEL}: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001), so the pair is off`,
       ],
     ])('should stop mirroring both ways within ten minutes once the bot %s', async (_, arrange, reason) => {
       vitest.useFakeTimers();
@@ -768,10 +895,9 @@ describe(MirrorService.name, () => {
       vitest.useFakeTimers();
       seedRow({ zulipMessageId: 1000 });
       await start();
-      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
-        ...mirrorChannel(channelId),
-        everyoneCanView: channelId === DEV_CHANNEL,
-      }));
+      discord.getMirrorChannel.mockImplementation(async (channelId) =>
+        channelId === DEV_CHANNEL ? undefined : mirrorChannel(channelId),
+      );
       await vitest.advanceTimersByTimeAsync(20 * 60 * 1000);
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
       zulip.getStreamMessagesBefore.mockResolvedValue([zulipMessage({ id: 1001, content: 'posted while off' })]);
@@ -781,10 +907,10 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(error()).toHaveBeenCalledExactlyOnceWith(
-        `Dev: Discord channel ${DEV_CHANNEL} is visible to @everyone and the pair is not marked public, so the pair is off`,
+        `${DEV_CHANNEL}: Discord channel ${DEV_CHANNEL} does not exist, so the pair is off`,
       );
       expect(log()).toHaveBeenCalledWith(
-        `Dev: Discord channel ${DEV_CHANNEL} can be mirrored again, so the pair is on`,
+        `${DEV_CHANNEL}: Discord channel ${DEV_CHANNEL} can be mirrored again, so the pair is on`,
       );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
       expect(sent(0)).toEqual(
@@ -817,7 +943,7 @@ describe(MirrorService.name, () => {
       await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
 
       expect(warn()).toHaveBeenCalledExactlyOnceWith(
-        `Dev: the bot is missing EmbedLinks in Discord channel ${DEV_CHANNEL}`,
+        `${DEV_CHANNEL}: the bot is missing EmbedLinks in Discord channel ${DEV_CHANNEL}`,
       );
     });
 
@@ -828,17 +954,19 @@ describe(MirrorService.name, () => {
 
       await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
 
-      expect(error()).toHaveBeenCalledWith(`Dev: could not check Discord channel ${DEV_CHANNEL}: unavailable`);
+      expect(error()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: could not check Discord channel ${DEV_CHANNEL}: unavailable`,
+      );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
     });
 
     it('should warn about a mirror stream the Zulip bot is not subscribed to', async () => {
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
       await register([DEV_STREAM, OFF_TOPIC_STREAM]);
 
       expect(warn()).toHaveBeenCalledExactlyOnceWith(
-        `DevFocusTopic: the Zulip bot is not subscribed to stream ${FORUM_STREAM}, so nothing posted there is mirrored until an admin subscribes it`,
+        `${FORUM}: the Zulip bot is not subscribed to stream ${FORUM_STREAM}, so nothing posted there is mirrored until an admin subscribes it`,
       );
     });
   });
@@ -1008,7 +1136,7 @@ describe(MirrorService.name, () => {
       expect(zulip.getMessage).toHaveBeenCalledTimes(3);
       expect(discord.startMirrorThread).not.toHaveBeenCalled();
       expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
-      expect(log()).toHaveBeenCalledWith('Dev: catching up again in 30 seconds');
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up again in 30 seconds`);
     });
 
     it('should keep the empty topic apart from a topic named General Chat', async () => {
@@ -1043,7 +1171,7 @@ describe(MirrorService.name, () => {
       ]);
       expect(discord.startMirrorThread).toHaveBeenCalledTimes(2);
       expect(error()).toHaveBeenCalledExactlyOnceWith(
-        'Dev: could not start a Discord thread for Zulip message 1001: forbidden (50013)',
+        `${DEV_CHANNEL}: could not start a Discord thread for Zulip message 1001: forbidden (50013)`,
       );
       expect(sentMessages()).toEqual([
         {
@@ -1072,7 +1200,7 @@ describe(MirrorService.name, () => {
       expect(sent(0).username).toBe('D\u200Aiscord Mod');
     });
 
-    it('should fall back and log one error for a team member without the role', async () => {
+    it('should fall back and warn once for a team member without the role', async () => {
       discord.getTeamMember.mockResolvedValue({ displayName: 'Alex', avatarUrl: 'x', roleIds: ['1'] });
 
       await fromZulip(zulipMessage({ senderId: TEAM_ZULIP_ID, senderFullName: 'Alex Tran' }));
@@ -1080,8 +1208,8 @@ describe(MirrorService.name, () => {
 
       expect(sent(0).username).toBe('Alex Tran (Zulip)');
       expect(sent(0).avatarUrl).toBeUndefined();
-      expect(error()).toHaveBeenCalledExactlyOnceWith(
-        `Constants.Mirror.TeamMembers maps Zulip user ${TEAM_ZULIP_ID} to Discord user ${TEAM_DISCORD_ID}, who is not in the guild or holds neither the Team nor the Immich role`,
+      expect(warn()).toHaveBeenCalledExactlyOnceWith(
+        `Zulip user ${TEAM_ZULIP_ID} is linked to Discord user ${TEAM_DISCORD_ID}, who is not in the guild or holds neither the Team nor the Immich role, so the link is not used`,
       );
     });
 
@@ -1092,7 +1220,7 @@ describe(MirrorService.name, () => {
       expect(sent(1)).toEqual(expect.objectContaining({ username: 'Bea (Zulip)' }));
       expect(sent(1).avatarUrl).toBeUndefined();
       expect(warn()).toHaveBeenCalledExactlyOnceWith(
-        'Zulip user 20 is not in Constants.Mirror.TeamMembers; their messages appear on Discord as "Name (Zulip)"',
+        'Zulip user 20 has not linked a Discord account; their messages appear on Discord as "Name (Zulip)"',
       );
     });
 
@@ -1306,7 +1434,7 @@ describe(MirrorService.name, () => {
       expect(sent(0).files?.map(({ name }) => name)).toEqual(['a.png']);
       expect(sent(0).content).toBe('*(attachment not mirrored: b.png)*\n*(attachment not mirrored: c.png)*');
       expect(warn()).toHaveBeenCalledWith(
-        'Dev: could not download upload 2 of Zulip message 1001: The files of this message took too long to transfer',
+        `${DEV_CHANNEL}: could not download upload 2 of Zulip message 1001: The files of this message took too long to transfer`,
       );
     });
 
@@ -1360,7 +1488,7 @@ describe(MirrorService.name, () => {
 
       expect(discord.ensureMirrorWebhook).toHaveBeenCalledWith(DEV_CHANNEL);
       expect(error()).toHaveBeenCalledWith(
-        `Dev: the Zulip mirror webhook in #dev (${DEV_CHANNEL}) was deleted again; deny the bot Manage Webhooks there to stop the mirror, or wait an hour`,
+        `${DEV_CHANNEL}: the Zulip mirror webhook in #dev (${DEV_CHANNEL}) was deleted again; deny the bot Manage Webhooks there to stop the mirror, or wait an hour`,
       );
       expect(zulip.sendMessage).not.toHaveBeenCalled();
 
@@ -1402,7 +1530,7 @@ describe(MirrorService.name, () => {
         },
       ]);
       expect(error()).toHaveBeenCalledExactlyOnceWith(
-        'Dev: could not mirror Zulip message 1001 to Discord: forbidden (50013)',
+        `${DEV_CHANNEL}: could not mirror Zulip message 1001 to Discord: forbidden (50013)`,
       );
     });
 
@@ -1413,7 +1541,7 @@ describe(MirrorService.name, () => {
       await fromZulip(zulipMessage({ topic: 'Crash on upload' }));
 
       expect(warn()).toHaveBeenCalledWith(
-        'Dev: could not mirror Zulip message 1001 to Discord: the Discord thread is locked',
+        `${DEV_CHANNEL}: could not mirror Zulip message 1001 to Discord: the Discord thread is locked`,
       );
       expect(zulip.sendMessage).not.toHaveBeenCalled();
     });
@@ -1443,7 +1571,7 @@ describe(MirrorService.name, () => {
 
       expect(sent(0)).toEqual(expect.objectContaining({ content: '*(attachment not mirrored: shot.png)*', files: [] }));
       expect(warn()).toHaveBeenCalledWith(
-        'Dev: could not download upload 1 of Zulip message 1001: Zulip answered the download with status 404',
+        `${DEV_CHANNEL}: could not download upload 1 of Zulip message 1001: Zulip answered the download with status 404`,
       );
     });
 
@@ -1459,7 +1587,9 @@ describe(MirrorService.name, () => {
 
       expect(discord.sendMirrorMessage).toHaveBeenCalledTimes(2);
       expect(db.messages.map(({ part }) => part)).toEqual([0]);
-      expect(error()).toHaveBeenCalledWith('Dev: could not mirror part 2 of Zulip message 1001 to Discord: other');
+      expect(error()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: could not mirror part 2 of Zulip message 1001 to Discord: other`,
+      );
     });
 
     it('should move the main conversation to a main topic that changed', async () => {
@@ -1484,7 +1614,7 @@ describe(MirrorService.name, () => {
         expect.objectContaining({ discordThreadId: null, zulipTopic: '#dev', zulipTopicKey: '#dev' }),
       ]);
       expect(log()).toHaveBeenCalledWith(
-        'Dev: detached the conversation of Discord thread 200000000000000001: its Zulip topic is now the main topic',
+        `${DEV_CHANNEL}: detached the conversation of Discord thread 200000000000000001: its Zulip topic is now the main topic`,
       );
     });
 
@@ -1504,7 +1634,7 @@ describe(MirrorService.name, () => {
       await fromZulip(zulipMessage());
 
       expect(error()).toHaveBeenCalledWith(
-        `Dev: could not post the not-mirrored notice in Zulip stream ${DEV_STREAM}: fetch failed`,
+        `${DEV_CHANNEL}: could not post the not-mirrored notice in Zulip stream ${DEV_STREAM}: fetch failed`,
       );
     });
 
@@ -1514,7 +1644,10 @@ describe(MirrorService.name, () => {
 
       await fromZulip(zulipMessage());
 
-      expect(error()).toHaveBeenCalledWith('Dev: could not mirror Zulip message 1001 to Discord: bug', failure);
+      expect(error()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: could not mirror Zulip message 1001 to Discord: bug`,
+        failure,
+      );
     });
 
     it('should not wait for Discord when it is not ready, and say so once', async () => {
@@ -1525,7 +1658,7 @@ describe(MirrorService.name, () => {
 
       expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledExactlyOnceWith(
-        'Dev: not mirroring yet: Discord is not ready; catch-up picks it up once both sides are',
+        `${DEV_CHANNEL}: not mirroring yet: Discord is not ready; catch-up picks it up once both sides are`,
       );
     });
   });
@@ -1734,7 +1867,7 @@ describe(MirrorService.name, () => {
 
       expect(zulip.getMessage).toHaveBeenCalledTimes(3);
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: could not check the Zulip topic of Discord thread ${thread.discordThreadId}: fetch failed`,
+        `${DEV_CHANNEL}: could not check the Zulip topic of Discord thread ${thread.discordThreadId}: fetch failed`,
       );
       expect(db.conversations[0].zulipAnchorMessageId).toBe(42);
       expect(sentMessages()[0].topic).toBe('Crash on upload');
@@ -1756,7 +1889,7 @@ describe(MirrorService.name, () => {
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId, threadName: 'Crash on upload' }));
 
       expect(log()).toHaveBeenCalledWith(
-        `Dev: detached the conversation of Discord thread ${thread.discordThreadId}: its Zulip topic was moved to another stream`,
+        `${DEV_CHANNEL}: detached the conversation of Discord thread ${thread.discordThreadId}: its Zulip topic was moved to another stream`,
       );
       expect(sentMessages()).toEqual([expect.objectContaining({ stream: DEV_STREAM, topic: 'Crash on upload' })]);
       expect(db.conversations).toEqual([
@@ -1879,7 +2012,7 @@ describe(MirrorService.name, () => {
       expect(content).toContain('*(attachment not mirrored: gone.txt, see [Discord](https://discord.com/channels/');
       expect(db.messages[0].zulipAttachments).toContain(`[log 1.txt](${UPLOAD_URL})`);
       expect(warn()).toHaveBeenCalledWith(
-        'Dev: could not mirror attachment a2 of Discord message 300000000000000001: Discord answered the attachment download with status 404',
+        `${DEV_CHANNEL}: could not mirror attachment a2 of Discord message 300000000000000001: Discord answered the attachment download with status 404`,
       );
     });
 
@@ -1955,7 +2088,7 @@ describe(MirrorService.name, () => {
       await fromDiscord(discordMessage({ id: '300000000000000002' }));
 
       expect(error()).toHaveBeenCalledWith(
-        'Dev: could not mirror Discord message 300000000000000001 to Zulip: Zulip POST /messages failed with 400 BAD_REQUEST: Content too long',
+        `${DEV_CHANNEL}: could not mirror Discord message 300000000000000001 to Zulip: Zulip POST /messages failed with 400 BAD_REQUEST: Content too long`,
       );
       expect(zulip.sendMessage).toHaveBeenCalledTimes(2);
       expect(db.messages.map(({ discordMessageId }) => discordMessageId)).toEqual(['300000000000000002']);
@@ -1970,7 +2103,7 @@ describe(MirrorService.name, () => {
       await fromDiscord(discordMessage({ id: '300000000000000002' }));
 
       expect(error()).toHaveBeenCalledWith(
-        'Dev: could not mirror Discord message 300000000000000001 to Zulip: Zulip POST /messages failed with 429 RATE_LIMIT_HIT: API usage exceeded rate limit',
+        `${DEV_CHANNEL}: could not mirror Discord message 300000000000000001 to Zulip: Zulip POST /messages failed with 429 RATE_LIMIT_HIT: API usage exceeded rate limit`,
       );
       expect(zulip.sendMessage).toHaveBeenCalledOnce();
       expect(db.messages).toEqual([]);
@@ -1994,7 +2127,7 @@ describe(MirrorService.name, () => {
 
       expect(zulip.sendMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledExactlyOnceWith(
-        'Dev: not mirroring yet: Zulip is not ready; catch-up picks it up once both sides are',
+        `${DEV_CHANNEL}: not mirroring yet: Zulip is not ready; catch-up picks it up once both sides are`,
       );
     });
   });
@@ -2032,7 +2165,7 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(log()).toHaveBeenCalledWith(
-        'Dev: Zulip refused the edit of message 5001 (the copy of Discord message 300000000000000001): Zulip PATCH failed with 400 BAD_REQUEST: The time limit for editing this message has passed',
+        `${DEV_CHANNEL}: Zulip refused the edit of message 5001 (the copy of Discord message 300000000000000001): Zulip PATCH failed with 400 BAD_REQUEST: The time limit for editing this message has passed`,
       );
       expect(zulip.sendMessage).toHaveBeenCalledOnce();
       expect(db.messages[0].sourceHash).toBe(hash);
@@ -2063,7 +2196,7 @@ describe(MirrorService.name, () => {
       expect(zulip.updateMessage).toHaveBeenCalledTimes(3);
       expect(db.messages[0].sourceHash).toBe(hash);
       expect(error()).toHaveBeenCalledExactlyOnceWith(
-        'Dev: could not edit Zulip message 5001 (the copy of Discord message 300000000000000001): Zulip PATCH failed with 500 BAD_GATEWAY: down',
+        `${DEV_CHANNEL}: could not edit Zulip message 5001 (the copy of Discord message 300000000000000001): Zulip PATCH failed with 500 BAD_GATEWAY: down`,
       );
     });
 
@@ -2166,7 +2299,7 @@ describe(MirrorService.name, () => {
       await updateFromZulip({ messageId: 1001, content: 'edited' });
 
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: could not update Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): ${reason}`,
+        `${DEV_CHANNEL}: could not update Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): ${reason}`,
       );
     });
 
@@ -2182,7 +2315,9 @@ describe(MirrorService.name, () => {
       await updateFromZulip({ messageId: 1001, content: paragraphs('e', 'f') });
       expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
       expect(db.messages.map(({ sourceHash }) => sourceHash)).toEqual([expect.any(String), expect.any(String)]);
-      expect(warn()).toHaveBeenCalledWith('Dev: Discord failed an edit or deletion for now, so it is tried again soon');
+      expect(warn()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: Discord failed an edit or deletion for now, so it is tried again soon`,
+      );
 
       await vitest.advanceTimersByTimeAsync(30_000);
       await sut.whenIdle();
@@ -2209,7 +2344,7 @@ describe(MirrorService.name, () => {
 
       expect(discord.editMirrorMessage).toHaveBeenCalledTimes(20);
       expect(error()).toHaveBeenCalledExactlyOnceWith(
-        `Dev: could not update Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): unavailable`,
+        `${DEV_CHANNEL}: could not update Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): unavailable`,
       );
     });
 
@@ -2284,7 +2419,7 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(warn()).toHaveBeenCalledWith(
-        "Dev: Zulip refused to delete message 5001 (the copy of Discord message 300000000000000001); add the bot to the stream's can_delete_any_message_group",
+        `${DEV_CHANNEL}: Zulip refused to delete message 5001 (the copy of Discord message 300000000000000001); add the bot to the stream's can_delete_any_message_group`,
       );
     });
 
@@ -2370,7 +2505,7 @@ describe(MirrorService.name, () => {
       await deleteFromZulip({ messageIds: [1001] });
 
       expect(error()).toHaveBeenCalledExactlyOnceWith(
-        `Dev: could not delete Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): forbidden (50013)`,
+        `${DEV_CHANNEL}: could not delete Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): forbidden (50013)`,
       );
     });
 
@@ -2404,7 +2539,7 @@ describe(MirrorService.name, () => {
 
       expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: Zulip deleted 2 mirrored messages older than 7 days; not deleting their Discord copies (Discord messages ${ids.join(', ')}); delete them there by hand if this was intended`,
+        `${DEV_CHANNEL}: Zulip deleted 2 mirrored messages older than 7 days; not deleting their Discord copies (Discord messages ${ids.join(', ')}); delete them there by hand if this was intended`,
       );
     });
 
@@ -2458,7 +2593,7 @@ describe(MirrorService.name, () => {
       expect(discord.deleteMirrorMessage.mock.calls.map(([{ messageId }]) => messageId)).toEqual(copies);
       expect(db.conversations).toEqual([]);
       expect(log()).toHaveBeenCalledWith(
-        `Dev: detached the conversation of Discord thread ${threadId}: Zulip removed every mirrored message of its topic`,
+        `${DEV_CHANNEL}: detached the conversation of Discord thread ${threadId}: Zulip removed every mirrored message of its topic`,
       );
     });
 
@@ -2647,7 +2782,7 @@ describe(MirrorService.name, () => {
       await updateFromZulip({ messageId: 1001, topic: 'Crash on start' });
 
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: could not rename Discord thread ${threadId} after its Zulip topic moved: forbidden (50013)`,
+        `${DEV_CHANNEL}: could not rename Discord thread ${threadId} after its Zulip topic moved: forbidden (50013)`,
       );
     });
 
@@ -2685,7 +2820,7 @@ describe(MirrorService.name, () => {
 
       expect(db.conversations).toEqual([]);
       expect(log()).toHaveBeenCalledWith(
-        `Dev: detached the conversation of Discord thread ${threadId}: the Discord thread no longer exists`,
+        `${DEV_CHANNEL}: detached the conversation of Discord thread ${threadId}: the Discord thread no longer exists`,
       );
     });
 
@@ -2711,7 +2846,7 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(warn()).toHaveBeenCalledWith(
-        expect.stringContaining(`Dev: Zulip refused to rename the topic of Discord thread ${threadId}`),
+        expect.stringContaining(`${DEV_CHANNEL}: Zulip refused to rename the topic of Discord thread ${threadId}`),
       );
       expect(db.conversations[0].zulipTopic).toBe('Crash');
     });
@@ -2732,8 +2867,8 @@ describe(MirrorService.name, () => {
   });
 
   describe('readiness', () => {
-    const zulipNotReady = 'Dev: Zulip is not ready, so edits, deletions and renames wait until it is';
-    const discordNotReady = 'Dev: Discord is not ready, so edits, deletions and renames wait until it is';
+    const zulipNotReady = `${DEV_CHANNEL}: Zulip is not ready, so edits, deletions and renames wait until it is`;
+    const discordNotReady = `${DEV_CHANNEL}: Discord is not ready, so edits, deletions and renames wait until it is`;
     let threadId: string;
 
     beforeEach(async () => {
@@ -2799,10 +2934,9 @@ describe(MirrorService.name, () => {
     it('should drop the changes held for a pair that was turned off', async () => {
       discord.isReady.mockReturnValue(false);
       await updateFromZulip({ messageId: 1001, content: 'edited' });
-      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
-        ...mirrorChannel(channelId),
-        everyoneCanView: channelId === DEV_CHANNEL,
-      }));
+      discord.getMirrorChannel.mockImplementation(async (channelId) =>
+        channelId === DEV_CHANNEL ? undefined : mirrorChannel(channelId),
+      );
 
       await discordIsBack();
 
@@ -2970,7 +3104,7 @@ describe(MirrorService.name, () => {
     });
 
     it('should wait until both sides are ready, whichever comes first', async () => {
-      sut.init();
+      await sut.init();
       await register();
       expect(db.repository.getMirrorZulipHighWater).not.toHaveBeenCalled();
 
@@ -2983,7 +3117,7 @@ describe(MirrorService.name, () => {
     });
 
     it('should not start while Discord is away', async () => {
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
       discord.isReady.mockReturnValue(false);
 
@@ -2993,7 +3127,7 @@ describe(MirrorService.name, () => {
     });
 
     it('should queue one catch-up at a time', async () => {
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
       for (const handler of stub.handlers.registration) {
         handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
@@ -3032,7 +3166,7 @@ describe(MirrorService.name, () => {
       expect(zulip.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
         discord.sendMirrorMessage.mock.invocationCallOrder[0],
       );
-      expect(log()).toHaveBeenCalledWith('Dev: catching up 2 Discord messages and 2 Zulip messages');
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up 2 Discord messages and 2 Zulip messages`);
     });
 
     it('should run what it found before anything queued after it', async () => {
@@ -3040,7 +3174,7 @@ describe(MirrorService.name, () => {
       const page = deferred<DiscordMirrorPage>();
       discord.fetchMirrorMessagesBefore.mockReturnValue(page.promise);
       zulipHistory.push(missedOnZulip());
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
       for (const handler of stub.handlers.registration) {
         handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
@@ -3101,7 +3235,7 @@ describe(MirrorService.name, () => {
 
     it('should hold live messages back until catch-up has read what was missed', async () => {
       seedHighWaters();
-      sut.init();
+      await sut.init();
       await register();
       const channel = deferred<DiscordMirrorChannel>();
       discord.getMirrorChannel.mockImplementation(async (channelId) =>
@@ -3114,7 +3248,9 @@ describe(MirrorService.name, () => {
       const ready = sut.onDiscordReady();
       await fromDiscord(live);
       expect(zulip.sendMessage).not.toHaveBeenCalled();
-      expect(warn()).toHaveBeenCalledWith('Dev: not mirroring yet: catch-up has to run first, and picks it up');
+      expect(warn()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: not mirroring yet: catch-up has to run first, and picks it up`,
+      );
 
       channel.resolve(mirrorChannel(DEV_CHANNEL));
       await ready;
@@ -3136,7 +3272,7 @@ describe(MirrorService.name, () => {
       await fromDiscord(second);
 
       expect(zulip.sendMessage).toHaveBeenCalledOnce();
-      expect(log()).toHaveBeenCalledWith('Dev: catching up again in 30 seconds');
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up again in 30 seconds`);
 
       await vitest.advanceTimersByTimeAsync(30_000);
       await sut.whenIdle();
@@ -3159,7 +3295,7 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(contents()).toEqual(['first', 'first']);
-      expect(log()).toHaveBeenCalledWith('Dev: catching up again in 60 seconds');
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up again in 60 seconds`);
 
       await vitest.advanceTimersByTimeAsync(60_000);
       await sut.whenIdle();
@@ -3249,7 +3385,7 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(posted()).toEqual(['next']);
-      expect(error()).toHaveBeenCalledWith(`Dev: gave up on Discord message ${poison.id} after 3 attempts`);
+      expect(error()).toHaveBeenCalledWith(`${DEV_CHANNEL}: gave up on Discord message ${poison.id} after 3 attempts`);
 
       await vitest.advanceTimersByTimeAsync(10 * 60_000);
       await sut.whenIdle();
@@ -3415,7 +3551,7 @@ describe(MirrorService.name, () => {
         createdAt: new Date(Date.now() - 30 * DAY),
       });
       seedHighWaters();
-      sut.init();
+      await sut.init();
       await register();
       const message = missedOnDiscord({ threadId: idle.discordThreadId, threadName: 'Crash on upload' });
       onDiscord(idle.discordThreadId!, message);
@@ -3430,7 +3566,7 @@ describe(MirrorService.name, () => {
 
     it('should quietly pass over a thread it turned away that no longer exists', async () => {
       seedHighWaters();
-      sut.init();
+      await sut.init();
       await register();
       const threadId = snowflake(Date.now() - 1000);
       discord.fetchMirrorMessagesBefore.mockImplementation(async (channelId) => {
@@ -3529,7 +3665,7 @@ describe(MirrorService.name, () => {
 
     it('should read a thread again when the catch-up that found it went out of date', async () => {
       seedHighWaters();
-      sut.init();
+      await sut.init();
       await register();
       const threadId = snowflake(Date.now() - 1000);
       const inMain = missedOnDiscord({ content: 'in the channel' });
@@ -3556,7 +3692,7 @@ describe(MirrorService.name, () => {
       seedHighWaters();
       const page = deferred<DiscordMirrorPage>();
       discord.fetchMirrorMessagesBefore.mockReturnValueOnce(page.promise);
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
       for (const handler of stub.handlers.registration) {
         handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
@@ -3577,7 +3713,7 @@ describe(MirrorService.name, () => {
 
     it('should read a thread it turned away again when the catch-up that read it went out of date', async () => {
       seedHighWaters();
-      sut.init();
+      await sut.init();
       await register();
       const threadId = snowflake(Date.now() - 1000);
       const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
@@ -3598,7 +3734,7 @@ describe(MirrorService.name, () => {
 
     it('should read a thread it turned away again when that read fails on the way', async () => {
       seedHighWaters();
-      sut.init();
+      await sut.init();
       await register();
       const threadId = snowflake(Date.now() - 1000);
       const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
@@ -3660,7 +3796,7 @@ describe(MirrorService.name, () => {
         .mockRejectedValueOnce(unavailable)
         .mockRejectedValueOnce(unavailable);
       vitest.useFakeTimers();
-      sut.init();
+      await sut.init();
       await sut.onDiscordReady();
       for (const handler of stub.handlers.registration) {
         handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
@@ -3681,7 +3817,7 @@ describe(MirrorService.name, () => {
       seedHighWaters();
       db.repository.getMirrorDiscordHighWater.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
       vitest.useFakeTimers();
-      sut.init();
+      await sut.init();
       await register();
       const threadId = snowflake(Date.now() - 1000);
       const starter = missedOnDiscord({ id: threadId, threadId, threadName: 'Idea', content: 'starter' });
@@ -3695,7 +3831,7 @@ describe(MirrorService.name, () => {
       await fromZulip(live);
 
       expect(error()).toHaveBeenCalledWith(
-        'Dev: catch-up failed: Connection terminated unexpectedly',
+        `${DEV_CHANNEL}: catch-up failed: Connection terminated unexpectedly`,
         expect.any(Error),
       );
       expect(zulip.sendMessage).not.toHaveBeenCalled();
@@ -3718,7 +3854,9 @@ describe(MirrorService.name, () => {
 
       expect(zulip.sendMessage).not.toHaveBeenCalled();
       expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
-      expect(log()).toHaveBeenCalledWith('Dev: catch-up skipped 2 messages older than 6 hours');
+      expect(log()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: catch-up skipped 2 messages older than 6 hours or than the link`,
+      );
     });
 
     it('should reach the newest missed Zulip messages when older ones would fill the pages', async () => {
@@ -3791,10 +3929,10 @@ describe(MirrorService.name, () => {
       expect(discord.fetchMirrorMessagesBefore).toHaveBeenCalledTimes(5);
       expect(zulip.getStreamMessagesBefore).toHaveBeenCalledTimes(5);
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: catch-up stopped after reading 500 messages of Discord channel ${DEV_CHANNEL}; older missed messages are not mirrored`,
+        `${DEV_CHANNEL}: catch-up stopped after reading 500 messages of Discord channel ${DEV_CHANNEL}; older missed messages are not mirrored`,
       );
       expect(warn()).toHaveBeenCalledWith(
-        `Dev: catch-up stopped after reading 500 messages of Zulip stream ${DEV_STREAM}; older missed messages are not mirrored`,
+        `${DEV_CHANNEL}: catch-up stopped after reading 500 messages of Zulip stream ${DEV_STREAM}; older missed messages are not mirrored`,
       );
     });
 
@@ -3878,7 +4016,7 @@ describe(MirrorService.name, () => {
       await start();
 
       expect(error()).toHaveBeenCalledWith(
-        `Dev: catch-up could not read Discord channel ${DEV_CHANNEL}: forbidden (50001)`,
+        `${DEV_CHANNEL}: catch-up could not read Discord channel ${DEV_CHANNEL}: forbidden (50001)`,
       );
       expect(discord.sendMirrorMessage).toHaveBeenCalledOnce();
     });
@@ -3892,7 +4030,7 @@ describe(MirrorService.name, () => {
 
       expect(db.conversations).toEqual([]);
       expect(log()).toHaveBeenCalledWith(
-        'Dev: detached the conversation of Discord thread 200000000000000001: the Discord thread no longer exists',
+        `${DEV_CHANNEL}: detached the conversation of Discord thread 200000000000000001: the Discord thread no longer exists`,
       );
       expect(error()).not.toHaveBeenCalled();
     });
@@ -3906,7 +4044,7 @@ describe(MirrorService.name, () => {
       await start();
 
       expect(error()).toHaveBeenCalledWith(
-        `Dev: catch-up could not read Zulip stream ${DEV_STREAM}: Zulip GET failed with 403 BAD_REQUEST: Invalid channel ID`,
+        `${DEV_CHANNEL}: catch-up could not read Zulip stream ${DEV_STREAM}: Zulip GET failed with 403 BAD_REQUEST: Invalid channel ID`,
       );
     });
   });
