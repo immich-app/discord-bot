@@ -1,4 +1,4 @@
-import { ZulipConfig } from 'src/interfaces/zulip.interface';
+import { ZulipConfig, ZulipUploadRefused } from 'src/interfaces/zulip.interface';
 import { ZulipApiError, createZulipClient } from 'src/repositories/zulip.client';
 import { ZulipRepository, longpollTimeoutMs } from 'src/repositories/zulip.repository';
 import { Mock, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
@@ -75,6 +75,10 @@ describe('ZulipRepository', () => {
       { method: 'registerQueue', call: () => sut.registerQueue() },
       { method: 'getEvents', call: () => sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live()) },
       { method: 'deleteQueue', call: () => sut.deleteQueue('q1') },
+      { method: 'deleteMessage', call: () => sut.deleteMessage(1) },
+      { method: 'uploadFile', call: () => sut.uploadFile(new File(['x'], 'x.txt')) },
+      { method: 'downloadUpload', call: () => sut.downloadUpload('/user_uploads/2/ab/cd/x.txt', 10) },
+      { method: 'getStreamMessagesBefore', call: () => sut.getStreamMessagesBefore({ stream: 107, count: 10 }) },
       { method: 'getEmojiCodes', call: () => sut.getEmojiCodes() },
     ])('should throw a clear error from $method', async ({ call }) => {
       await expect(call()).rejects.toThrow('Zulip client not initialised');
@@ -134,17 +138,29 @@ describe('ZulipRepository', () => {
       await sut.init(config);
     });
 
-    it('should fetch the message as the bot and return its ID and current topic', async () => {
+    it('should fetch the message as the bot and return its ID, stream, sender name and current topic', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
           msg: '',
           raw_content: 'hello',
-          message: { id: 42, subject: '#1234: feat: add thing', content: '<p>hello</p>', type: 'stream' },
+          message: {
+            id: 42,
+            stream_id: 120,
+            sender_full_name: 'Alice',
+            subject: '#1234: feat: add thing',
+            content: '<p>hello</p>',
+            type: 'stream',
+          },
         }),
       );
 
-      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '#1234: feat: add thing' });
+      await expect(sut.getMessage(42)).resolves.toEqual({
+        id: 42,
+        topic: '#1234: feat: add thing',
+        streamId: 120,
+        senderFullName: 'Alice',
+      });
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(request(0).method).toBe('GET');
@@ -199,6 +215,29 @@ describe('ZulipRepository', () => {
       await sut.updateMessage(42, { topic: '✔ #1234: feat: add thing', propagateMode: 'change_all' });
 
       expect(await request(0).text()).toBe('topic=%E2%9C%94+%231234%3A+feat%3A+add+thing&propagate_mode=change_all');
+    });
+
+    it('should send the notification flags only when they are given', async () => {
+      fetchMock.mockImplementation(async () => json({ result: 'success', msg: '' }));
+
+      await sut.updateMessage(42, {
+        topic: 'renamed',
+        propagateMode: 'change_all',
+        sendNotificationToOldThread: false,
+        sendNotificationToNewThread: true,
+      });
+      await sut.updateMessage(42, {
+        topic: 'renamed',
+        propagateMode: 'change_all',
+        sendNotificationToOldThread: false,
+      });
+
+      expect(await request(0).text()).toBe(
+        'topic=renamed&propagate_mode=change_all&send_notification_to_old_thread=false&send_notification_to_new_thread=true',
+      );
+      expect(await request(1).text()).toBe(
+        'topic=renamed&propagate_mode=change_all&send_notification_to_old_thread=false',
+      );
     });
 
     it('should throw with the code Zulip answers when a move exceeds the time limit', async () => {
@@ -346,20 +385,25 @@ describe('ZulipRepository', () => {
               id: 490,
               sender_id: 12,
               sender_email: 'alice@example.com',
+              sender_full_name: 'Alice',
               type: 'stream',
               stream_id: 107,
               subject: 'deploy',
               content: 'the thumbnails crash',
+              timestamp: 1_700_000_000,
+              last_moved_timestamp: 1_700_000_500,
               flags: ['read'],
             },
             {
               id: 500,
               sender_id: 12,
               sender_email: 'alice@example.com',
+              sender_full_name: 'Alice',
               type: 'stream',
               stream_id: 107,
               subject: 'deploy',
               content: '@**Immich** similar',
+              timestamp: 1_700_000_100,
               flags: ['mentioned'],
             },
           ],
@@ -371,19 +415,25 @@ describe('ZulipRepository', () => {
           id: 490,
           senderId: 12,
           senderEmail: 'alice@example.com',
+          senderFullName: 'Alice',
           type: 'stream',
           streamId: 107,
           topic: 'deploy',
           content: 'the thumbnails crash',
+          timestamp: 1_700_000_000,
+          movedAt: 1_700_000_500,
         },
         {
           id: 500,
           senderId: 12,
           senderEmail: 'alice@example.com',
+          senderFullName: 'Alice',
           type: 'stream',
           streamId: 107,
           topic: 'deploy',
           content: '@**Immich** similar',
+          timestamp: 1_700_000_100,
+          movedAt: undefined,
         },
       ]);
 
@@ -430,7 +480,7 @@ describe('ZulipRepository', () => {
       await sut.init(config);
     });
 
-    it('should register a queue for message events only, as raw markdown, and return its ID, cursor and subscribed streams', async () => {
+    it('should register a queue for messages, their edits and bulk deletions, as raw markdown, and return its ID, cursor and subscribed streams', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
@@ -456,7 +506,7 @@ describe('ZulipRepository', () => {
       expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
       expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
       expect(await request(0).text()).toBe(
-        'event_types=%5B%22message%22%5D&apply_markdown=false&fetch_event_types=%5B%22subscription%22%5D',
+        'event_types=%5B%22message%22%2C%22update_message%22%2C%22delete_message%22%5D&apply_markdown=false&client_capabilities=%7B%22notification_settings_null%22%3Afalse%2C%22bulk_message_deletion%22%3Atrue%7D&fetch_event_types=%5B%22subscription%22%5D',
       );
     });
 
@@ -475,6 +525,16 @@ describe('ZulipRepository', () => {
       await sut.registerQueue();
 
       expect(await request(0).text()).not.toContain('all_public_streams');
+    });
+
+    it('should keep the empty topic and avatars in the form every handler has always seen', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: 'q1', last_event_id: -1 }));
+
+      await sut.registerQueue();
+
+      const body = await request(0).text();
+      expect(body).not.toContain('empty_topic_name');
+      expect(body).not.toContain('client_gravatar');
     });
 
     it('should throw when the server registers no queue', async () => {
@@ -552,10 +612,13 @@ describe('ZulipRepository', () => {
             id: 500,
             senderId: 12,
             senderEmail: 'alice@example.com',
+            senderFullName: 'Alice',
             type: 'stream',
             streamId: 107,
             topic: 'thumbnails',
             content: 'see #4242',
+            timestamp: 1_700_000_000,
+            movedAt: undefined,
           },
         },
         {
@@ -565,12 +628,149 @@ describe('ZulipRepository', () => {
             id: 501,
             senderId: 12,
             senderEmail: '',
+            senderFullName: '',
             type: 'private',
             streamId: undefined,
             topic: '',
             content: 'hi',
+            timestamp: 0,
+            movedAt: undefined,
           },
         },
+      ]);
+    });
+
+    it('should return an edit, a move and a preview with the fields a handler needs', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          events: [
+            {
+              id: 6,
+              type: 'update_message',
+              user_id: 12,
+              rendering_only: false,
+              message_id: 500,
+              message_ids: [500],
+              flags: [],
+              edit_timestamp: 1_700_000_100,
+              stream_id: 107,
+              orig_content: 'see #4242',
+              content: 'see #4243',
+              rendered_content: '<p>see #4243</p>',
+              is_me_message: false,
+            },
+            {
+              id: 7,
+              type: 'update_message',
+              user_id: 13,
+              rendering_only: false,
+              message_id: 500,
+              message_ids: [498, 500, 502],
+              flags: [],
+              edit_timestamp: 1_700_000_200,
+              stream_id: 107,
+              new_stream_id: 108,
+              propagate_mode: 'change_all',
+              orig_subject: 'thumbnails',
+              subject: '✔ thumbnails',
+              topic_links: [],
+            },
+            {
+              id: 8,
+              type: 'update_message',
+              user_id: null,
+              rendering_only: true,
+              message_id: 500,
+              message_ids: [500],
+              flags: [],
+              edit_timestamp: 1_700_000_300,
+              content: 'see https://example.com',
+              rendered_content: '<p>preview</p>',
+            },
+          ],
+        }),
+      );
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live())).resolves.toEqual([
+        {
+          id: 6,
+          type: 'update_message',
+          update: {
+            userId: 12,
+            renderingOnly: false,
+            messageId: 500,
+            messageIds: [500],
+            streamId: 107,
+            newStreamId: undefined,
+            origTopic: undefined,
+            topic: undefined,
+            propagateMode: undefined,
+            content: 'see #4243',
+          },
+        },
+        {
+          id: 7,
+          type: 'update_message',
+          update: {
+            userId: 13,
+            renderingOnly: false,
+            messageId: 500,
+            messageIds: [498, 500, 502],
+            streamId: 107,
+            newStreamId: 108,
+            origTopic: 'thumbnails',
+            topic: '✔ thumbnails',
+            propagateMode: 'change_all',
+            content: undefined,
+          },
+        },
+        {
+          id: 8,
+          type: 'update_message',
+          update: {
+            userId: null,
+            renderingOnly: true,
+            messageId: 500,
+            messageIds: [500],
+            streamId: undefined,
+            newStreamId: undefined,
+            origTopic: undefined,
+            topic: undefined,
+            propagateMode: undefined,
+            content: 'see https://example.com',
+          },
+        },
+      ]);
+    });
+
+    it('should return a deletion as a list of IDs, whether it came in bulk or for one message', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          events: [
+            {
+              id: 9,
+              type: 'delete_message',
+              message_type: 'stream',
+              message_ids: [500, 501],
+              stream_id: 107,
+              topic: 'x',
+            },
+            { id: 10, type: 'delete_message', message_type: 'stream', message_id: 502, stream_id: 107, topic: 'y' },
+            { id: 11, type: 'delete_message', message_type: 'private', message_ids: [503] },
+            { id: 12, type: 'delete_message', message_type: 'private' },
+          ],
+        }),
+      );
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live())).resolves.toEqual([
+        { id: 9, type: 'delete_message', deletion: { messageIds: [500, 501], streamId: 107, topic: 'x' } },
+        { id: 10, type: 'delete_message', deletion: { messageIds: [502], streamId: 107, topic: 'y' } },
+        { id: 11, type: 'delete_message', deletion: { messageIds: [503], streamId: undefined, topic: undefined } },
+        { id: 12, type: 'delete_message', deletion: { messageIds: [], streamId: undefined, topic: undefined } },
       ]);
     });
 
@@ -607,13 +807,21 @@ describe('ZulipRepository', () => {
       const timeouts = () => vitest.mocked(createZulipClient).mock.calls.map(([{ timeoutMs }]) => timeoutMs);
       const eventsClient = () => vitest.mocked(createZulipClient).mock.calls.at(-1)![0];
 
+      it('should build a client for uploads as the bot, with two minutes for the file to go up', () => {
+        expect(vitest.mocked(createZulipClient).mock.calls[2][0]).toEqual({
+          realm: config.realm,
+          ...config.bot,
+          timeoutMs: 120_000,
+        });
+      });
+
       it("should allow a margin over the server's long-poll timeout, so a quiet poll is answered by its heartbeat", () => {
         expect(longpollTimeoutMs(90)).toBe(120_000);
         expect(longpollTimeoutMs(600)).toBe(630_000);
       });
 
       it("should build the events client at init with Zulip's default long-poll timeout and the margin", () => {
-        expect(timeouts()).toEqual([undefined, undefined, 120_000]);
+        expect(timeouts()).toEqual([undefined, undefined, 120_000, 120_000]);
         expect(eventsClient()).toMatchObject({ realm: config.realm, ...config.bot });
       });
 
@@ -630,7 +838,7 @@ describe('ZulipRepository', () => {
 
         await sut.registerQueue();
 
-        expect(timeouts()).toEqual([undefined, undefined, 120_000, 630_000]);
+        expect(timeouts()).toEqual([undefined, undefined, 120_000, 120_000, 630_000]);
         expect(eventsClient()).toMatchObject({ realm: config.realm, ...config.bot });
       });
 
@@ -639,7 +847,7 @@ describe('ZulipRepository', () => {
 
         await sut.registerQueue();
 
-        expect(timeouts()).toEqual([undefined, undefined, 120_000]);
+        expect(timeouts()).toEqual([undefined, undefined, 120_000, 120_000]);
       });
     });
   });
@@ -668,6 +876,378 @@ describe('ZulipRepository', () => {
       );
 
       await expect(sut.deleteQueue('q1')).rejects.toMatchObject({ code: 'BAD_EVENT_QUEUE_ID' });
+    });
+  });
+
+  describe('deleteMessage', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should delete the message as the bot', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '' }));
+
+      await expect(sut.deleteMessage(42)).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('DELETE');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/messages/42');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+    });
+
+    it('should throw with the reason when Zulip refuses', async () => {
+      fetchMock.mockResolvedValue(
+        json(
+          { result: 'error', code: 'BAD_REQUEST', msg: "You don't have permission to delete this message" },
+          { status: 400 },
+        ),
+      );
+
+      await expect(sut.deleteMessage(42)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        msg: "You don't have permission to delete this message",
+      });
+    });
+  });
+
+  describe('uploadFile', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should upload the file as the bot, multipart, and return its URL and the name Zulip stored', async () => {
+      const url = '/user_uploads/2/86/VJFs070o1ZEFFeoCx6VH2lir/s1-test-x.txt';
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', uri: url, url, filename: 's1 test [x].txt' }));
+
+      await expect(sut.uploadFile(new File(['hello s1'], 's1 test [x].txt', { type: 'text/plain' }))).resolves.toEqual({
+        url,
+        filename: 's1 test [x].txt',
+      });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const upload = request(0);
+      expect(upload.method).toBe('POST');
+      expect(upload.url).toBe('https://zulip.example.com/api/v1/user_uploads');
+      expect(upload.headers.get('authorization')).toBe(basic(config.bot));
+      expect(upload.headers.get('content-type')).toMatch(/^multipart\/form-data; boundary=/);
+      const part = (await upload.formData()).get('filename') as File;
+      expect(part.name).toBe('s1 test [x].txt');
+      expect(part.type).toBe('text/plain');
+      expect(await part.text()).toBe('hello s1');
+    });
+
+    it("should give up when the caller's deadline passes", async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', url: '/user_uploads/2/ab/cd/x.txt' }));
+      const deadline = new AbortController();
+
+      await sut.uploadFile(new File(['x'], 'x.txt'), deadline.signal);
+      deadline.abort();
+
+      expect(fetchMock.mock.calls[0][1]!.signal!.aborted).toBe(true);
+    });
+
+    it('should fall back to the name it sent when Zulip does not say', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', url: '/user_uploads/2/ab/cd/x.txt' }));
+
+      await expect(sut.uploadFile(new File(['x'], 'x.txt'))).resolves.toEqual({
+        url: '/user_uploads/2/ab/cd/x.txt',
+        filename: 'x.txt',
+      });
+    });
+
+    it('should throw when Zulip returns no URL', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '' }));
+
+      await expect(sut.uploadFile(new File(['x'], 'x.txt'))).rejects.toThrow('Zulip returned no URL for the upload');
+    });
+
+    it('should throw when Zulip refuses the upload', async () => {
+      fetchMock.mockResolvedValue(
+        json(
+          {
+            result: 'error',
+            code: 'BAD_REQUEST',
+            msg: "File is larger than this server's configured maximum upload size (25 MiB).",
+          },
+          { status: 400 },
+        ),
+      );
+
+      await expect(sut.uploadFile(new File(['x'], 'x.txt'))).rejects.toBeInstanceOf(ZulipApiError);
+    });
+  });
+
+  describe('downloadUpload', () => {
+    const PATH = '/user_uploads/2/86/VJFs070o1ZEFFeoCx6VH2lir/s1-test%20x.txt';
+    const S3 = 'https://uploads.s3.example.com/2/86/VJFs070o1ZEFFeoCx6VH2lir/s1-test%20x.txt?X-Amz-Signature=abc';
+
+    const file = (
+      body: BodyInit = 'hello s1',
+      headers: Record<string, string> = { 'content-type': 'text/plain; charset="ascii"' },
+    ) => new Response(body, { status: 200, headers });
+    const redirect = (location?: string) =>
+      new Response(null, { status: 302, headers: location === undefined ? {} : { location } });
+    const init = (index: number) => fetchMock.mock.calls[index][1];
+
+    const trickle = (size: number, count = Number.POSITIVE_INFINITY) => {
+      const state = { read: 0, cancelled: false };
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (state.read === count) {
+              controller.close();
+              return;
+            }
+            state.read++;
+            controller.enqueue(new Uint8Array(size).fill(7));
+          },
+          cancel() {
+            state.cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return { body, state };
+    };
+
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should download the file as the bot, without following redirects, named after its decoded last segment', async () => {
+      fetchMock.mockResolvedValue(file());
+
+      const result = await sut.downloadUpload(PATH, 100);
+
+      expect(result).toBeInstanceOf(File);
+      expect(result!.name).toBe('s1-test x.txt');
+      expect(result!.type).toBe('text/plain');
+      expect(await result!.text()).toBe('hello s1');
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe(`https://zulip.example.com${PATH}`);
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      expect(init(0)?.redirect).toBe('manual');
+      expect(init(0)?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it.each([
+      '/user_uploads/a/../../api/v1/x',
+      '/user_uploads/2/ab/cd/../../../api/v1/users/me',
+      '/user_uploads/2/ab/cd/..',
+      '/user_uploads/2/ab/cd/.',
+      '/user_uploads/2/ab/cd/%2e%2e',
+      '/user_uploads/2/ab/cd/x%2Fy.txt',
+      '/user_uploads/2/ab/cd/x%5cy.txt',
+      '/user_uploads/2/ab/cd/x\\y.txt',
+      '/user_uploads/2/ab/cd/x.txt?download=1',
+      '/user_uploads/2/ab/cd/x.txt#y',
+      '/user_uploads/2/x.txt',
+      '/user_uploads/2/ab/cd/ef/x.txt',
+      '/user_uploads/2/a.b/cd/x.txt',
+      '/user_uploads/2/a.b/x.txt',
+      '/user_uploads/2/ab/cd/r%zz.txt',
+      '/user_uploads/2/ab/cd/x\t.txt',
+      '/user_uploads/2/ab/cd/.\t.',
+      '//evil.example/user_uploads/2/ab/cd/x.txt',
+      'https://evil.example/user_uploads/2/ab/cd/x.txt',
+      '/api/v1/users/me',
+      '',
+    ])('should refuse %j without fetching anything', async (path) => {
+      await expect(sut.downloadUpload(path, 100)).rejects.toThrow(ZulipUploadRefused);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the local storage backend', '/user_uploads/2/ab/qdRdXY3QKsb8yYyc9IIyFjmC/pixel.png'],
+      ['the S3 backend', '/user_uploads/2/qdRdXY3QKsb8yYyc9IIyFjmC/pixel.png'],
+    ])('should download a file stored by %s', async (_, path) => {
+      fetchMock.mockResolvedValue(file());
+
+      const result = await sut.downloadUpload(path, 100);
+
+      expect(result!.name).toBe('pixel.png');
+      expect(request(0).url).toBe(`https://zulip.example.com${path}`);
+    });
+
+    it.each([
+      ['as Zulip links it', '/user_uploads/2/df/-U55VJFs070o1ZEF/café résumé.txt'],
+      ['percent-encoded', '/user_uploads/2/df/-U55VJFs070o1ZEF/caf%C3%A9%20r%C3%A9sum%C3%A9.txt'],
+    ])('should download a file with a non-ASCII name linked %s', async (_, path) => {
+      fetchMock.mockResolvedValue(file());
+
+      const result = await sut.downloadUpload(path, 100);
+
+      expect(result!.name).toBe('café résumé.txt');
+      expect(request(0).url).toBe(
+        'https://zulip.example.com/user_uploads/2/df/-U55VJFs070o1ZEF/caf%C3%A9%20r%C3%A9sum%C3%A9.txt',
+      );
+    });
+
+    it("should give up when the caller's deadline passes", async () => {
+      fetchMock.mockResolvedValue(file());
+      const deadline = new AbortController();
+
+      await sut.downloadUpload(PATH, 100, deadline.signal);
+      deadline.abort();
+
+      expect(init(0)?.signal?.aborted).toBe(true);
+    });
+
+    it('should follow a redirect to another HTTPS origin once, without credentials and refusing any further redirect', async () => {
+      fetchMock.mockResolvedValueOnce(redirect(S3)).mockResolvedValueOnce(file());
+
+      const result = await sut.downloadUpload(PATH, 100);
+
+      expect(await result!.text()).toBe('hello s1');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(request(1).url).toBe(S3);
+      expect(request(1).headers.get('authorization')).toBeNull();
+      expect(init(1)?.redirect).toBe('error');
+      expect(init(1)?.signal).toBe(init(0)?.signal);
+    });
+
+    it.each([
+      { name: 'the login page, relative', location: '/accounts/login/?next=/user_uploads/2/86/abc/x.txt' },
+      { name: 'the login page, absolute', location: 'https://zulip.example.com/accounts/login/' },
+      { name: 'plain HTTP', location: 'http://uploads.s3.example.com/x.txt' },
+      { name: 'nowhere', location: undefined },
+    ])('should refuse a redirect to $name', async ({ location }) => {
+      fetchMock.mockResolvedValueOnce(redirect(location));
+
+      await expect(sut.downloadUpload(PATH, 100)).rejects.toThrow(ZulipUploadRefused);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it.each([401, 403, 404, 500])('should refuse an answer with status %i', async (status) => {
+      fetchMock.mockResolvedValueOnce(new Response('nope', { status }));
+
+      await expect(sut.downloadUpload(PATH, 100)).rejects.toThrow(`Zulip answered the download with status ${status}`);
+    });
+
+    it('should refuse a web page, which is what an unauthenticated request can get back', async () => {
+      fetchMock.mockResolvedValueOnce(file('<html>login</html>', { 'content-type': 'text/html; charset=utf-8' }));
+
+      await expect(sut.downloadUpload(PATH, 100)).rejects.toThrow('Zulip answered the download with a web page');
+    });
+
+    it('should accept a web page that is the file itself', async () => {
+      fetchMock.mockResolvedValueOnce(file('<html>page</html>', { 'content-type': 'text/html' }));
+
+      const result = await sut.downloadUpload('/user_uploads/2/ab/cd/page.HTM', 100);
+
+      expect(result!.name).toBe('page.HTM');
+      expect(await result!.text()).toBe('<html>page</html>');
+    });
+
+    it('should give up without reading the body when its length is over the limit', async () => {
+      const { body, state } = trickle(4);
+      fetchMock.mockResolvedValueOnce(file(body, { 'content-length': '101' }));
+
+      await expect(sut.downloadUpload(PATH, 100)).resolves.toBeUndefined();
+
+      expect(state).toEqual({ read: 0, cancelled: true });
+    });
+
+    it('should stop reading once the body runs past the limit', async () => {
+      const { body, state } = trickle(4);
+      fetchMock.mockResolvedValueOnce(file(body));
+
+      await expect(sut.downloadUpload(PATH, 10)).resolves.toBeUndefined();
+
+      expect(state).toEqual({ read: 3, cancelled: true });
+    });
+
+    it('should keep an empty file', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+      const result = await sut.downloadUpload(PATH, 10);
+
+      expect(result!.size).toBe(0);
+      expect(result!.type).toBe('');
+    });
+
+    it('should keep a file of exactly the limit, whatever its chunks', async () => {
+      const { body } = trickle(5, 2);
+      fetchMock.mockResolvedValueOnce(file(body, { 'content-type': 'application/octet-stream' }));
+
+      const result = await sut.downloadUpload(PATH, 10);
+
+      expect(new Uint8Array(await result!.arrayBuffer())).toEqual(new Uint8Array(10).fill(7));
+      expect(result!.type).toBe('application/octet-stream');
+    });
+  });
+
+  describe('getStreamMessagesBefore', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should ask for the messages of the stream before the anchor, leaving out a sender, as raw markdown', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          messages: [
+            {
+              id: 481,
+              sender_id: 12,
+              sender_email: 'alice@example.com',
+              sender_full_name: 'Alice',
+              type: 'stream',
+              stream_id: 120,
+              subject: '#dev',
+              content: 'hello',
+              timestamp: 1_700_000_000,
+            },
+          ],
+        }),
+      );
+
+      await expect(
+        sut.getStreamMessagesBefore({ stream: 120, before: 482, count: 100, excludeSenderId: 9 }),
+      ).resolves.toEqual([
+        {
+          id: 481,
+          senderId: 12,
+          senderEmail: 'alice@example.com',
+          senderFullName: 'Alice',
+          type: 'stream',
+          streamId: 120,
+          topic: '#dev',
+          content: 'hello',
+          timestamp: 1_700_000_000,
+        },
+      ]);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).method).toBe('GET');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      const url = new URL(request(0).url);
+      expect(url.pathname).toBe('/api/v1/messages');
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        anchor: '482',
+        include_anchor: 'false',
+        num_before: '100',
+        num_after: '0',
+        narrow: JSON.stringify([
+          { operator: 'channel', operand: 120 },
+          { operator: 'sender', operand: 9, negated: true },
+        ]),
+        apply_markdown: 'false',
+      });
+    });
+
+    it('should start from the newest message of the whole stream without an anchor', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', messages: [] }));
+
+      await expect(sut.getStreamMessagesBefore({ stream: 120, count: 100 })).resolves.toEqual([]);
+
+      const url = new URL(request(0).url);
+      expect(url.searchParams.get('anchor')).toBe('newest');
+      expect(url.searchParams.get('narrow')).toBe(JSON.stringify([{ operator: 'channel', operand: 120 }]));
     });
   });
 

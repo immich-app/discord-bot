@@ -1,4 +1,4 @@
-import type { components } from 'src/generated/zulip';
+import type { components, paths } from 'src/generated/zulip';
 import {
   IZulipInterface,
   MessagePayload,
@@ -11,13 +11,18 @@ import {
   ZulipMessageUpdate,
   ZulipQueueRegistration,
   ZulipReceivedMessage,
+  ZulipStreamPageQuery,
   ZulipSubscription,
+  ZulipUploadRefused,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
+import { readAtMost } from 'src/mirror/download';
 import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
 const EMOJI_CODES_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
 /** Zulip's default long-poll timeout: a quiet poll gets its heartbeat about this late, so the client adds a margin. */
 const DEFAULT_LONGPOLL_TIMEOUT_SECONDS = 90;
 const LONGPOLL_MARGIN_MS = 30_000;
@@ -29,7 +34,37 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
 };
 
-type Clients = { bot: ZulipClient; user: ZulipClient; events: ZulipClient };
+/** Typed as empty by the generated types, but the server requires `notification_settings_null`, false by default. */
+const CLIENT_CAPABILITIES: unknown = { notification_settings_null: false, bulk_message_deletion: true };
+
+type Clients = { bot: ZulipClient; user: ZulipClient; uploads: ZulipClient; events: ZulipClient };
+
+/** The local storage backend puts a hashed directory before the random one; the S3 backend does not. */
+const UPLOAD_PATH = /^\/user_uploads\/\d+\/(?:[\w-]+\/)?[\w-]+\/([^/?#\\]+)$/;
+
+/**
+ * The bot's credentials go with the request, so a path that URL normalisation or the server could steer to another
+ * route (`..`, encoded slashes and dots) is refused before anything is fetched. Zulip links a file with a non-ASCII
+ * name as it is, which URL parsing percent-encodes, so the paths are compared decoded.
+ */
+const toUploadUrl = (path: string, origin: string) => {
+  const refuse = () => new ZulipUploadRefused('Not a Zulip upload path');
+  const segment = UPLOAD_PATH.exec(path)?.[1];
+  if (!segment || segment === '.' || segment === '..' || /%(2f|5c|2e)/i.test(path)) {
+    throw refuse();
+  }
+  let upload: { url: URL; name: string };
+  try {
+    const url = new URL(path, origin);
+    upload = { url, name: decodeURIComponent(segment) };
+    if (url.origin !== origin || decodeURI(url.pathname) !== decodeURI(path)) {
+      throw refuse();
+    }
+  } catch {
+    throw refuse();
+  }
+  return upload;
+};
 
 const toEmoji = (codepoints: unknown) => {
   if (typeof codepoints !== 'string' || !/^[\da-f]{1,6}(-[\da-f]{1,6})*$/i.test(codepoints)) {
@@ -50,6 +85,7 @@ export class ZulipRepository implements IZulipInterface {
     this.clients = {
       bot: createZulipClient(this.botIdentity),
       user: createZulipClient({ realm, ...user }),
+      uploads: createZulipClient({ ...this.botIdentity, timeoutMs: UPLOAD_TIMEOUT_MS }),
       events: createZulipClient({
         ...this.botIdentity,
         timeoutMs: longpollTimeoutMs(DEFAULT_LONGPOLL_TIMEOUT_SECONDS),
@@ -73,6 +109,10 @@ export class ZulipRepository implements IZulipInterface {
 
   private get events() {
     return this.client('events');
+  }
+
+  private get uploads() {
+    return this.client('uploads');
   }
 
   private client(identity: keyof Clients) {
@@ -103,14 +143,104 @@ export class ZulipRepository implements IZulipInterface {
     const { data } = await this.bot.GET('/messages/{message_id}', {
       params: { path: { message_id: id }, query: { allow_empty_topic_name: true } },
     });
-    return { id: data!.message!.id ?? id, topic: data!.message!.subject ?? '' };
+    const message = data!.message!;
+    return {
+      id: message.id ?? id,
+      topic: message.subject ?? '',
+      streamId: message.stream_id,
+      senderFullName: message.sender_full_name,
+    };
   }
 
-  async updateMessage(id: number, { content, topic, propagateMode }: ZulipMessageUpdate) {
+  async updateMessage(
+    id: number,
+    { content, topic, propagateMode, sendNotificationToOldThread, sendNotificationToNewThread }: ZulipMessageUpdate,
+  ) {
     await this.bot.PATCH('/messages/{message_id}', {
       params: { path: { message_id: id } },
-      body: { content, topic, propagate_mode: propagateMode },
+      body: {
+        content,
+        topic,
+        propagate_mode: propagateMode,
+        send_notification_to_old_thread: sendNotificationToOldThread,
+        send_notification_to_new_thread: sendNotificationToNewThread,
+      },
     });
+  }
+
+  async deleteMessage(id: number) {
+    await this.bot.DELETE('/messages/{message_id}', { params: { path: { message_id: id } } });
+  }
+
+  async uploadFile(file: File, signal?: AbortSignal) {
+    const { data } = await this.uploads.POST('/user_uploads', { ...multipart({ filename: file }), signal });
+    if (!data?.url) {
+      throw new Error('Zulip returned no URL for the upload');
+    }
+    return { url: data.url, filename: data.filename ?? file.name };
+  }
+
+  /**
+   * An anonymous or unauthenticated request is redirected to the login page on the realm itself, or answered with it,
+   * so only a redirect to another HTTPS origin (the S3 backend) is followed, once and without credentials.
+   */
+  async downloadUpload(path: string, maxBytes: number, deadline?: AbortSignal) {
+    const { origin, authorization } = this.site;
+    const { url, name } = toUploadUrl(path, origin);
+    const signal = AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), ...(deadline ? [deadline] : [])]);
+
+    let response = await fetch(url, { headers: { Authorization: authorization }, redirect: 'manual', signal });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      const location = response.headers.get('location');
+      const target = location === null ? undefined : new URL(location, url);
+      if (!target || target.protocol !== 'https:' || target.origin === origin) {
+        throw new ZulipUploadRefused(
+          `Zulip redirected the download to ${target?.origin === origin ? 'itself' : 'an unexpected location'}`,
+        );
+      }
+      response = await fetch(target, { redirect: 'error', signal });
+    }
+
+    const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+    const isPage = type === 'text/html' && !/\.html?$/i.test(name);
+    if (response.status !== 200 || isPage) {
+      await response.body?.cancel();
+      const answer = response.status === 200 ? 'a web page' : `status ${response.status}`;
+      throw new ZulipUploadRefused(`Zulip answered the download with ${answer}`);
+    }
+
+    if (Number(response.headers.get('content-length')) > maxBytes) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const bytes = await readAtMost(response.body, maxBytes);
+    return bytes && new File([bytes], name, { type });
+  }
+
+  async getStreamMessagesBefore({
+    stream,
+    before,
+    count,
+    excludeSenderId,
+  }: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]> {
+    const narrow = JSON.stringify([
+      { operator: 'channel', operand: stream },
+      ...(excludeSenderId === undefined ? [] : [{ operator: 'sender', operand: excludeSenderId, negated: true }]),
+    ]);
+    const { data } = await this.bot.GET('/messages', {
+      params: {
+        query: {
+          anchor: before === undefined ? 'newest' : String(before),
+          include_anchor: false,
+          num_before: count,
+          num_after: 0,
+          narrow,
+          apply_markdown: false,
+        },
+      },
+    });
+    return (data!.messages ?? []).map(toReceivedMessage);
   }
 
   /** An undocumented static file, served without authentication. */
@@ -170,7 +300,12 @@ export class ZulipRepository implements IZulipInterface {
 
   async registerQueue(): Promise<ZulipQueueRegistration> {
     const { data } = await this.bot.POST('/register', {
-      body: { event_types: ['message'], apply_markdown: false, fetch_event_types: ['subscription'] },
+      body: {
+        event_types: ['message', 'update_message', 'delete_message'],
+        apply_markdown: false,
+        client_capabilities: CLIENT_CAPABILITIES as Record<string, never>,
+        fetch_event_types: ['subscription'],
+      },
     });
     if (!data?.queue_id) {
       throw new Error('Zulip registered no event queue');
@@ -222,22 +357,55 @@ export class ZulipRepository implements IZulipInterface {
   }
 }
 
-type RawEvent = { id?: number; type?: string; message?: components['schemas']['MessagesEvent'] };
+type RawEvent = NonNullable<paths['/events']['get']['responses'][200]['content']['application/json']['events']>[number];
 
 const toReceivedMessage = (message: components['schemas']['MessagesBase']): ZulipReceivedMessage => ({
   id: message.id ?? -1,
   senderId: message.sender_id ?? -1,
   senderEmail: message.sender_email ?? '',
+  senderFullName: message.sender_full_name ?? '',
   type: message.type === 'private' ? 'private' : 'stream',
   streamId: message.stream_id,
   topic: message.subject ?? '',
   content: message.content ?? '',
+  timestamp: message.timestamp ?? 0,
+  movedAt: message.last_moved_timestamp,
 });
 
 const toEvent = (event: RawEvent): ZulipEvent => {
   const id = event.id ?? -1;
-  if (event.type !== 'message' || !event.message) {
-    return { id, type: event.type ?? 'unknown' };
+  if (event.type === 'message' && event.message) {
+    return { id, type: 'message', message: toReceivedMessage(event.message) };
   }
-  return { id, type: 'message', message: toReceivedMessage(event.message) };
+  if (event.type === 'update_message') {
+    return {
+      id,
+      type: 'update_message',
+      update: {
+        userId: event.user_id,
+        renderingOnly: event.rendering_only,
+        messageId: event.message_id,
+        messageIds: event.message_ids,
+        streamId: event.stream_id,
+        newStreamId: event.new_stream_id,
+        origTopic: event.orig_subject,
+        topic: event.subject,
+        propagateMode: event.propagate_mode,
+        content: event.content,
+      },
+    };
+  }
+  if (event.type === 'delete_message') {
+    const { message_ids, message_id } = event;
+    return {
+      id,
+      type: 'delete_message',
+      deletion: {
+        messageIds: message_ids ?? (message_id === undefined ? [] : [message_id]),
+        streamId: event.stream_id,
+        topic: event.topic,
+      },
+    };
+  }
+  return { id, type: event.type ?? 'unknown' };
 };

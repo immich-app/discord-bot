@@ -11,12 +11,16 @@ import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import {
+  isResolvedTopic,
   neutraliseZulipLabel,
   neutraliseZulipMentions,
   plural,
+  resolveTopic,
   shorten,
   shortenCodePoints,
   toZulipQuote,
+  unresolveTopic,
+  ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH,
 } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -31,7 +35,7 @@ import { Notification, NotificationAccent, NotificationAuthor } from 'src/interf
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
-import { ZulipApiError } from 'src/repositories/zulip.client';
+import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
 import { NotificationService } from 'src/services/notification.service';
 import { makeLicenseFields, makeOrderFields, withErrorLogging } from 'src/util';
 
@@ -188,23 +192,6 @@ const IssueAccents: Record<'opened' | 'reopened' | 'closed', NotificationAccent>
   closed: 'issue.closed',
 };
 
-const ZULIP_MAX_TOPIC_LENGTH = 60;
-
-const ZULIP_RESOLVED_PREFIX = '✔ ';
-
-const ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH = ZULIP_MAX_TOPIC_LENGTH - [...ZULIP_RESOLVED_PREFIX].length;
-
-const isResolvedTopic = (topic: string) => topic.startsWith(ZULIP_RESOLVED_PREFIX);
-
-const unresolveTopic = (topic: string) => (isResolvedTopic(topic) ? topic.slice(ZULIP_RESOLVED_PREFIX.length) : topic);
-
-/**
- * Never truncated: Zulip only treats a move as a resolve when the name sent is exactly `✔ ` plus the current
- * name, and the empty "general chat" topic cannot be resolved at all.
- */
-const resolveTopic = (topic: string) =>
-  isResolvedTopic(topic) || topic === '' ? topic : `${ZULIP_RESOLVED_PREFIX}${topic}`;
-
 const toZulipTopicName = ({ number, title }: { number: number; title: string }) =>
   shortenCodePoints(`#${number}: ${title}`, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH).trim();
 
@@ -229,34 +216,6 @@ const touchesZulipTopic = (dto: PullRequestEvent) =>
   dto.action === 'edited'
     ? isPullRequestEdited(dto) && !!(dto.changes.title || dto.changes.body)
     : ZULIP_TOPIC_NOTICE_ACTIONS.has(dto.action);
-
-/**
- * Zulip has no distinct code for a missing message, so the documented `msg` is the only way to tell it from
- * other `BAD_REQUEST`s; if it is ever reworded the read counts as an outage, which is the safe direction.
- */
-const ZULIP_MESSAGE_GONE_MESSAGE = 'Invalid message(s)';
-
-const isZulipMessageGone = (error: unknown): error is ZulipApiError =>
-  error instanceof ZulipApiError &&
-  error.status === 400 &&
-  error.code === 'BAD_REQUEST' &&
-  error.msg === ZULIP_MESSAGE_GONE_MESSAGE;
-
-/**
- * Inverted on purpose: the spec lists none of the move refusals the server raises, so a `400 BAD_REQUEST`
- * is a refusal unless its `msg` is one of these documented non-refusals.
- */
-const ZULIP_UPDATE_OUTAGE_MESSAGES = new Set(['Nothing to change', "Topic can't be empty", ZULIP_MESSAGE_GONE_MESSAGE]);
-
-const isZulipRefusal = (error: unknown): error is ZulipApiError =>
-  error instanceof ZulipApiError &&
-  (error.code === 'MOVE_MESSAGES_TIME_LIMIT_EXCEEDED' ||
-    (error.status === 400 && error.code === 'BAD_REQUEST' && !ZULIP_UPDATE_OUTAGE_MESSAGES.has(error.msg)));
-
-const isZulipFailure = (error: unknown) =>
-  error instanceof ZulipApiError ||
-  (error instanceof TypeError && error.message === 'fetch failed') ||
-  (error instanceof DOMException && error.name === 'TimeoutError');
 
 const DiscussionAccents: Record<'created' | 'reopened' | 'deleted' | 'answered', NotificationAccent> = {
   created: 'discussion.created',

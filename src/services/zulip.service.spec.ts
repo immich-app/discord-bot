@@ -6,12 +6,14 @@ import {
   IZulipInterface,
   ZulipEvent,
   ZulipEventQueue,
+  ZulipMessagesDeleted,
+  ZulipMessageUpdated,
   ZulipQueueRegistration,
   ZulipReceivedMessage,
 } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ZulipService } from 'src/services/zulip.service';
-import { Mock, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, Mock, Mocked, vitest } from 'vitest';
 
 const { config } = vitest.hoisted(() => ({
   config: {
@@ -49,6 +51,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  deleteMessage: vitest.fn(),
+  uploadFile: vitest.fn(),
+  downloadUpload: vitest.fn(),
+  getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
 });
 
@@ -410,10 +416,12 @@ describe('ZulipService', () => {
       id: 500,
       senderId: 12,
       senderEmail: 'alice@example.com',
+      senderFullName: 'Alice',
       type: 'stream',
       streamId: 107,
       topic: 'thumbnails',
       content: 'see #4242',
+      timestamp: 1_700_000_000,
       ...overrides,
     });
     const messageEvent = (id: number, overrides: Partial<ZulipReceivedMessage> = {}): ZulipEvent => ({
@@ -422,6 +430,30 @@ describe('ZulipService', () => {
       message: message(overrides),
     });
     const heartbeat = (id: number): ZulipEvent => ({ id, type: 'heartbeat' });
+    const update = (overrides: Partial<ZulipMessageUpdated> = {}): ZulipMessageUpdated => ({
+      userId: 12,
+      renderingOnly: false,
+      messageId: 500,
+      messageIds: [500],
+      streamId: 107,
+      content: 'see #4243',
+      ...overrides,
+    });
+    const updateEvent = (id: number, overrides: Partial<ZulipMessageUpdated> = {}): ZulipEvent => ({
+      id,
+      type: 'update_message',
+      update: update(overrides),
+    });
+    const deletion = (messageIds: number[]): ZulipMessagesDeleted => ({
+      messageIds,
+      streamId: 107,
+      topic: 'thumbnails',
+    });
+    const deletionEvent = (id: number, messageIds: number[]): ZulipEvent => ({
+      id,
+      type: 'delete_message',
+      deletion: deletion(messageIds),
+    });
 
     const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
     const advance = async (ms: number) => {
@@ -801,6 +833,168 @@ describe('ZulipService', () => {
         expect(polls[1].queue).toEqual({ queueId: 'q1', lastEventId: -1 });
         expect(zulipMock.registerQueue).toHaveBeenCalledOnce();
         expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('edits and deletions', () => {
+      let onUpdate: Mock<(update: ZulipMessageUpdated) => Promise<void>>;
+      let onDeletion: Mock<(deletion: ZulipMessagesDeleted) => Promise<void>>;
+
+      beforeEach(async () => {
+        onUpdate = vitest.fn();
+        onDeletion = vitest.fn();
+        sut.onMessageUpdate(onUpdate);
+        sut.onMessagesDeleted(onDeletion);
+        await sut.init();
+        await flush();
+      });
+
+      it('should hand every update to every update handler, in order, and none to the message or deletion handlers', async () => {
+        const second = vitest.fn<(update: ZulipMessageUpdated) => Promise<void>>();
+        sut.onMessageUpdate(second);
+        const move = { messageId: 501, messageIds: [499, 501], content: undefined, topic: 'renamed' };
+
+        polls[0].resolve([updateEvent(9), updateEvent(10, move)]);
+        await flush();
+
+        expect(onUpdate).toHaveBeenCalledTimes(2);
+        expect(onUpdate).toHaveBeenNthCalledWith(1, update());
+        expect(onUpdate).toHaveBeenNthCalledWith(2, update(move));
+        expect(second).toHaveBeenCalledTimes(2);
+        expect(onUpdate.mock.invocationCallOrder[0]).toBeLessThan(second.mock.invocationCallOrder[0]);
+        expect(second.mock.invocationCallOrder[0]).toBeLessThan(onUpdate.mock.invocationCallOrder[1]);
+        expect(handler).not.toHaveBeenCalled();
+        expect(onDeletion).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { reason: 'a link preview', overrides: { userId: null, renderingOnly: true } },
+        { reason: 'a rendering-only update that names a user', overrides: { renderingOnly: true } },
+        { reason: 'an update without a user', overrides: { userId: null } },
+        { reason: "the bot's own edit or move", overrides: { userId: OWN_USER_ID } },
+      ])('should drop $reason, but still acknowledge it', async ({ overrides }) => {
+        polls[0].resolve([updateEvent(9, overrides)]);
+        await nextPoll();
+
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(handler).not.toHaveBeenCalled();
+        expect(polls[1].queue.lastEventId).toBe(9);
+      });
+
+      it('should hand every deletion to every deletion handler, bulk ones included, and none to the other handlers', async () => {
+        const second = vitest.fn<(deletion: ZulipMessagesDeleted) => Promise<void>>();
+        sut.onMessagesDeleted(second);
+
+        polls[0].resolve([deletionEvent(9, [500]), deletionEvent(10, [501, 502])]);
+        await flush();
+
+        expect(onDeletion).toHaveBeenCalledTimes(2);
+        expect(onDeletion).toHaveBeenNthCalledWith(1, deletion([500]));
+        expect(onDeletion).toHaveBeenNthCalledWith(2, deletion([501, 502]));
+        expect(second).toHaveBeenCalledTimes(2);
+        expect(handler).not.toHaveBeenCalled();
+        expect(onUpdate).not.toHaveBeenCalled();
+      });
+
+      it('should run messages, updates and deletions in the order they arrived', async () => {
+        polls[0].resolve([messageEvent(9), updateEvent(10), deletionEvent(11, [500])]);
+        await flush();
+
+        expect(handler.mock.invocationCallOrder[0]).toBeLessThan(onUpdate.mock.invocationCallOrder[0]);
+        expect(onUpdate.mock.invocationCallOrder[0]).toBeLessThan(onDeletion.mock.invocationCallOrder[0]);
+      });
+
+      it('should log an update or deletion handler that fails, naming what it was handling, and keep going', async () => {
+        onUpdate.mockRejectedValueOnce(new Error('handler bug'));
+        onDeletion.mockRejectedValueOnce(new Error('handler bug'));
+
+        polls[0].resolve([updateEvent(9, { messageId: 500 }), deletionEvent(10, [501, 502])]);
+        await nextPoll();
+
+        expect(Logger.prototype.error).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'A Zulip message handler failed on the update of message 500',
+          expect.any(Error),
+        );
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'A Zulip message handler failed on the deletion of messages 501, 502',
+          expect.any(Error),
+        );
+        expect(polls).toHaveLength(2);
+      });
+
+      it('should stop waiting for an update or deletion handler after thirty seconds, like a message handler', async () => {
+        onUpdate.mockReturnValueOnce(new Promise<void>(() => {}));
+        onDeletion.mockReturnValueOnce(new Promise<void>(() => {}));
+
+        polls[0].resolve([updateEvent(9, { messageId: 500 }), deletionEvent(10, [501])]);
+        await advance(2 * HANDLER_TIMEOUT_MS);
+
+        expect(Logger.prototype.error).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'A Zulip message handler has not finished the update of message 500 after 30000ms; the loop is moving on without it',
+        );
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'A Zulip message handler has not finished the deletion of messages 501 after 30000ms; the loop is moving on without it',
+        );
+        expect(polls).toHaveLength(2);
+      });
+    });
+
+    describe('registration handlers', () => {
+      it('should tell every handler the streams the queue carries, after its own warnings and before the first poll', async () => {
+        const first = vitest.fn();
+        const second = vitest.fn();
+        sut.onQueueRegistered(first);
+        sut.onQueueRegistered(second);
+        zulipMock.registerQueue.mockResolvedValueOnce({
+          queue: { queueId: 'q1', lastEventId: -1 },
+          subscribedStreamIds: [54],
+        });
+
+        await sut.init();
+        await flush();
+
+        expect(first).toHaveBeenCalledExactlyOnceWith({ subscribedStreamIds: [54] });
+        expect(second).toHaveBeenCalledExactlyOnceWith({ subscribedStreamIds: [54] });
+        const warnings = vitest.mocked(Logger.prototype.warn).mock.invocationCallOrder;
+        expect(warnings).toHaveLength(LISTENING_STREAMS.length - 1);
+        expect(warnings.at(-1)).toBeLessThan(first.mock.invocationCallOrder[0]);
+        expect(first.mock.invocationCallOrder[0]).toBeLessThan(second.mock.invocationCallOrder[0]);
+        expect(second.mock.invocationCallOrder[0]).toBeLessThan(zulipMock.getEvents.mock.invocationCallOrder[0]);
+      });
+
+      it('should tell them again at every registration, a dead queue included', async () => {
+        const onRegistered = vitest.fn();
+        sut.onQueueRegistered(onRegistered);
+
+        await sut.init();
+        await flush();
+        polls[0].reject(badQueue());
+        await nextPoll();
+
+        expect(zulipMock.registerQueue).toHaveBeenCalledTimes(2);
+        expect(onRegistered).toHaveBeenCalledTimes(2);
+        expect(onRegistered).toHaveBeenLastCalledWith({ subscribedStreamIds: LISTENING_STREAMS });
+        expect(polls).toHaveLength(2);
+      });
+
+      it('should log a handler that throws and carry on, to the next handler and the first poll', async () => {
+        const next = vitest.fn();
+        sut.onQueueRegistered(() => {
+          throw new Error('handler bug');
+        });
+        sut.onQueueRegistered(next);
+
+        await sut.init();
+        await flush();
+
+        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+          'A Zulip queue registration handler failed on queue q1',
+          expect.any(Error),
+        );
+        expect(next).toHaveBeenCalledOnce();
+        expect(polls).toHaveLength(1);
       });
     });
 

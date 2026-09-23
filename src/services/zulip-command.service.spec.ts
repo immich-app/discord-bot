@@ -34,6 +34,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  deleteMessage: vitest.fn(),
+  uploadFile: vitest.fn(),
+  downloadUpload: vitest.fn(),
+  getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
 });
 
@@ -146,10 +150,12 @@ const message = (overrides: Partial<ZulipReceivedMessage> = {}): ZulipReceivedMe
   id: 500,
   senderId: 12,
   senderEmail: 'alice@example.com',
+  senderFullName: 'Alice',
   type: 'stream',
   streamId: Constants.Zulip.TeamStreams.ImmichGeneral,
   topic: 'deploy',
   content: '@**Immich** help',
+  timestamp: 1_700_000_000,
   ...overrides,
 });
 

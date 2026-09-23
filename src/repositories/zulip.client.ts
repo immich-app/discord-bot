@@ -58,6 +58,34 @@ export class ZulipApiError extends Error {
   }
 }
 
+/**
+ * Zulip has no distinct code for a missing message, so the documented `msg` is the only way to tell it from
+ * other `BAD_REQUEST`s; if it is ever reworded the read counts as an outage, which is the safe direction.
+ */
+const ZULIP_MESSAGE_GONE_MESSAGE = 'Invalid message(s)';
+
+export const isZulipMessageGone = (error: unknown): error is ZulipApiError =>
+  error instanceof ZulipApiError &&
+  error.status === 400 &&
+  error.code === 'BAD_REQUEST' &&
+  error.msg === ZULIP_MESSAGE_GONE_MESSAGE;
+
+/**
+ * Inverted on purpose: the spec lists none of the move refusals the server raises, so a `400 BAD_REQUEST`
+ * is a refusal unless its `msg` is one of these documented non-refusals.
+ */
+const ZULIP_UPDATE_OUTAGE_MESSAGES = new Set(['Nothing to change', "Topic can't be empty", ZULIP_MESSAGE_GONE_MESSAGE]);
+
+export const isZulipRefusal = (error: unknown): error is ZulipApiError =>
+  error instanceof ZulipApiError &&
+  (error.code === 'MOVE_MESSAGES_TIME_LIMIT_EXCEEDED' ||
+    (error.status === 400 && error.code === 'BAD_REQUEST' && !ZULIP_UPDATE_OUTAGE_MESSAGES.has(error.msg)));
+
+export const isZulipFailure = (error: unknown) =>
+  error instanceof ZulipApiError ||
+  (error instanceof TypeError && error.message === 'fetch failed') ||
+  (error instanceof DOMException && error.name === 'TimeoutError');
+
 /** `${realm}/api/v1`, accepting a realm that ends in `/` or `/api` as the previous SDK did. */
 export const toApiUrl = (realm: string) => `${realm.replace(/\/+$/, '').replace(/\/api$/, '')}/api/v1`;
 

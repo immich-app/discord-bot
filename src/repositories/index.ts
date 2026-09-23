@@ -1,5 +1,6 @@
 import { Provider } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IDiscordMirrorInterface } from 'src/interfaces/discord-mirror.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
@@ -23,6 +24,7 @@ import { ZulipRepository } from 'src/repositories/zulip.repository';
 export const providers: Provider[] = [
   { provide: IDatabaseRepository, useClass: DatabaseRepository },
   { provide: IDiscordInterface, useClass: DiscordRepository },
+  { provide: IDiscordMirrorInterface, useExisting: IDiscordInterface },
   { provide: IFourthwallRepository, useClass: FourthwallRepository },
   { provide: IGithubInterface, useClass: GithubRepository },
   { provide: IHolidaysInterface, useClass: HolidaysRepository },

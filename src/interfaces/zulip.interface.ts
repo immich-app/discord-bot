@@ -7,13 +7,16 @@ export type ZulipConfig = {
 };
 export type MessagePayload = { stream: string | number; topic?: string; content: string };
 
-export type ZulipMessage = { id: number; topic: string };
+export type ZulipMessage = { id: number; topic: string; streamId?: number; senderFullName?: string };
 
 /** Zulip cannot change content and topic in one request, so a caller sends one or the other. */
 export type ZulipMessageUpdate = {
   content?: string;
   topic?: string;
   propagateMode?: 'change_one' | 'change_later' | 'change_all';
+  /** Left to the server's default when undefined. */
+  sendNotificationToOldThread?: boolean;
+  sendNotificationToNewThread?: boolean;
 };
 
 export type ZulipEmoji = { name: string; deactivated: boolean };
@@ -24,6 +27,8 @@ export type ZulipUser = { userId: number; fullName: string };
 
 export type ZulipMessagesQuery = { stream: number; topic: string; numBefore: number };
 
+export type ZulipStreamPageQuery = { stream: number; before?: number; count: number; excludeSenderId?: number };
+
 export type ZulipEventQueue = { queueId: string; lastEventId: number };
 
 export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[] };
@@ -32,16 +37,69 @@ export type ZulipReceivedMessage = {
   id: number;
   senderId: number;
   senderEmail: string;
+  senderFullName: string;
   type: 'stream' | 'private';
   streamId?: number;
   topic: string;
   content: string;
+  /** Seconds since the epoch. */
+  timestamp: number;
+  movedAt?: number;
 };
 
-export type ZulipMessageEvent = { id: number; type: 'message'; message: ZulipReceivedMessage };
+export type ZulipMessageUpdated = {
+  /** `null` for an update the server made itself, such as a link preview. */
+  userId: number | null;
+  renderingOnly: boolean;
+  messageId: number;
+  messageIds: number[];
+  streamId?: number;
+  newStreamId?: number;
+  origTopic?: string;
+  topic?: string;
+  propagateMode?: 'change_one' | 'change_later' | 'change_all';
+  content?: string;
+};
+
+export type ZulipMessagesDeleted = { messageIds: number[]; streamId?: number; topic?: string };
+
+export type ZulipMessageEvent = {
+  id: number;
+  type: 'message';
+  message: ZulipReceivedMessage;
+  update?: undefined;
+  deletion?: undefined;
+};
+
+export type ZulipUpdateEvent = {
+  id: number;
+  type: 'update_message';
+  update: ZulipMessageUpdated;
+  message?: undefined;
+  deletion?: undefined;
+};
+
+export type ZulipDeleteEvent = {
+  id: number;
+  type: 'delete_message';
+  deletion: ZulipMessagesDeleted;
+  message?: undefined;
+  update?: undefined;
+};
 
 /** Zulip also sends `heartbeat` events; the loop must acknowledge every event's ID, whatever its type. */
-export type ZulipEvent = ZulipMessageEvent | { id: number; type: string; message?: undefined };
+export type ZulipEvent =
+  | ZulipMessageEvent
+  | ZulipUpdateEvent
+  | ZulipDeleteEvent
+  | { id: number; type: string; message?: undefined; update?: undefined; deletion?: undefined };
+
+export class ZulipUploadRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZulipUploadRefused';
+  }
+}
 
 export interface IZulipInterface {
   init(config: ZulipConfig): Promise<void>;
@@ -58,6 +116,15 @@ export interface IZulipInterface {
   registerQueue(): Promise<ZulipQueueRegistration>;
   getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;
   deleteQueue(queueId: string): Promise<void>;
+  deleteMessage(id: number): Promise<void>;
+  uploadFile(file: File, signal?: AbortSignal): Promise<{ url: string; filename: string }>;
+  /**
+   * Resolves to `undefined` when the file is larger than `maxBytes`; rejects with `ZulipUploadRefused` for anything
+   * but a plain `/user_uploads/` path, and for an answer that is not the file.
+   */
+  downloadUpload(path: string, maxBytes: number, signal?: AbortSignal): Promise<File | undefined>;
+  /** Oldest first, as raw markdown. */
+  getStreamMessagesBefore(query: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]>;
   /** Emoji name to its Unicode string, from the realm's static emoji table. */
   getEmojiCodes(): Promise<Record<string, string>>;
 }

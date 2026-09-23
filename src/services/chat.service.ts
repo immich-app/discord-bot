@@ -25,6 +25,9 @@ const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Const
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
 const DISCORD_READY_WAIT_MS = 60_000;
 
+export const hasBlacklistedUrl = (urls: string[]) =>
+  urls.some((url) => PREVIEW_BLACKLIST.some((blacklist) => url.startsWith(blacklist)));
+
 const _star_history: Record<string, number | undefined> = {};
 const _fork_history: Record<string, number | undefined> = {};
 
@@ -89,7 +92,7 @@ const defaultGithubRepo = {
  * Zulip allows only letters, digits, `-` and `_` (read as a space), ignores case, and refuses a name that
  * ends in `_` or `-`, a rule its spec leaves out.
  */
-const toZulipEmojiName = (name: string) => {
+export const toZulipEmojiName = (name: string) => {
   const legal = name
     .toLowerCase()
     .replaceAll(/[^0-9a-z_-]/g, '_')
@@ -604,13 +607,7 @@ ${formattedCode}
   }
 
   hasBlacklistUrl(urls: string[]) {
-    for (const url of urls) {
-      if (PREVIEW_BLACKLIST.some((blacklist) => url.startsWith(blacklist))) {
-        return true;
-      }
-    }
-
-    return false;
+    return hasBlacklistedUrl(urls);
   }
 
   getPrOrIssue(id: number) {

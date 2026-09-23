@@ -1,20 +1,24 @@
 import { Logger } from '@nestjs/common';
-import { Insertable, Kysely, PostgresDialect, Updateable } from 'kysely';
+import { Insertable, Kysely, PostgresDialect, sql, Updateable } from 'kysely';
 import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { getConfig } from 'src/config';
-import { IDatabaseRepository, ReportOptions } from 'src/interfaces/database.interface';
+import { IDatabaseRepository, MirrorMessageQuery, ReportOptions } from 'src/interfaces/database.interface';
 import {
   Database,
   DiscordLink,
   DiscordLinkUpdate,
   DiscordMessage,
+  MirrorConversation,
+  MirrorMessage,
   NewDiscordLink,
   NewDiscordMessage,
   NewFourthwallOrder,
+  NewMirrorConversation,
+  NewMirrorMessage,
   NewPayment,
   NewRSSFeed,
   NewScheduledMessage,
@@ -22,6 +26,8 @@ import {
   ScheduledMessage,
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
+  UpdateMirrorConversation,
+  UpdateMirrorMessage,
   UpdateRSSFeed,
   UpdateScheduledMessage,
 } from 'src/schema';
@@ -280,5 +286,196 @@ export class DatabaseRepository implements IDatabaseRepository {
       .where('number', '=', number)
       .orderBy('updatedAt', 'desc')
       .executeTakeFirst();
+  }
+
+  getMirrorConversation(id: string): Promise<MirrorConversation | undefined> {
+    return this.db.selectFrom('mirror_conversation').selectAll().where('id', '=', id).executeTakeFirst();
+  }
+
+  getMirrorConversationByDiscord(
+    discordChannelId: string,
+    discordThreadId: string | null,
+  ): Promise<MirrorConversation | undefined> {
+    return this.db
+      .selectFrom('mirror_conversation')
+      .selectAll()
+      .where('discordChannelId', '=', discordChannelId)
+      .where('discordThreadId', discordThreadId === null ? 'is' : '=', discordThreadId)
+      .executeTakeFirst();
+  }
+
+  getMirrorConversationByZulipTopic(
+    zulipStreamId: number,
+    zulipTopicKey: string,
+  ): Promise<MirrorConversation | undefined> {
+    return this.db
+      .selectFrom('mirror_conversation')
+      .selectAll()
+      .where('zulipStreamId', '=', zulipStreamId)
+      .where('zulipTopicKey', '=', zulipTopicKey)
+      .executeTakeFirst();
+  }
+
+  async getMirrorConversationsByAnchors(zulipMessageIds: number[]): Promise<MirrorConversation[]> {
+    if (zulipMessageIds.length === 0) {
+      return [];
+    }
+
+    return this.db
+      .selectFrom('mirror_conversation')
+      .selectAll()
+      .where('zulipAnchorMessageId', 'in', zulipMessageIds)
+      .execute();
+  }
+
+  getActiveMirrorThreads(discordChannelId: string, since: Date, limit: number): Promise<MirrorConversation[]> {
+    return this.db
+      .selectFrom('mirror_conversation')
+      .innerJoin('mirror_message', 'mirror_message.conversationId', 'mirror_conversation.id')
+      .selectAll('mirror_conversation')
+      .where('mirror_conversation.discordChannelId', '=', discordChannelId)
+      .where('mirror_conversation.discordThreadId', 'is not', null)
+      .where('mirror_message.createdAt', '>=', since)
+      .groupBy('mirror_conversation.id')
+      .orderBy((eb) => eb.fn.max('mirror_message.createdAt'), 'desc')
+      .limit(limit)
+      .execute();
+  }
+
+  createMirrorConversation(entity: NewMirrorConversation): Promise<MirrorConversation> {
+    return this.db.insertInto('mirror_conversation').values(entity).returningAll().executeTakeFirstOrThrow();
+  }
+
+  async updateMirrorConversation(id: string, changes: UpdateMirrorConversation): Promise<void> {
+    await this.db
+      .updateTable('mirror_conversation')
+      .set({ updatedAt: sql<Date>`now()`, ...changes })
+      .where('id', '=', id)
+      .execute();
+  }
+
+  async removeMirrorConversation(id: string): Promise<void> {
+    await this.db.deleteFrom('mirror_conversation').where('id', '=', id).execute();
+  }
+
+  async createMirrorMessages(rows: NewMirrorMessage[]): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+
+    await this.db.insertInto('mirror_message').values(rows).execute();
+  }
+
+  async getMirrorMessagesByDiscordIds(
+    ids: string[],
+    { withDeleted = false }: MirrorMessageQuery = {},
+  ): Promise<MirrorMessage[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return this.db
+      .selectFrom('mirror_message')
+      .selectAll()
+      .where('discordMessageId', 'in', ids)
+      .$if(!withDeleted, (qb) => qb.where('deletedAt', 'is', null))
+      .execute();
+  }
+
+  async getMirrorMessagesByZulipIds(
+    ids: number[],
+    { withDeleted = false }: MirrorMessageQuery = {},
+  ): Promise<MirrorMessage[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return this.db
+      .selectFrom('mirror_message')
+      .selectAll()
+      .where('zulipMessageId', 'in', ids)
+      .$if(!withDeleted, (qb) => qb.where('deletedAt', 'is', null))
+      .orderBy('zulipMessageId')
+      .orderBy('part')
+      .execute();
+  }
+
+  getMirrorMessagesByConversation(conversationId: string): Promise<MirrorMessage[]> {
+    return this.db
+      .selectFrom('mirror_message')
+      .selectAll()
+      .where('conversationId', '=', conversationId)
+      .where('deletedAt', 'is', null)
+      .execute();
+  }
+
+  async getNewestMirrorZulipMessageId(conversationId: string): Promise<number | undefined> {
+    const { newest } = await this.db
+      .selectFrom('mirror_message')
+      .select((eb) => eb.fn.max('zulipMessageId').as('newest'))
+      .where('conversationId', '=', conversationId)
+      .where('deletedAt', 'is', null)
+      .executeTakeFirstOrThrow();
+    return newest ?? undefined;
+  }
+
+  async updateMirrorMessages(discordMessageIds: string[], changes: UpdateMirrorMessage): Promise<void> {
+    if (discordMessageIds.length === 0) {
+      return;
+    }
+
+    await this.db
+      .updateTable('mirror_message')
+      .set(changes)
+      .where('discordMessageId', 'in', discordMessageIds)
+      .execute();
+  }
+
+  async markMirrorMessagesDeleted(discordMessageIds: string[]): Promise<void> {
+    if (discordMessageIds.length === 0) {
+      return;
+    }
+
+    await this.db
+      .updateTable('mirror_message')
+      .set({ deletedAt: sql<Date>`now()` })
+      .where('discordMessageId', 'in', discordMessageIds)
+      .where('deletedAt', 'is', null)
+      .execute();
+  }
+
+  async removeMirrorMessages(discordMessageIds: string[]): Promise<void> {
+    if (discordMessageIds.length === 0) {
+      return;
+    }
+
+    await this.db.deleteFrom('mirror_message').where('discordMessageId', 'in', discordMessageIds).execute();
+  }
+
+  async getMirrorZulipHighWater(zulipStreamId: number): Promise<number | undefined> {
+    const { highWater } = await this.db
+      .selectFrom('mirror_message')
+      .select((eb) => eb.fn.max('zulipMessageId').as('highWater'))
+      .where('origin', '=', 'zulip')
+      .where('zulipStreamId', '=', zulipStreamId)
+      .executeTakeFirstOrThrow();
+    return highWater ?? undefined;
+  }
+
+  async getMirrorDiscordHighWater(
+    discordChannelId: string,
+    discordThreadId: string | null,
+  ): Promise<string | undefined> {
+    const row = await this.db
+      .selectFrom('mirror_message')
+      .select('discordMessageId')
+      .where('origin', '=', 'discord')
+      .where('discordChannelId', '=', discordChannelId)
+      .where('discordThreadId', discordThreadId === null ? 'is' : '=', discordThreadId)
+      .orderBy((eb) => eb.fn('length', ['discordMessageId']), 'desc')
+      .orderBy('discordMessageId', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    return row?.discordMessageId;
   }
 }

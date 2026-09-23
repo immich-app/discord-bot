@@ -63,6 +63,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  deleteMessage: vitest.fn(),
+  uploadFile: vitest.fn(),
+  downloadUpload: vitest.fn(),
+  getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
 });
 

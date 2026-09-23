@@ -8,12 +8,17 @@ import {
   IZulipInterface,
   ZulipEvent,
   ZulipEventQueue,
+  ZulipMessagesDeleted,
+  ZulipMessageUpdated,
   ZulipReceivedMessage,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 
 export type ZulipMessageHandler = (message: ZulipReceivedMessage) => Promise<void> | void;
+export type ZulipUpdateHandler = (update: ZulipMessageUpdated) => Promise<void> | void;
+export type ZulipDeletionHandler = (deletion: ZulipMessagesDeleted) => Promise<void> | void;
+export type ZulipRegistrationHandler = (registration: { subscribedStreamIds: number[] }) => void;
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
@@ -61,6 +66,9 @@ const listeningStreams = () =>
 export class ZulipService implements OnModuleDestroy {
   private logger = new Logger(ZulipService.name);
   private handlers: ZulipMessageHandler[] = [];
+  private updateHandlers: ZulipUpdateHandler[] = [];
+  private deletionHandlers: ZulipDeletionHandler[] = [];
+  private registrationHandlers: ZulipRegistrationHandler[] = [];
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
   private self?: ZulipUser;
@@ -82,6 +90,18 @@ export class ZulipService implements OnModuleDestroy {
 
   onMessage(handler: ZulipMessageHandler) {
     this.handlers.push(handler);
+  }
+
+  onMessageUpdate(handler: ZulipUpdateHandler) {
+    this.updateHandlers.push(handler);
+  }
+
+  onMessagesDeleted(handler: ZulipDeletionHandler) {
+    this.deletionHandlers.push(handler);
+  }
+
+  onQueueRegistered(handler: ZulipRegistrationHandler) {
+    this.registrationHandlers.push(handler);
   }
 
   get ownUser(): ZulipUser | undefined {
@@ -204,6 +224,13 @@ export class ZulipService implements OnModuleDestroy {
         );
       }
     }
+    for (const handler of this.registrationHandlers) {
+      try {
+        handler({ subscribedStreamIds });
+      } catch (error) {
+        this.logger.error(`A Zulip queue registration handler failed on queue ${queue.queueId}`, error);
+      }
+    }
     return queue;
   }
 
@@ -225,33 +252,45 @@ export class ZulipService implements OnModuleDestroy {
   }
 
   private async dispatch(event: ZulipEvent) {
-    if (event.type !== 'message' || !event.message) {
-      return;
-    }
-    const { message } = event;
-    if (message.senderId === this.self?.userId || isBotSender(message)) {
-      return;
-    }
-    for (const handler of this.handlers) {
-      await this.runHandler(handler, message);
+    if (event.message) {
+      const { message } = event;
+      if (message.senderId === this.self?.userId || isBotSender(message)) {
+        return;
+      }
+      for (const handler of this.handlers) {
+        await this.runHandler(`message ${message.id}`, () => handler(message));
+      }
+    } else if (event.update) {
+      const { update } = event;
+      if (update.renderingOnly || update.userId === null || update.userId === this.self?.userId) {
+        return;
+      }
+      for (const handler of this.updateHandlers) {
+        await this.runHandler(`the update of message ${update.messageId}`, () => handler(update));
+      }
+    } else if (event.deletion) {
+      const { deletion } = event;
+      for (const handler of this.deletionHandlers) {
+        await this.runHandler(`the deletion of messages ${deletion.messageIds.join(', ')}`, () => handler(deletion));
+      }
     }
   }
 
-  private async runHandler(handler: ZulipMessageHandler, message: ZulipReceivedMessage) {
+  private async runHandler(describe: string, run: () => Promise<void> | void) {
     let settled = false;
     let abandoned = false;
     const wait = new AbortController();
     void (async () => {
       try {
-        await handler(message);
+        await run();
         if (abandoned) {
           this.logger.warn(
-            `The Zulip message handler that stalled on message ${message.id} finished after the loop had stopped waiting for it`,
+            `The Zulip message handler that stalled on ${describe} finished after the loop had stopped waiting for it`,
           );
         }
       } catch (error) {
         this.logger.error(
-          `A Zulip message handler failed on message ${message.id}${abandoned ? ' after the loop had stopped waiting for it' : ''}`,
+          `A Zulip message handler failed on ${describe}${abandoned ? ' after the loop had stopped waiting for it' : ''}`,
           error,
         );
       } finally {
@@ -263,7 +302,7 @@ export class ZulipService implements OnModuleDestroy {
     if (!settled) {
       abandoned = true;
       this.logger.error(
-        `A Zulip message handler has not finished message ${message.id} after ${HANDLER_TIMEOUT_MS}ms; the loop is moving on without it`,
+        `A Zulip message handler has not finished ${describe} after ${HANDLER_TIMEOUT_MS}ms; the loop is moving on without it`,
       );
     }
   }

@@ -76,6 +76,24 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  getMirrorConversation: vitest.fn(),
+  getMirrorConversationByDiscord: vitest.fn(),
+  getMirrorConversationByZulipTopic: vitest.fn(),
+  getMirrorConversationsByAnchors: vitest.fn(),
+  getActiveMirrorThreads: vitest.fn(),
+  createMirrorConversation: vitest.fn(),
+  updateMirrorConversation: vitest.fn(),
+  removeMirrorConversation: vitest.fn(),
+  createMirrorMessages: vitest.fn(),
+  getMirrorMessagesByDiscordIds: vitest.fn(),
+  getMirrorMessagesByZulipIds: vitest.fn(),
+  getMirrorMessagesByConversation: vitest.fn(),
+  getNewestMirrorZulipMessageId: vitest.fn(),
+  updateMirrorMessages: vitest.fn(),
+  markMirrorMessagesDeleted: vitest.fn(),
+  removeMirrorMessages: vitest.fn(),
+  getMirrorZulipHighWater: vitest.fn(),
+  getMirrorDiscordHighWater: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -146,6 +164,10 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  deleteMessage: vitest.fn(),
+  uploadFile: vitest.fn(),
+  downloadUpload: vitest.fn(),
+  getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
 });
 

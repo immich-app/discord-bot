@@ -13,7 +13,7 @@ import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
+import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
@@ -109,6 +109,24 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  getMirrorConversation: vitest.fn(),
+  getMirrorConversationByDiscord: vitest.fn(),
+  getMirrorConversationByZulipTopic: vitest.fn(),
+  getMirrorConversationsByAnchors: vitest.fn(),
+  getActiveMirrorThreads: vitest.fn(),
+  createMirrorConversation: vitest.fn(),
+  updateMirrorConversation: vitest.fn(),
+  removeMirrorConversation: vitest.fn(),
+  createMirrorMessages: vitest.fn(),
+  getMirrorMessagesByDiscordIds: vitest.fn(),
+  getMirrorMessagesByZulipIds: vitest.fn(),
+  getMirrorMessagesByConversation: vitest.fn(),
+  getNewestMirrorZulipMessageId: vitest.fn(),
+  updateMirrorMessages: vitest.fn(),
+  markMirrorMessagesDeleted: vitest.fn(),
+  removeMirrorMessages: vitest.fn(),
+  getMirrorZulipHighWater: vitest.fn(),
+  getMirrorDiscordHighWater: vitest.fn(),
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
@@ -149,6 +167,10 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  deleteMessage: vitest.fn(),
+  uploadFile: vitest.fn(),
+  downloadUpload: vitest.fn(),
+  getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
 });
 
@@ -1288,6 +1310,31 @@ describe('Bot test', () => {
     });
   });
 
+  describe('hasBlacklistedUrl', () => {
+    it('should flag GitHub, my.immich.app and docs links, whose previews are suppressed', () => {
+      expect(hasBlacklistedUrl(['https://example.com', 'https://github.com/immich-app/immich/pull/1'])).toBe(true);
+      expect(hasBlacklistedUrl(['https://my.immich.app/photos'])).toBe(true);
+      expect(hasBlacklistedUrl(['https://docs.immich.app/install'])).toBe(true);
+    });
+
+    it('should let other links keep their previews', () => {
+      expect(hasBlacklistedUrl([])).toBe(false);
+      expect(hasBlacklistedUrl(['https://example.com/https://github.com'])).toBe(false);
+      expect(sut.hasBlacklistUrl(['https://immich.app'])).toBe(false);
+    });
+  });
+
+  describe('toZulipEmojiName', () => {
+    it.each([
+      { name: 'catJam', expected: 'catjam' },
+      { name: 'party.parrot', expected: 'party_parrot' },
+      { name: 'wave_-', expected: 'wave' },
+      { name: '__', expected: 'emote' },
+    ])('should turn $name into $expected', ({ name, expected }) => {
+      expect(toZulipEmojiName(name)).toBe(expected);
+    });
+  });
+
   describe('formatEmoteSyncReport', () => {
     const report = {
       total: 3,
@@ -1624,10 +1671,12 @@ describe('Bot test', () => {
     id: 900,
     senderId: 12,
     senderEmail: 'alice@example.com',
+    senderFullName: 'Alice',
     type: 'stream',
     streamId: Constants.Zulip.TeamStreams.ImmichGeneral,
     topic: 'thumbnails',
     content: 'hello',
+    timestamp: 1_700_000_000,
     ...overrides,
   });
 
