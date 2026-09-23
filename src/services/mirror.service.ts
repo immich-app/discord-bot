@@ -74,6 +74,7 @@ const CATCH_UP_RETRY_MS = 30_000;
 const MAX_CATCH_UP_RETRY_MS = 10 * MINUTE;
 const MAX_CREATE_ATTEMPTS = 3;
 const RESUME_MS = 30_000;
+const DISCORD_CHANGE_ATTEMPTS = 20;
 const CHANNEL_CHECK_MS = 10 * MINUTE;
 const DISCORD_EPOCH = 1_420_070_400_000n;
 const ACTIVE_THREAD_DAYS = 7;
@@ -850,16 +851,27 @@ export class MirrorService implements OnModuleDestroy {
 
   /** Holds a change back, behind any held before it, until `side` is ready; `true` when it did. */
   private holdFor(state: PairState, side: Side, label: string, run: () => Promise<void>) {
-    const held = state.held[side];
-    if (held.length === 0 && this.sideReady(state, side)) {
+    if (state.held[side].length === 0 && this.sideReady(state, side)) {
       return false;
     }
-    held.push({ label, run });
-    if (this.throttle(`held:${state.pair.key}:${side}`, THROTTLE_MS)) {
+    if (!this.sideReady(state, side) && this.throttle(`held:${state.pair.key}:${side}`, THROTTLE_MS)) {
       this.logger.warn(`${state.pair.key}: ${side} is not ready, so edits, deletions and renames wait until it is`);
     }
-    this.resumeLater(state);
+    this.hold(state, side, label, run);
     return true;
+  }
+
+  private hold(state: PairState, side: Side, label: string, run: () => Promise<void>) {
+    state.held[side].push({ label, run });
+    this.resumeLater(state);
+  }
+
+  /** Edits and deletions can be sent again safely, so one Discord failed for now waits its turn to be tried again. */
+  private retryOnDiscord(state: PairState, label: string, attempt: number, run: (attempt: number) => Promise<void>) {
+    if (this.throttle(`retry:${state.pair.key}`, THROTTLE_MS)) {
+      this.logger.warn(`${state.pair.key}: Discord failed an edit or deletion for now, so it is tried again soon`);
+    }
+    this.hold(state, 'Discord', label, () => run(attempt + 1));
   }
 
   private resumeLater(state: PairState) {
@@ -1521,8 +1533,9 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
-  private async editFromZulip(state: PairState, messageId: number, content: string) {
+  private async editFromZulip(state: PairState, messageId: number, content: string, attempt = 1) {
     const { pair } = state;
+    const label = `edit of Zulip message ${messageId}`;
     const all = (await this.database.getMirrorMessagesByZulipIds([messageId], { withDeleted: true })).filter(
       ({ origin }) => origin === 'zulip',
     );
@@ -1530,9 +1543,7 @@ export class MirrorService implements OnModuleDestroy {
     const hash = sha256(content);
     if (
       rows.length === 0 ||
-      this.holdFor(state, 'Discord', `edit of Zulip message ${messageId}`, () =>
-        this.editFromZulip(state, messageId, content),
-      ) ||
+      this.holdFor(state, 'Discord', label, () => this.editFromZulip(state, messageId, content, attempt)) ||
       rows[0].sourceHash === hash
     ) {
       return;
@@ -1550,6 +1561,7 @@ export class MirrorService implements OnModuleDestroy {
     }
 
     const kept: MirrorMessage[] = [];
+    let again = false;
     for (const row of rows) {
       try {
         if (row.part < parts.length) {
@@ -1563,11 +1575,19 @@ export class MirrorService implements OnModuleDestroy {
           await this.database.removeMirrorMessages([row.discordMessageId]);
         }
       } catch (error) {
+        if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
+          again = true;
+          continue;
+        }
         await this.discordEditFailed(state, row, error);
-        if (!isMirrorError(error, 'unknown-message')) {
+        if (!isMirrorError(error, 'unknown-message') && !isMirrorError(error, 'unknown-channel')) {
           kept.push(row);
         }
       }
+    }
+    if (again) {
+      this.retryOnDiscord(state, label, attempt, (next) => this.editFromZulip(state, messageId, content, next));
+      return;
     }
     await this.database.updateMirrorMessages(
       kept.map(({ discordMessageId }) => discordMessageId),
@@ -1585,6 +1605,8 @@ export class MirrorService implements OnModuleDestroy {
     const about = `Discord message ${row.discordMessageId} (the copy of Zulip message ${row.zulipMessageId})`;
     if (isMirrorError(error, 'unknown-message')) {
       await this.database.markMirrorMessagesDeleted([row.discordMessageId]);
+    } else if (isMirrorError(error, 'unknown-channel') && row.discordThreadId !== null) {
+      await this.threadDeleted(state, row.discordThreadId, 'the Discord thread no longer exists');
     } else if (isMirrorError(error, 'locked')) {
       this.logger.warn(`${key}: could not update ${about}: the Discord thread is locked`);
     } else if (isMirrorError(error, 'replaced-webhook')) {
@@ -1682,22 +1704,33 @@ export class MirrorService implements OnModuleDestroy {
     await this.deleteOnDiscord(state, young);
   }
 
-  private async deleteOnDiscord(state: PairState, rows: MirrorMessage[]) {
+  private async deleteOnDiscord(state: PairState, rows: MirrorMessage[], attempt = 1) {
     const label = `deletion of Discord messages ${rows.map(({ discordMessageId }) => discordMessageId).join(', ')}`;
-    if (rows.length === 0 || this.holdFor(state, 'Discord', label, () => this.deleteOnDiscord(state, rows))) {
+    if (rows.length === 0 || this.holdFor(state, 'Discord', label, () => this.deleteOnDiscord(state, rows, attempt))) {
       return;
     }
+    const again: MirrorMessage[] = [];
     for (const row of rows) {
       try {
         await this.onDiscord(state, row.discordThreadId, () => this.discordMirror.deleteMirrorMessage(toTarget(row)));
       } catch (error) {
-        if (!isMirrorError(error, 'unknown-message')) {
+        if (isMirrorError(error, 'unknown-message')) {
+          continue;
+        }
+        if (isMirrorError(error, 'unknown-channel') && row.discordThreadId !== null) {
+          await this.threadDeleted(state, row.discordThreadId, 'the Discord thread no longer exists');
+        } else if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
+          again.push(row);
+        } else {
           this.fail(
             `${state.pair.key}: could not delete Discord message ${row.discordMessageId} (the copy of Zulip message ${row.zulipMessageId})`,
             error,
           );
         }
       }
+    }
+    if (again.length > 0) {
+      this.retryOnDiscord(state, label, attempt, (next) => this.deleteOnDiscord(state, again, next));
     }
   }
 
@@ -2163,13 +2196,13 @@ export class MirrorService implements OnModuleDestroy {
     });
   }
 
-  private async threadDeleted(state: PairState, threadId: string) {
+  private async threadDeleted(state: PairState, threadId: string, reason = 'the Discord thread was deleted') {
     const { pair } = state;
     const conversation = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
     if (!conversation) {
       return;
     }
-    await this.detach(state, conversation, 'the Discord thread was deleted');
+    await this.detach(state, conversation, reason);
     await this.noticeThreadDeleted(state, conversation.zulipTopic);
   }
 

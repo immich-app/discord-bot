@@ -2103,6 +2103,67 @@ describe(MirrorService.name, () => {
       );
     });
 
+    it.each([
+      ['unavailable', new DiscordMirrorError('unavailable', undefined, 'HTTP 503')],
+      ['unreachable', new DiscordMirrorError('unreachable', undefined, 'getaddrinfo ENOTFOUND')],
+    ])('should edit again soon when Discord is %s for now, before any later edit', async (_, failure) => {
+      await fromZulip(zulipMessage({ content: paragraphs('a', 'b') }));
+      vitest.useFakeTimers();
+      discord.editMirrorMessage.mockResolvedValueOnce().mockRejectedValueOnce(failure);
+
+      await updateFromZulip({ messageId: 1001, content: paragraphs('c', 'd') });
+      await updateFromZulip({ messageId: 1001, content: paragraphs('e', 'f') });
+      expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
+      expect(db.messages.map(({ sourceHash }) => sourceHash)).toEqual([expect.any(String), expect.any(String)]);
+      expect(warn()).toHaveBeenCalledWith('Dev: Discord failed an edit or deletion for now, so it is tried again soon');
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(discord.editMirrorMessage.mock.calls.map(([, { content }]) => content[0])).toEqual([
+        'c',
+        'd',
+        'c',
+        'd',
+        'e',
+        'f',
+      ]);
+      expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should give up on an edit Discord keeps failing after about ten minutes', async () => {
+      await fromZulip(zulipMessage());
+      vitest.useFakeTimers();
+      discord.editMirrorMessage.mockRejectedValue(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+
+      await updateFromZulip({ messageId: 1001, content: 'edited' });
+      await vitest.advanceTimersByTimeAsync(20 * 30_000);
+      await sut.whenIdle();
+
+      expect(discord.editMirrorMessage).toHaveBeenCalledTimes(20);
+      expect(error()).toHaveBeenCalledExactlyOnceWith(
+        `Dev: could not update Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): unavailable`,
+      );
+    });
+
+    it('should let a thread that no longer exists go, and say so in its topic, when an edit finds it gone', async () => {
+      await fromZulip(zulipMessage({ topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      discord.editMirrorMessage.mockRejectedValue(new DiscordMirrorError('unknown-channel', 10_003));
+
+      await updateFromZulip({ messageId: 1002, content: 'edited' });
+
+      expect(db.conversations).toEqual([]);
+      expect(sentMessages()).toEqual([
+        {
+          stream: DEV_STREAM,
+          topic: 'Crash',
+          content: 'The Discord thread for this topic was deleted; the next message here starts a new one.',
+        },
+      ]);
+      expect(error()).not.toHaveBeenCalled();
+    });
+
     it('should forget a copy a moderator deleted on Discord', async () => {
       await fromZulip(zulipMessage());
       discord.editMirrorMessage.mockRejectedValue(new DiscordMirrorError('unknown-message', 10_008));
@@ -2209,6 +2270,59 @@ describe(MirrorService.name, () => {
 
       expect(discord.deleteMirrorMessage.mock.calls).toEqual(targets.map((target) => [target]));
       expect(db.messages.map(({ deletedAt }) => deletedAt)).toEqual([expect.any(Date), expect.any(Date)]);
+    });
+
+    it('should delete again soon when Discord fails for now, before any later deletion', async () => {
+      await fromZulip(zulipMessage({ content: paragraphs('a', 'b') }));
+      await fromZulip(zulipMessage({ id: 1002 }));
+      vitest.useFakeTimers();
+      discord.deleteMirrorMessage
+        .mockResolvedValueOnce()
+        .mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+
+      await deleteFromZulip({ messageIds: [1001] });
+      await deleteFromZulip({ messageIds: [1002] });
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledTimes(2);
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(discord.deleteMirrorMessage.mock.calls.map(([{ messageId }]) => messageId)).toEqual([
+        db.messages[0].discordMessageId,
+        db.messages[1].discordMessageId,
+        db.messages[1].discordMessageId,
+        db.messages[2].discordMessageId,
+      ]);
+      expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should name the copy it could not delete', async () => {
+      await fromZulip(zulipMessage());
+      discord.deleteMirrorMessage.mockRejectedValue(new DiscordMirrorError('forbidden', 50_013));
+
+      await deleteFromZulip({ messageIds: [1001] });
+
+      expect(error()).toHaveBeenCalledExactlyOnceWith(
+        `Dev: could not delete Discord message ${db.messages[0].discordMessageId} (the copy of Zulip message 1001): forbidden (50013)`,
+      );
+    });
+
+    it('should let a thread that no longer exists go, and say so in its topic, when a deletion finds it gone', async () => {
+      await fromZulip(zulipMessage({ topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      discord.deleteMirrorMessage.mockRejectedValue(new DiscordMirrorError('unknown-channel', 10_003));
+
+      await deleteFromZulip({ messageIds: [1002] });
+
+      expect(db.conversations).toEqual([]);
+      expect(sentMessages()).toEqual([
+        {
+          stream: DEV_STREAM,
+          topic: 'Crash',
+          content: 'The Discord thread for this topic was deleted; the next message here starts a new one.',
+        },
+      ]);
+      expect(error()).not.toHaveBeenCalled();
     });
 
     it('should not delete Discord copies older than 7 days', async () => {
