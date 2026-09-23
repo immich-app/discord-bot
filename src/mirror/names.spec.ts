@@ -60,6 +60,12 @@ describe('topicKey', () => {
   it('should lower-case, as Zulip compares topics case-insensitively', () => {
     expect(topicKey('Bug In #Dev')).toBe('bug in #dev');
   });
+
+  it('should keep the empty topic apart from a topic named like it', () => {
+    expect(topicKey('general chat')).toBe('');
+    expect(topicKey('')).toBe('');
+    expect(topicKey('General Chat')).toBe('general chat');
+  });
 });
 
 describe('toZulipTopicName', () => {

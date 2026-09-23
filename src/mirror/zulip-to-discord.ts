@@ -80,7 +80,16 @@ const splitUrlTail = (url: string) => {
   }
 };
 
+/** Zulip reads a time it cannot parse as a date as Unix seconds, as it does nine digits or more, up to the year 9999. */
+const UNIX_SECONDS = /^\s*(\d{9,}(?:\.\d+)?)\s*$/;
+const MAX_UNIX_SECONDS = 253_402_300_799;
+
 const toUnixSeconds = (value: string) => {
+  const unix = UNIX_SECONDS.exec(value);
+  if (unix) {
+    const seconds = Math.floor(Number(unix[1]));
+    return seconds <= MAX_UNIX_SECONDS ? seconds : undefined;
+  }
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
 };

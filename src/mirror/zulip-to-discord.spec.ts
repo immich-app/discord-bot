@@ -326,8 +326,15 @@ describe('toDiscordMirrorContent', () => {
       );
     });
 
+    it('should read a Zulip time given in Unix seconds', () => {
+      expect(text('deploy at <time:1704103200> or <time:1704103200.9>')).toBe(
+        'deploy at <t:1704103200:f> or <t:1704103200:f>',
+      );
+    });
+
     it('should leave a time that does not parse', () => {
       expect(text('<time:whenever>')).toBe('<time:whenever>');
+      expect(text('<time:999999999999999>')).toBe('<time:999999999999999>');
     });
 
     it('should italicise a /me message', () => {

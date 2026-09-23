@@ -22,8 +22,11 @@ export const sanitiseWebhookUsername = (name: string, suffix = '') => {
   return `${cut || 'Immich team'}${suffix}`;
 };
 
-/** Zulip compares topics case-insensitively. */
-export const topicKey = (topic: string) => topic.toLowerCase();
+/** How events and `GET /messages` name the empty topic; Zulip reads only this exact spelling back as the empty topic. */
+export const EMPTY_TOPIC_NAME = 'general chat';
+
+/** Zulip compares topics case-insensitively, yet a topic really named `General Chat` is not the empty one. */
+export const topicKey = (topic: string) => (topic === EMPTY_TOPIC_NAME ? '' : topic.toLowerCase());
 
 /** Leaves room for the resolve prefix, so the topic can still be resolved. */
 export const toZulipTopicName = (name: string, threadId: string) =>
@@ -48,5 +51,5 @@ export const toDiscordThreadName = (topic: string) => {
     }
     name += char;
   }
-  return name.trimEnd() || 'general chat';
+  return name.trimEnd() || EMPTY_TOPIC_NAME;
 };

@@ -776,6 +776,45 @@ describe(MirrorService.name, () => {
       expect(db.conversations[0].zulipTopic).toBe('new name');
     });
 
+    it('should find a topic moved to the empty topic again through its anchor', async () => {
+      const thread = seedThread({ zulipTopic: 'Foo', zulipTopicKey: 'foo', zulipAnchorMessageId: 60 });
+      seedRow({ zulipMessageId: 70, conversationId: thread.id, discordThreadId: thread.discordThreadId });
+      zulip.getMessages.mockResolvedValue([zulipMessage({ id: 70, topic: 'general chat' })]);
+      zulip.getMessage.mockResolvedValue({ id: 60, topic: '', streamId: DEV_STREAM });
+
+      await fromZulip(zulipMessage({ topic: 'general chat' }));
+
+      expect(sent(0).threadId).toBe(thread.discordThreadId);
+      expect(db.conversations[0]).toEqual(expect.objectContaining({ zulipTopic: 'general chat', zulipTopicKey: '' }));
+    });
+
+    it('should leave a new topic for catch-up when its anchor cannot be read for now', async () => {
+      const thread = seedThread({ zulipTopic: 'old name', zulipTopicKey: 'old name', zulipAnchorMessageId: 60 });
+      seedRow({ zulipMessageId: 70, conversationId: thread.id, discordThreadId: thread.discordThreadId });
+      zulip.getMessages.mockResolvedValue([zulipMessage({ id: 70, topic: 'new name' })]);
+      zulip.getMessage.mockRejectedValue(new TypeError('fetch failed'));
+      vitest.useFakeTimers();
+
+      for (const handler of stub.handlers.message) {
+        await handler(zulipMessage({ topic: 'new name' }));
+      }
+      await vitest.advanceTimersByTimeAsync(6000);
+      await sut.whenIdle();
+
+      expect(zulip.getMessage).toHaveBeenCalledTimes(3);
+      expect(discord.startMirrorThread).not.toHaveBeenCalled();
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+      expect(log()).toHaveBeenCalledWith('Dev: catching up again in 30 seconds');
+    });
+
+    it('should keep the empty topic apart from a topic named General Chat', async () => {
+      await fromZulip(zulipMessage({ topic: 'General Chat' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'general chat' }));
+
+      expect(discord.startMirrorThread).toHaveBeenCalledTimes(2);
+      expect(db.conversations.map(({ zulipTopicKey }) => zulipTopicKey)).toEqual(['general chat', '']);
+    });
+
     it('should never adopt the main conversation for another topic', async () => {
       await fromZulip(zulipMessage({ id: 70 }));
       zulip.getMessages.mockResolvedValue([zulipMessage({ id: 70 })]);
@@ -1140,6 +1179,17 @@ describe(MirrorService.name, () => {
       expect(sent(0).content).toBe(`hello\n-# sent <t:${timestamp}:f>`);
     });
 
+    it('should put the notes before the text when they do not fit next to the first part', async () => {
+      zulip.downloadUpload.mockResolvedValue(undefined);
+
+      await fromZulip(zulipMessage({ content: `${'x'.repeat(1990)}\n[big.zip](/user_uploads/2/ab/cdef/big.zip)` }));
+
+      expect(discord.sendMirrorMessage.mock.calls.map(([{ content }]) => content)).toEqual([
+        '*(attachment not mirrored: big.zip)*',
+        'x'.repeat(1990),
+      ]);
+    });
+
     it('should post the notes alone when the only upload could not be attached', async () => {
       zulip.downloadUpload.mockRejectedValue(new Error('Zulip answered the download with status 404'));
 
@@ -1215,6 +1265,7 @@ describe(MirrorService.name, () => {
       ['a stream without a pair', { streamId: 107 }],
       ['a direct message', { type: 'private' as const, streamId: undefined }],
       ['a command to the bot', { content: `@**${BOT.fullName}** help` }],
+      ['an email Zulip received', { senderEmail: 'EmailGateway@zulip.com', senderFullName: 'Email Gateway' }],
     ])('should ignore %s', async (_, overrides) => {
       await fromZulip(zulipMessage(overrides));
 
@@ -1313,6 +1364,15 @@ describe(MirrorService.name, () => {
       ]);
     });
 
+    it('should give a second thread of the same name a topic of its own', async () => {
+      await fromDiscord(discordMessage({ threadId: '200000000000000001', threadName: 'Bug' }));
+      await fromDiscord(
+        discordMessage({ id: '300000000000000002', threadId: '200000000000000002', threadName: 'Bug' }),
+      );
+
+      expect(sentMessages().map(({ topic }) => topic)).toEqual(['Bug', 'Bug (2)']);
+    });
+
     it('should never give a thread the main topic', async () => {
       await fromDiscord(discordMessage({ threadId: '200000000000000001', threadName: '#DEV' }));
 
@@ -1352,12 +1412,23 @@ describe(MirrorService.name, () => {
     });
 
     it('should keep the stored topic when the anchor is in the empty topic', async () => {
-      const thread = seedThread({ zulipTopic: 'general chat', zulipTopicKey: 'general chat' });
+      const thread = seedThread({ zulipTopic: 'general chat', zulipTopicKey: '' });
       zulip.getMessage.mockResolvedValue({ id: 70, topic: '', streamId: DEV_STREAM });
 
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId }));
 
       expect(sentMessages()[0].topic).toBe('general chat');
+      expect(db.repository.updateMirrorConversation).not.toHaveBeenCalled();
+    });
+
+    it('should follow an anchor moved to the empty topic', async () => {
+      const thread = seedThread();
+      zulip.getMessage.mockResolvedValue({ id: 70, topic: '', streamId: DEV_STREAM });
+
+      await fromDiscord(discordMessage({ threadId: thread.discordThreadId }));
+
+      expect(sentMessages()[0].topic).toBe('general chat');
+      expect(db.conversations[0]).toEqual(expect.objectContaining({ zulipTopic: 'general chat', zulipTopicKey: '' }));
     });
 
     it('should re-anchor a conversation whose anchor is gone', async () => {
@@ -3047,6 +3118,7 @@ describe(MirrorService.name, () => {
               missedOnZulip({ id: 1001, movedAt: Math.floor(Date.now() / 1000) }),
               missedOnZulip({ id: 1002, senderId: BOT.userId }),
               missedOnZulip({ id: 1003, senderEmail: 'ci-bot@zulip.example.com' }),
+              missedOnZulip({ id: 1007, senderEmail: 'emailgateway@zulip.com' }),
               missedOnZulip({ id: 1004, content: `@**${BOT.fullName}** help` }),
               missedOnZulip({ id: 1005, streamId: FORUM_STREAM }),
               missedOnZulip({ id: 1006, content: 'kept' }),

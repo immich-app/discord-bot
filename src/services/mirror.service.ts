@@ -35,6 +35,7 @@ import {
 } from 'src/mirror/discord-to-zulip';
 import { downloadDiscordAttachment } from 'src/mirror/download';
 import {
+  EMPTY_TOPIC_NAME,
   sanitiseWebhookUsername,
   toDiscordThreadName,
   topicCandidates,
@@ -128,6 +129,12 @@ type OutgoingZulipMessage = {
   notes: Note[];
   identity: Identity;
 };
+
+/** Zulip's email gateway posts incoming email under its own name, without the `-bot@` every other bot address has. */
+const EMAIL_GATEWAY = 'emailgateway@zulip.com';
+
+const isHumanSender = (message: ZulipReceivedMessage) =>
+  !isBotSender(message) && message.senderEmail.toLowerCase() !== EMAIL_GATEWAY;
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -382,7 +389,7 @@ export class MirrorService implements OnModuleDestroy {
 
   private onZulipMessage(message: ZulipReceivedMessage) {
     const state = message.type === 'stream' ? this.byStream(message.streamId) : undefined;
-    if (state && !this.isCommand(message.content)) {
+    if (state && isHumanSender(message) && !this.isCommand(message.content)) {
       state.queue.push(`Zulip message ${message.id}`, () => this.mirrorZulipMessage(state, message));
     }
   }
@@ -706,7 +713,7 @@ export class MirrorService implements OnModuleDestroy {
         message.type === 'stream' &&
         message.streamId === pair.zulipStreamId &&
         message.senderId !== self &&
-        !isBotSender(message) &&
+        isHumanSender(message) &&
         !this.isCommand(message.content) &&
         (message.movedAt === undefined || turnedAway.has(message.id)),
     );
@@ -1144,7 +1151,7 @@ export class MirrorService implements OnModuleDestroy {
     }
     try {
       const { topic, streamId } = await this.retryZulip(() => this.zulip.getMessage(anchor));
-      return streamId === state.pair.zulipStreamId && topic !== '' && topicKey(topic) === key;
+      return streamId === state.pair.zulipStreamId && topicKey(topic) === key;
     } catch (error) {
       if (isZulipMessageGone(error)) {
         return false;
@@ -1654,8 +1661,8 @@ export class MirrorService implements OnModuleDestroy {
       await this.detach(state, conversation, 'its Zulip topic was moved to another stream');
       return undefined;
     }
-    const { topic } = found;
-    if (topic !== '' && topic !== conversation.zulipTopic) {
+    const topic = found.topic || EMPTY_TOPIC_NAME;
+    if (topic !== conversation.zulipTopic) {
       const zulipTopicKey = topicKey(topic);
       if (await this.isTakenByAnother(state, conversation, zulipTopicKey)) {
         await this.detach(state, conversation, 'its Zulip topic was merged into another conversation');
