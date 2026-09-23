@@ -1,14 +1,65 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DateTime } from 'luxon';
 import { getConfig } from 'src/config';
 import { Constants } from 'src/constants';
 import { HolidayDto, IHolidaysInterface } from 'src/interfaces/holidays.interface';
-import { IZulipInterface } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipEvent, ZulipEventQueue, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { ZulipApiError } from 'src/repositories/zulip.client';
+
+export type ZulipMessageHandler = (message: ZulipReceivedMessage) => Promise<void> | void;
+
+const INITIAL_BACKOFF_MS = 1_000;
+const MAX_BACKOFF_MS = 60_000;
+/** Bounds the loop against a server that answers polls at once, e.g. long polling disabled or a non-holding proxy. */
+const MIN_POLL_INTERVAL_MS = 1_000;
+const SHUTDOWN_GRACE_MS = 5_000;
+/** No poll goes out while a handler runs, so one that never settles would leave every stream unheard. */
+const HANDLER_TIMEOUT_MS = 30_000;
+const UNHEALTHY_STREAK = 10;
+
+const isBadEventQueueId = (error: unknown) => error instanceof ZulipApiError && error.code === 'BAD_EVENT_QUEUE_ID';
+
+const isTimeout = (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError';
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+
+const backoffMs = (failures: number) => Math.min(INITIAL_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
+
+/** Message events carry no `is_bot` flag, but Zulip creates every bot as `{short_name}-bot@{realm host}`. */
+const isBotSender = (message: ZulipReceivedMessage) => /-bot@[^@]+$/i.test(message.senderEmail);
+
+export const describeZulipStream = (streamId: number) => {
+  const named = [...Object.entries(Constants.Zulip.TeamStreams), ...Object.entries(Constants.Zulip.Streams)];
+  const name = named.find(([, id]) => id === streamId)?.[0];
+  return name ? `${streamId} (${name})` : `${streamId}`;
+};
+
+const listeningStreams = () => new Set(Object.values(Constants.Zulip.Expanders).flat());
+const privilegedStreams = () => new Set(Constants.Zulip.Expanders.GithubReferences);
 
 @Injectable()
-export class ZulipService {
+export class ZulipService implements OnModuleDestroy {
   private logger = new Logger(ZulipService.name);
+  private handlers: ZulipMessageHandler[] = [];
+  private queue?: ZulipEventQueue;
+  private registration?: Promise<unknown>;
+  private privateStreams = new Set<number>();
+  private ownUserId?: number;
+  private loop?: { promise: Promise<void>; controller: AbortController };
 
   constructor(
     @Inject(IHolidaysInterface) private holidays: IHolidaysInterface,
@@ -20,6 +71,203 @@ export class ZulipService {
     if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {
       await this.zulip.init(zulip);
       await this.checkSubscriptions();
+      this.startEventLoop();
+    }
+  }
+
+  onMessage(handler: ZulipMessageHandler) {
+    this.handlers.push(handler);
+  }
+
+  isPrivateStream(streamId: number) {
+    return this.privateStreams.has(streamId);
+  }
+
+  /** An in-flight registration is awaited: the server creates its queue even if the client never reads the answer. */
+  async onModuleDestroy() {
+    const loop = this.loop;
+    if (!loop) {
+      return;
+    }
+    this.loop = undefined;
+    loop.controller.abort();
+    await this.registration;
+    await this.releaseQueue();
+
+    const grace = new AbortController();
+    await Promise.race([loop.promise, sleep(SHUTDOWN_GRACE_MS, grace.signal)]);
+    grace.abort();
+  }
+
+  private startEventLoop() {
+    const controller = new AbortController();
+    const promise = this.runEventLoop(controller.signal).catch((error) =>
+      this.logger.error('The Zulip event loop stopped on an error it should have caught', error),
+    );
+    this.loop = { promise, controller };
+  }
+
+  private async runEventLoop(signal: AbortSignal) {
+    let failures = 0;
+    let pace = Promise.resolve();
+    const unhealthy = { deadQueues: 0, instantEmptyPolls: 0 };
+    const noteUnhealthy = (round: keyof typeof unhealthy) => {
+      unhealthy[round]++;
+      const streak = unhealthy.deadQueues + unhealthy.instantEmptyPolls;
+      if (streak % UNHEALTHY_STREAK === 0) {
+        this.logger.warn(
+          `The Zulip event loop is not healthy: the server has not held a poll open for the last ${streak} rounds (${unhealthy.deadQueues} dead queues re-registered, ${unhealthy.instantEmptyPolls} polls answered at once with nothing); it keeps trying, at most once a second, but receives nothing in the meantime`,
+        );
+      }
+    };
+    while (!signal.aborted) {
+      try {
+        this.ownUserId ??= (await this.zulip.getOwnUser()).userId;
+        this.queue ??= await this.registerQueue();
+        const queue = this.queue;
+
+        await pace;
+        if (signal.aborted) {
+          break;
+        }
+        let floorElapsed = false;
+        pace = sleep(MIN_POLL_INTERVAL_MS, signal).then(() => {
+          floorElapsed = true;
+        });
+        const events = await this.zulip.getEvents(queue, signal);
+        if (signal.aborted) {
+          break;
+        }
+        failures = 0;
+        if (floorElapsed) {
+          unhealthy.deadQueues = 0;
+          unhealthy.instantEmptyPolls = 0;
+        } else if (events.length === 0) {
+          noteUnhealthy('instantEmptyPolls');
+        }
+        for (const event of events) {
+          queue.lastEventId = Math.max(queue.lastEventId, event.id);
+          await this.dispatch(event);
+        }
+      } catch (error) {
+        if (signal.aborted) {
+          break;
+        }
+        if (isTimeout(error)) {
+          this.logger.debug('The Zulip long poll timed out without a heartbeat, polling again');
+          continue;
+        }
+
+        failures++;
+        if (isBadEventQueueId(error)) {
+          this.queue = undefined;
+          this.logger.log(
+            'The Zulip event queue is gone (garbage-collected or the server restarted), registering a new one',
+          );
+          noteUnhealthy('deadQueues');
+          if (failures === 1) {
+            continue;
+          }
+        } else {
+          this.logger.error(`The Zulip event loop failed, retrying in ${backoffMs(failures)}ms`, error);
+        }
+        await sleep(backoffMs(failures), signal);
+      }
+    }
+    await this.releaseQueue();
+  }
+
+  private registerQueue() {
+    const registration = this.registerQueueNow();
+    this.registration = registration.then(
+      () => {},
+      () => {},
+    );
+    return registration;
+  }
+
+  private async registerQueueNow() {
+    const { queue, streams } = await this.zulip.registerQueue();
+    // Set here, not only by the loop's own assignment, so that a shutdown waiting on this registration finds it.
+    this.queue = queue;
+    this.logger.log(`Registered Zulip event queue ${queue.queueId}`);
+    const subscribed = new Set(streams.map(({ streamId }) => streamId));
+    this.privateStreams = new Set(streams.filter(({ isPrivate }) => isPrivate).map(({ streamId }) => streamId));
+    for (const streamId of listeningStreams()) {
+      if (!subscribed.has(streamId)) {
+        this.logger.warn(
+          `The Zulip bot is not subscribed to stream ${describeZulipStream(streamId)}: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it`,
+        );
+      }
+    }
+    for (const streamId of privilegedStreams()) {
+      if (subscribed.has(streamId) && !this.privateStreams.has(streamId)) {
+        this.logger.error(
+          `The Zulip bot is allowlisted to expand GitHub references in stream ${describeZulipStream(streamId)}, but the server does not report that stream as private: private repository titles and code would leak, so nothing is expanded there until the stream is made private or removed from Constants.Zulip.Expanders.GithubReferences`,
+        );
+      }
+    }
+    return queue;
+  }
+
+  private async releaseQueue() {
+    const queue = this.queue;
+    this.queue = undefined;
+    if (!queue) {
+      return;
+    }
+    try {
+      await this.zulip.deleteQueue(queue.queueId);
+      this.logger.log(`Deleted Zulip event queue ${queue.queueId}`);
+    } catch (error) {
+      this.logger.warn(
+        `Could not delete Zulip event queue ${queue.queueId}; the server will garbage-collect it`,
+        error,
+      );
+    }
+  }
+
+  private async dispatch(event: ZulipEvent) {
+    if (event.type !== 'message' || !event.message) {
+      return;
+    }
+    const { message } = event;
+    if (message.senderId === this.ownUserId || isBotSender(message)) {
+      return;
+    }
+    for (const handler of this.handlers) {
+      await this.runHandler(handler, message);
+    }
+  }
+
+  private async runHandler(handler: ZulipMessageHandler, message: ZulipReceivedMessage) {
+    let settled = false;
+    let abandoned = false;
+    const wait = new AbortController();
+    void (async () => {
+      try {
+        await handler(message);
+        if (abandoned) {
+          this.logger.warn(
+            `The Zulip message handler that stalled on message ${message.id} finished after the loop had stopped waiting for it`,
+          );
+        }
+      } catch (error) {
+        this.logger.error(
+          `A Zulip message handler failed on message ${message.id}${abandoned ? ' after the loop had stopped waiting for it' : ''}`,
+          error,
+        );
+      } finally {
+        settled = true;
+        wait.abort();
+      }
+    })();
+    await sleep(HANDLER_TIMEOUT_MS, wait.signal);
+    if (!settled) {
+      abandoned = true;
+      this.logger.error(
+        `A Zulip message handler has not finished message ${message.id} after ${HANDLER_TIMEOUT_MS}ms; the loop is moving on without it`,
+      );
     }
   }
 

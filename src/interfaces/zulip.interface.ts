@@ -20,6 +20,29 @@ export type ZulipEmoji = { name: string; deactivated: boolean };
 
 export type ZulipSubscription = { streamId: number };
 
+export type ZulipUser = { userId: number };
+
+export type ZulipEventQueue = { queueId: string; lastEventId: number };
+
+export type ZulipQueueStream = { streamId: number; isPrivate: boolean };
+
+export type ZulipQueueRegistration = { queue: ZulipEventQueue; streams: ZulipQueueStream[] };
+
+export type ZulipReceivedMessage = {
+  id: number;
+  senderId: number;
+  senderEmail: string;
+  type: 'stream' | 'private';
+  streamId?: number;
+  topic: string;
+  content: string;
+};
+
+export type ZulipMessageEvent = { id: number; type: 'message'; message: ZulipReceivedMessage };
+
+/** Zulip also sends `heartbeat` events; the loop must acknowledge every event's ID, whatever its type. */
+export type ZulipEvent = ZulipMessageEvent | { id: number; type: string; message?: undefined };
+
 export interface IZulipInterface {
   init(config: ZulipConfig): Promise<void>;
   isInitialised(): boolean;
@@ -30,4 +53,8 @@ export interface IZulipInterface {
   createEmote(name: string, emoteUrl: string): Promise<void>;
   listEmoji(): Promise<ZulipEmoji[]>;
   getSubscriptions(): Promise<ZulipSubscription[]>;
+  getOwnUser(): Promise<ZulipUser>;
+  registerQueue(): Promise<ZulipQueueRegistration>;
+  getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;
+  deleteQueue(queueId: string): Promise<void>;
 }

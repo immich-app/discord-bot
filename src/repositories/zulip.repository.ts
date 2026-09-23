@@ -1,15 +1,24 @@
+import type { components } from 'src/generated/zulip';
 import {
   IZulipInterface,
   MessagePayload,
   type ZulipConfig,
   ZulipEmoji,
+  ZulipEvent,
+  ZulipEventQueue,
   ZulipMessage,
   ZulipMessageUpdate,
+  ZulipQueueRegistration,
   ZulipSubscription,
+  ZulipUser,
 } from 'src/interfaces/zulip.interface';
-import { createZulipClient, multipart, type ZulipClient } from 'src/repositories/zulip.client';
+import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
+/** Zulip's default long-poll timeout: a quiet poll gets its heartbeat about this late, so the client adds a margin. */
+const DEFAULT_LONGPOLL_TIMEOUT_SECONDS = 90;
+const LONGPOLL_MARGIN_MS = 30_000;
+export const longpollTimeoutMs = (seconds: number) => seconds * 1000 + LONGPOLL_MARGIN_MS;
 const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
   'image/gif': 'gif',
@@ -17,13 +26,21 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
 };
 
+type Clients = { bot: ZulipClient; user: ZulipClient; events: ZulipClient };
+
 export class ZulipRepository implements IZulipInterface {
-  private clients?: { bot: ZulipClient; user: ZulipClient };
+  private clients?: Clients;
+  private botIdentity?: Omit<ZulipClientOptions, 'timeoutMs'>;
 
   async init({ realm, bot, user }: ZulipConfig) {
+    this.botIdentity = { realm, ...bot };
     this.clients = {
-      bot: createZulipClient({ realm, ...bot }),
+      bot: createZulipClient(this.botIdentity),
       user: createZulipClient({ realm, ...user }),
+      events: createZulipClient({
+        ...this.botIdentity,
+        timeoutMs: longpollTimeoutMs(DEFAULT_LONGPOLL_TIMEOUT_SECONDS),
+      }),
     };
   }
 
@@ -41,7 +58,11 @@ export class ZulipRepository implements IZulipInterface {
     return this.client('user');
   }
 
-  private client(identity: 'bot' | 'user') {
+  private get events() {
+    return this.client('events');
+  }
+
+  private client(identity: keyof Clients) {
     if (!this.clients) {
       throw new Error('Zulip client not initialised: call init() first');
     }
@@ -81,6 +102,48 @@ export class ZulipRepository implements IZulipInterface {
     return data!.subscriptions.map(({ stream_id }) => ({ streamId: stream_id ?? 0 }));
   }
 
+  async getOwnUser(): Promise<ZulipUser> {
+    const { data } = await this.bot.GET('/users/me');
+    if (data?.user_id === undefined) {
+      throw new Error('Zulip returned no user ID for the bot');
+    }
+    return { userId: data.user_id };
+  }
+
+  async registerQueue(): Promise<ZulipQueueRegistration> {
+    const { data } = await this.bot.POST('/register', {
+      body: { event_types: ['message'], apply_markdown: false, fetch_event_types: ['subscription'] },
+    });
+    if (!data?.queue_id) {
+      throw new Error('Zulip registered no event queue');
+    }
+
+    const timeoutSeconds = data.event_queue_longpoll_timeout_seconds;
+    if (timeoutSeconds && this.clients && this.botIdentity) {
+      this.clients.events = createZulipClient({ ...this.botIdentity, timeoutMs: longpollTimeoutMs(timeoutSeconds) });
+    }
+
+    // Unknown privacy counts as public: the expanders show private repository details on the strength of this flag.
+    return {
+      queue: { queueId: data.queue_id, lastEventId: data.last_event_id ?? -1 },
+      streams: (data.subscriptions ?? []).flatMap(({ stream_id, invite_only }) =>
+        stream_id === undefined ? [] : [{ streamId: stream_id, isPrivate: invite_only === true }],
+      ),
+    };
+  }
+
+  async getEvents({ queueId, lastEventId }: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]> {
+    const { data } = await this.events.GET('/events', {
+      params: { query: { queue_id: queueId, last_event_id: lastEventId } },
+      signal,
+    });
+    return (data!.events ?? []).map(toEvent);
+  }
+
+  async deleteQueue(queueId: string) {
+    await this.bot.DELETE('/events', { body: { queue_id: queueId } });
+  }
+
   async createEmote(name: string, emoteUrl: string) {
     const user = this.user;
     const emojiName = name.toLowerCase();
@@ -101,3 +164,27 @@ export class ZulipRepository implements IZulipInterface {
     });
   }
 }
+
+type RawEvent = { id?: number; type?: string; message?: components['schemas']['MessagesEvent'] };
+
+const toEvent = (event: RawEvent): ZulipEvent => {
+  const id = event.id ?? -1;
+  if (event.type !== 'message' || !event.message) {
+    return { id, type: event.type ?? 'unknown' };
+  }
+
+  const { message } = event;
+  return {
+    id,
+    type: 'message',
+    message: {
+      id: message.id ?? -1,
+      senderId: message.sender_id ?? -1,
+      senderEmail: message.sender_email ?? '',
+      type: message.type === 'private' ? 'private' : 'stream',
+      streamId: message.stream_id,
+      topic: message.subject ?? '',
+      content: message.content ?? '',
+    },
+  };
+};

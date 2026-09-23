@@ -46,6 +46,8 @@ async function bootstrap() {
 
   app.use(json({ limit: '50mb' }));
   app.use(urlencoded({ extended: true, limit: '50mb' }));
+  // Without this Nest never runs `onModuleDestroy` on SIGTERM, and the Zulip event queue would outlive the process.
+  app.enableShutdownHooks();
   await app.listen(port);
   logger.log(`Immich Api is running on: ${await app.getUrl()}`);
 }
