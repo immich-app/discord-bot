@@ -19,10 +19,10 @@ import {
   DiscordMirrorChannel,
   DiscordMirrorError,
   DiscordMirrorErrorKind,
+  DiscordMirrorPage,
   DiscordMirrorSend,
   DiscordMirrorSent,
   DiscordMirrorTarget,
-  DiscordSourceMessage,
   DiscordTeamMember,
   IDiscordMirrorInterface,
 } from 'src/interfaces/discord-mirror.interface';
@@ -121,17 +121,31 @@ const toMirrorError = (error: unknown): DiscordMirrorError => {
   if (error instanceof DiscordAPIError) {
     const code = typeof error.code === 'number' ? error.code : undefined;
     return new DiscordMirrorError(
-      (code === undefined ? undefined : mirrorErrorKinds[code]) ?? 'other',
+      (code === undefined ? undefined : mirrorErrorKinds[code]) ?? (error.status === 413 ? 'too-large' : 'other'),
       code,
       error.message.replaceAll('\n', '; '),
     );
   }
 
   if (error instanceof HTTPError) {
-    return new DiscordMirrorError(error.status === 413 ? 'too-large' : 'other', undefined, `HTTP ${error.status}`);
+    return new DiscordMirrorError('unavailable', undefined, `HTTP ${error.status}`);
   }
 
-  return new DiscordMirrorError('other', undefined, error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  return new DiscordMirrorError(isNetworkFailure(error) ? 'unavailable' : 'other', undefined, message);
+};
+
+/** What @discordjs/rest throws once its own retries of a request that never got an answer run out. */
+const isNetworkFailure = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  return (
+    error.name === 'AbortError' ||
+    error.name === 'TimeoutError' ||
+    (typeof code === 'string' && /^(?:E[A-Z]+|UND_ERR_\w+)$/.test(code))
+  );
 };
 
 const hasCode = (error: unknown, ...codes: number[]) =>
@@ -457,15 +471,24 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
-  async fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordSourceMessage[]> {
+  async fetchMirrorMessagesBefore(
+    channelId: string,
+    beforeId: string | undefined,
+    limit: number,
+  ): Promise<DiscordMirrorPage> {
     try {
       const channel = await bot.channels.fetch(channelId);
       if (!channel?.isTextBased() || channel.isDMBased()) {
         throw new DiscordMirrorError('unknown-channel');
       }
 
-      const messages = await channel.messages.fetch({ after: afterId, limit });
-      return [...messages.values()].filter(isMirrorCandidate).sort(bySnowflake).map(toDiscordSourceMessage);
+      const page = await channel.messages.fetch(beforeId === undefined ? { limit } : { before: beforeId, limit });
+      const messages = [...page.values()].sort(bySnowflake);
+      return {
+        messages: messages.filter(isMirrorCandidate).map(toDiscordSourceMessage),
+        oldestId: messages[0]?.id ?? null,
+        full: messages.length === limit,
+      };
     } catch (error) {
       throw toMirrorError(error);
     }

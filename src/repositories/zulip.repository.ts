@@ -11,6 +11,7 @@ import {
   ZulipMessageUpdate,
   ZulipQueueRegistration,
   ZulipReceivedMessage,
+  ZulipStreamPageQuery,
   ZulipSubscription,
   ZulipUploadRefused,
   ZulipUser,
@@ -219,15 +220,23 @@ export class ZulipRepository implements IZulipInterface {
     return bytes && new File([bytes], name, { type });
   }
 
-  async getStreamMessagesAfter(stream: number, anchor: number, numAfter: number): Promise<ZulipReceivedMessage[]> {
-    const narrow = JSON.stringify([{ operator: 'channel', operand: stream }]);
+  async getStreamMessagesBefore({
+    stream,
+    before,
+    count,
+    excludeSenderId,
+  }: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]> {
+    const narrow = JSON.stringify([
+      { operator: 'channel', operand: stream },
+      ...(excludeSenderId === undefined ? [] : [{ operator: 'sender', operand: excludeSenderId, negated: true }]),
+    ]);
     const { data } = await this.bot.GET('/messages', {
       params: {
         query: {
-          anchor: String(anchor),
+          anchor: before === undefined ? 'newest' : String(before),
           include_anchor: false,
-          num_before: 0,
-          num_after: numAfter,
+          num_before: count,
+          num_after: 0,
           narrow,
           apply_markdown: false,
         },

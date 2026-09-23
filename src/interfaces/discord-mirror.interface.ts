@@ -58,6 +58,9 @@ export type DiscordMirrorTarget = {
 
 export type DiscordTeamMember = { displayName: string; avatarUrl: string; roleIds: string[] };
 
+/** `messages` holds the mirror candidates of the page, oldest first; `oldestId` is the oldest message of any kind. */
+export type DiscordMirrorPage = { messages: DiscordSourceMessage[]; oldestId: string | null; full: boolean };
+
 export type DiscordMirrorErrorKind =
   | 'unknown-webhook'
   | 'unknown-message'
@@ -69,6 +72,7 @@ export type DiscordMirrorErrorKind =
   | 'too-large'
   | 'forum'
   | 'replaced-webhook'
+  | 'unavailable'
   | 'other';
 
 export class DiscordMirrorError extends Error {
@@ -98,6 +102,6 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   unarchiveMirrorThread(threadId: string): Promise<void>;
   /** `undefined` when the guild is not cached or the user is not a member of it. */
   getTeamMember(guildId: string, userId: string): Promise<DiscordTeamMember | undefined>;
-  /** Mirror candidates only, oldest first; `channelId` may be a thread. */
-  fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordSourceMessage[]>;
+  /** The `limit` messages before `beforeId`, or the newest ones; `channelId` may be a thread. */
+  fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
 }

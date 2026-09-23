@@ -27,6 +27,8 @@ export type ZulipUser = { userId: number; fullName: string };
 
 export type ZulipMessagesQuery = { stream: number; topic: string; numBefore: number };
 
+export type ZulipStreamPageQuery = { stream: number; before?: number; count: number; excludeSenderId?: number };
+
 export type ZulipEventQueue = { queueId: string; lastEventId: number };
 
 export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[] };
@@ -123,8 +125,8 @@ export interface IZulipInterface {
    * but a plain `/user_uploads/` path, and for an answer that is not the file.
    */
   downloadUpload(path: string, maxBytes: number): Promise<File | undefined>;
-  /** Up to `numAfter` messages of the stream after `anchor`, oldest first, as raw markdown. */
-  getStreamMessagesAfter(stream: number, anchor: number, numAfter: number): Promise<ZulipReceivedMessage[]>;
+  /** Up to `count` messages of the stream before `before`, or the newest ones, oldest first, as raw markdown. */
+  getStreamMessagesBefore(query: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]>;
   /** Emoji name to its Unicode string, from the realm's static emoji table. */
   getEmojiCodes(): Promise<Record<string, string>>;
 }

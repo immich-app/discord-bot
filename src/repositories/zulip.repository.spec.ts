@@ -78,7 +78,7 @@ describe('ZulipRepository', () => {
       { method: 'deleteMessage', call: () => sut.deleteMessage(1) },
       { method: 'uploadFile', call: () => sut.uploadFile(new File(['x'], 'x.txt')) },
       { method: 'downloadUpload', call: () => sut.downloadUpload('/user_uploads/2/ab/cd/x.txt', 10) },
-      { method: 'getStreamMessagesAfter', call: () => sut.getStreamMessagesAfter(107, 1, 10) },
+      { method: 'getStreamMessagesBefore', call: () => sut.getStreamMessagesBefore({ stream: 107, count: 10 }) },
       { method: 'getEmojiCodes', call: () => sut.getEmojiCodes() },
     ])('should throw a clear error from $method', async ({ call }) => {
       await expect(call()).rejects.toThrow('Zulip client not initialised');
@@ -1120,12 +1120,12 @@ describe('ZulipRepository', () => {
     });
   });
 
-  describe('getStreamMessagesAfter', () => {
+  describe('getStreamMessagesBefore', () => {
     beforeEach(async () => {
       await sut.init(config);
     });
 
-    it('should ask for the messages of the whole stream after the anchor, oldest first, as raw markdown', async () => {
+    it('should ask for the messages of the stream before the anchor, leaving out a sender, as raw markdown', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
@@ -1146,7 +1146,9 @@ describe('ZulipRepository', () => {
         }),
       );
 
-      await expect(sut.getStreamMessagesAfter(120, 480, 100)).resolves.toEqual([
+      await expect(
+        sut.getStreamMessagesBefore({ stream: 120, before: 482, count: 100, excludeSenderId: 9 }),
+      ).resolves.toEqual([
         {
           id: 481,
           senderId: 12,
@@ -1166,13 +1168,26 @@ describe('ZulipRepository', () => {
       const url = new URL(request(0).url);
       expect(url.pathname).toBe('/api/v1/messages');
       expect(Object.fromEntries(url.searchParams)).toEqual({
-        anchor: '480',
+        anchor: '482',
         include_anchor: 'false',
-        num_before: '0',
-        num_after: '100',
-        narrow: JSON.stringify([{ operator: 'channel', operand: 120 }]),
+        num_before: '100',
+        num_after: '0',
+        narrow: JSON.stringify([
+          { operator: 'channel', operand: 120 },
+          { operator: 'sender', operand: 9, negated: true },
+        ]),
         apply_markdown: 'false',
       });
+    });
+
+    it('should start from the newest message of the whole stream without an anchor', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', messages: [] }));
+
+      await expect(sut.getStreamMessagesBefore({ stream: 120, count: 100 })).resolves.toEqual([]);
+
+      const url = new URL(request(0).url);
+      expect(url.searchParams.get('anchor')).toBe('newest');
+      expect(url.searchParams.get('narrow')).toBe(JSON.stringify([{ operator: 'channel', operand: 120 }]));
     });
   });
 

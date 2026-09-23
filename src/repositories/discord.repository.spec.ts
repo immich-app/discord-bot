@@ -43,6 +43,9 @@ const apiError = (code: number, status = 400) =>
     body: { content: 'secret content' },
   });
 
+/** What @discordjs/rest hands on for an answer that is not Discord's JSON, such as a proxy's error page. */
+const proxyPage = new ArrayBuffer(0) as unknown as ConstructorParameters<typeof DiscordAPIError>[0];
+
 const everyone = { id: guildId };
 const me = { id: botUserId };
 
@@ -284,7 +287,7 @@ describe(DiscordRepository.name, () => {
     it('should not remember other failures', async () => {
       channel.fetchWebhooks.mockRejectedValueOnce(new HTTPError(502, 'Bad Gateway', 'GET', secretUrl, {}));
 
-      await expect(sut.ensureMirrorWebhook(channelId)).rejects.toMatchObject({ kind: 'other' });
+      await expect(sut.ensureMirrorWebhook(channelId)).rejects.toMatchObject({ kind: 'unavailable' });
       await resolveWebhook();
       expect(channel.fetchWebhooks).toHaveBeenCalledTimes(2);
     });
@@ -392,7 +395,7 @@ describe(DiscordRepository.name, () => {
 
     it.each([
       [apiError(40_005, 413), 'too-large', 40_005],
-      [new HTTPError(413, 'Payload Too Large', 'POST', secretUrl, {}), 'too-large', undefined],
+      [new DiscordAPIError(proxyPage, undefined!, 413, 'POST', secretUrl, {}), 'too-large', undefined],
       [apiError(220_001), 'forum', 220_001],
       [apiError(220_002), 'forum', 220_002],
       [apiError(220_003), 'forum', 220_003],
@@ -401,7 +404,11 @@ describe(DiscordRepository.name, () => {
       [apiError(160_005, 403), 'locked', 160_005],
       [apiError(10_003, 404), 'unknown-channel', 10_003],
       [apiError(50_035), 'other', 50_035],
-      [new TypeError('fetch failed'), 'other', undefined],
+      [new HTTPError(503, 'Service Unavailable', 'POST', secretUrl, {}), 'unavailable', undefined],
+      [new DOMException('This operation was aborted', 'AbortError'), 'unavailable', undefined],
+      [Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }), 'unavailable', undefined],
+      [Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }), 'unavailable', undefined],
+      [new TypeError('Cannot read properties of undefined'), 'other', undefined],
     ])('should map %s', async (error, kind, code) => {
       webhook.send.mockRejectedValue(error);
 
@@ -639,7 +646,7 @@ describe(DiscordRepository.name, () => {
     });
   });
 
-  describe('fetchMirrorMessagesAfter', () => {
+  describe('fetchMirrorMessagesBefore', () => {
     const makeMessage = (id: string, overrides: Record<string, unknown> = {}) => ({
       id,
       guildId,
@@ -668,34 +675,46 @@ describe(DiscordRepository.name, () => {
       ...overrides,
     });
 
-    it('should return the mirror candidates after the anchor, oldest first', async () => {
+    it('should return the candidates before the anchor, oldest first, and the oldest message of any kind', async () => {
       channel.messages.fetch.mockResolvedValue(
         new Collection([
           ['1000000000000000003', makeMessage('1000000000000000003')],
-          ['1000000000000000002', makeMessage('1000000000000000002', { webhookId: '700000000000000001' })],
-          ['999999999999999999', makeMessage('999999999999999999')],
+          ['1000000000000000002', makeMessage('1000000000000000002')],
+          ['999999999999999999', makeMessage('999999999999999999', { webhookId: '700000000000000001' })],
         ]),
       );
 
-      const messages = await sut.fetchMirrorMessagesAfter(channelId, '999999999999999990', 50);
+      const page = await sut.fetchMirrorMessagesBefore(channelId, '1000000000000000009', 3);
 
-      expect(channel.messages.fetch).toHaveBeenCalledWith({ after: '999999999999999990', limit: 50 });
-      expect(messages.map(({ id, content }) => [id, content])).toEqual([
-        ['999999999999999999', 'message 999999999999999999'],
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ before: '1000000000000000009', limit: 3 });
+      expect(page.messages.map(({ id, content }) => [id, content])).toEqual([
+        ['1000000000000000002', 'message 1000000000000000002'],
         ['1000000000000000003', 'message 1000000000000000003'],
       ]);
+      expect(page).toMatchObject({ oldestId: '999999999999999999', full: true });
+    });
+
+    it('should read the newest messages without an anchor', async () => {
+      channel.messages.fetch.mockResolvedValue(new Collection());
+
+      await expect(sut.fetchMirrorMessagesBefore(channelId, undefined, 100)).resolves.toEqual({
+        messages: [],
+        oldestId: null,
+        full: false,
+      });
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ limit: 100 });
     });
 
     it('should refuse a channel without messages', async () => {
       bot.channels.fetch.mockResolvedValue({ isTextBased: () => false, isDMBased: () => false });
-      await expect(sut.fetchMirrorMessagesAfter(channelId, '1', 50)).rejects.toMatchObject({
+      await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({
         kind: 'unknown-channel',
       });
     });
 
     it('should map errors', async () => {
       channel.messages.fetch.mockRejectedValue(apiError(50_001, 403));
-      await expect(sut.fetchMirrorMessagesAfter(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
+      await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
     });
   });
 });
