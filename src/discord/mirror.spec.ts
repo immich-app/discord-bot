@@ -38,6 +38,8 @@ describe(DiscordMirrorEvents.name, () => {
       | 'onDiscordThreadRenamed'
       | 'onDiscordThreadDeleted'
       | 'onDiscordReady'
+      | 'onDiscordDisconnected'
+      | 'onDiscordResumed'
     >
   >;
 
@@ -51,6 +53,8 @@ describe(DiscordMirrorEvents.name, () => {
       onDiscordThreadRenamed: vitest.fn(),
       onDiscordThreadDeleted: vitest.fn(),
       onDiscordReady: vitest.fn().mockResolvedValue(undefined),
+      onDiscordDisconnected: vitest.fn(),
+      onDiscordResumed: vitest.fn(),
     };
     vitest.mocked(isMirrorCandidate).mockReturnValue(true);
     vitest.mocked(mirrorLocation).mockReturnValue({ channelId: PARENT, threadId: THREAD, threadName: 'Crash' });
@@ -74,6 +78,9 @@ describe(DiscordMirrorEvents.name, () => {
       threadUpdate: 0,
       threadDelete: 0,
       shardReady: Number.MAX_SAFE_INTEGER,
+      shardReconnecting: Number.MAX_SAFE_INTEGER,
+      shardDisconnect: Number.MAX_SAFE_INTEGER,
+      shardResume: Number.MAX_SAFE_INTEGER,
     });
   });
 
@@ -171,6 +178,16 @@ describe(DiscordMirrorEvents.name, () => {
       'The Discord-Zulip mirror could not check its Discord channels',
       expect.any(Error),
     );
+  });
+
+  it('should tell the mirror as soon as the gateway connection drops, and when it resumes', () => {
+    sut.onShardReconnecting();
+    sut.onShardDisconnect();
+    expect(mirror.onDiscordDisconnected).toHaveBeenCalledTimes(2);
+    expect(mirror.onDiscordResumed).not.toHaveBeenCalled();
+
+    sut.onShardResume();
+    expect(mirror.onDiscordResumed).toHaveBeenCalledOnce();
   });
 
   it('should log a handler that throws instead of passing it to discordx', () => {

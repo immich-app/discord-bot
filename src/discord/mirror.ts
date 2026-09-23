@@ -87,6 +87,21 @@ export class DiscordMirrorEvents {
       .catch((error) => this.logger.error('The Discord-Zulip mirror could not check its Discord channels', error));
   }
 
+  @On({ event: 'shardReconnecting' })
+  onShardReconnecting() {
+    this.handle('shardReconnecting', () => this.mirror.onDiscordDisconnected());
+  }
+
+  @On({ event: 'shardDisconnect' })
+  onShardDisconnect() {
+    this.handle('shardDisconnect', () => this.mirror.onDiscordDisconnected());
+  }
+
+  @On({ event: 'shardResume' })
+  onShardResume() {
+    this.handle('shardResume', () => this.mirror.onDiscordResumed());
+  }
+
   private handle(event: string, run: () => void) {
     try {
       run();

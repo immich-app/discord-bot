@@ -625,7 +625,10 @@ describe(MirrorService.name, () => {
       });
       await start();
 
-      expect(error()).toHaveBeenCalledWith(`Dev: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001)`);
+      expect(error()).toHaveBeenCalledWith(
+        `Dev: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001), so the pair is off`,
+      );
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
       await fromZulip(zulipMessage());
       expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
       await fromZulip(zulipMessage({ id: 1002, streamId: FORUM_STREAM, topic: 'idea' }));
@@ -686,6 +689,104 @@ describe(MirrorService.name, () => {
       );
       expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
       expect(sut.handlesChannel(OFF_TOPIC_CHANNEL)).toBe(true);
+    });
+
+    it.each([
+      [
+        'is denied View Channel',
+        () =>
+          discord.getMirrorChannel.mockResolvedValue({
+            ...mirrorChannel(DEV_CHANNEL),
+            missingPermissions: ['ViewChannel'],
+          }),
+        `Dev: the bot is missing ViewChannel in Discord channel ${DEV_CHANNEL}, so the pair is off`,
+      ],
+      [
+        'is denied Manage Webhooks',
+        () =>
+          discord.getMirrorChannel.mockResolvedValue({
+            ...mirrorChannel(DEV_CHANNEL),
+            missingPermissions: ['ManageWebhooks', 'EmbedLinks'],
+          }),
+        `Dev: the bot is missing ManageWebhooks, EmbedLinks in Discord channel ${DEV_CHANNEL}, so the pair is off`,
+      ],
+      [
+        'loses access to the channel',
+        () => discord.getMirrorChannel.mockRejectedValue(new DiscordMirrorError('forbidden', 50_001)),
+        `Dev: could not check Discord channel ${DEV_CHANNEL}: forbidden (50001), so the pair is off`,
+      ],
+    ])('should stop mirroring both ways within ten minutes once the bot %s', async (_, arrange, reason) => {
+      vitest.useFakeTimers();
+      await start();
+      arrange();
+
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
+      await fromZulip(zulipMessage());
+      await fromDiscord(discordMessage());
+
+      expect(vitest.mocked(Logger.prototype[reason.includes('forbidden') ? 'error' : 'warn'])).toHaveBeenCalledWith(
+        reason,
+      );
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should turn a pair on again once its channel can be mirrored again, and catch up', async () => {
+      vitest.useFakeTimers();
+      seedRow({ zulipMessageId: 1000 });
+      await start();
+      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
+        ...mirrorChannel(channelId),
+        everyoneCanView: channelId === DEV_CHANNEL,
+      }));
+      await vitest.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
+      zulip.getStreamMessagesBefore.mockResolvedValue([zulipMessage({ id: 1001, content: 'posted while off' })]);
+
+      discord.getMirrorChannel.mockImplementation(async (channelId) => mirrorChannel(channelId));
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
+      await sut.whenIdle();
+
+      expect(error()).toHaveBeenCalledExactlyOnceWith(
+        `Dev: Discord channel ${DEV_CHANNEL} is visible to @everyone and the pair is not marked public, so the pair is off`,
+      );
+      expect(log()).toHaveBeenCalledWith(
+        `Dev: Discord channel ${DEV_CHANNEL} can be mirrored again, so the pair is on`,
+      );
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(true);
+      expect(sent(0)).toEqual(
+        expect.objectContaining({ channelId: DEV_CHANNEL, content: expect.stringMatching(/^posted while off\n/) }),
+      );
+    });
+
+    it('should set up a pair whose first check failed for now at the next check', async () => {
+      vitest.useFakeTimers();
+      discord.getMirrorChannel.mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'));
+      await start();
+      await fromZulip(zulipMessage());
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
+      await fromZulip(zulipMessage({ id: 1002, content: 'later' }));
+
+      expect(discord.ensureMirrorWebhook).toHaveBeenCalledWith(DEV_CHANNEL);
+      expect(sent(0)).toEqual(expect.objectContaining({ channelId: DEV_CHANNEL, content: 'later' }));
+    });
+
+    it('should warn about the same missing permissions only once', async () => {
+      vitest.useFakeTimers();
+      discord.getMirrorChannel.mockImplementation(async (channelId) => ({
+        ...mirrorChannel(channelId),
+        missingPermissions: channelId === DEV_CHANNEL ? ['EmbedLinks'] : [],
+      }));
+      await start();
+      await sut.onDiscordReady();
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(warn()).toHaveBeenCalledExactlyOnceWith(
+        `Dev: the bot is missing EmbedLinks in Discord channel ${DEV_CHANNEL}`,
+      );
     });
 
     it('should keep a pair on while its channel cannot be checked', async () => {
@@ -1161,7 +1262,7 @@ describe(MirrorService.name, () => {
       discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('unknown-webhook', 10_015));
       await fromZulip(zulipMessage());
 
-      expect(discord.ensureMirrorWebhook).toHaveBeenCalledTimes(4);
+      expect(discord.ensureMirrorWebhook).toHaveBeenCalledWith(DEV_CHANNEL);
       expect(discord.ensureMirrorWebhook).toHaveBeenLastCalledWith(DEV_CHANNEL);
       expect(discord.sendMirrorMessage).toHaveBeenCalledTimes(2);
       expect(db.messages).toHaveLength(1);
@@ -1169,7 +1270,7 @@ describe(MirrorService.name, () => {
       discord.sendMirrorMessage.mockRejectedValueOnce(new DiscordMirrorError('unknown-webhook', 10_015));
       await fromZulip(zulipMessage({ id: 1002 }));
 
-      expect(discord.ensureMirrorWebhook).toHaveBeenCalledTimes(4);
+      expect(discord.ensureMirrorWebhook).toHaveBeenCalledWith(DEV_CHANNEL);
       expect(error()).toHaveBeenCalledWith(
         `Dev: the Zulip mirror webhook in #dev (${DEV_CHANNEL}) was deleted again; deny the bot Manage Webhooks there to stop the mirror, or wait an hour`,
       );
@@ -2827,6 +2928,43 @@ describe(MirrorService.name, () => {
       await vitest.advanceTimersByTimeAsync(60_000);
       await sut.whenIdle();
       expect(posted()).toEqual(['first', 'first']);
+    });
+
+    it('should create nothing live once the gateway drops, until catch-up has read what the new session missed', async () => {
+      seedHighWaters();
+      await start();
+      const missed = missedOnDiscord({ content: 'missed while disconnected' });
+      const early = missedOnDiscord({ id: snowflake(Date.now() - 1000), content: 'before shardReady' });
+      onDiscord(DEV_CHANNEL, missed, early);
+
+      zulipHistory.push(missedOnZulip({ content: 'team' }));
+
+      sut.onDiscordDisconnected();
+      await fromDiscord(early);
+      await fromZulip(zulipHistory[0]);
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['missed while disconnected', 'before shardReady']);
+      expect(contents()).toEqual(['team']);
+    });
+
+    it('should not let a catch-up that ran while the gateway was down open the way for live creates', async () => {
+      seedHighWaters();
+      await start();
+      sut.onDiscordDisconnected();
+      await register();
+
+      await fromZulip(missedOnZulip({ content: 'team' }));
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      zulipHistory.push(missedOnZulip({ content: 'team' }));
+      sut.onDiscordResumed();
+      await sut.whenIdle();
+      expect(contents()).toEqual(['team']);
     });
 
     it('should give up on a message that keeps failing, so that the rest can follow', async () => {

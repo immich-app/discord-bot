@@ -97,6 +97,10 @@ type PairState = {
   pair: EnabledPair;
   queue: SerialQueue;
   status: 'pending' | 'ready' | 'disabled';
+  /** What turned the pair off, so that a check finding the same again does not log it again. */
+  offReason?: string;
+  /** The permissions last warned about, for the same reason. */
+  missingWarned?: string;
   guildId?: string;
   channelName?: string;
   announced: boolean;
@@ -251,7 +255,6 @@ const zulipOriginRow = (
   zulipAttachments: null,
 });
 
-/** Why the pair must be off with this channel, or `undefined`. */
 const channelProblem = (pair: EnabledPair, channel: DiscordMirrorChannel | undefined) => {
   if (!channel || !Constants.Discord.Servers.includes(channel.guildId)) {
     return 'does not exist or is not in an Immich server';
@@ -292,6 +295,7 @@ export class MirrorService implements OnModuleDestroy {
   private emojiRetryAt = 0;
   private emotes = new Map<string, { byName: Map<string, string>; expiresAt: number }>();
   private zulipRegistered = false;
+  private discordConnected = false;
   private channelCheck?: NodeJS.Timeout;
 
   constructor(
@@ -348,15 +352,31 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   async onDiscordReady() {
+    this.discordConnected = true;
     for (const state of this.pairs) {
       this.lostTrack(state);
     }
     for (const state of this.pairs) {
-      try {
-        await this.checkDiscordChannel(state);
-      } catch (error) {
-        this.fail(`${state.pair.key}: could not check Discord channel ${state.pair.discordChannelId}`, error);
-      }
+      await this.checkDiscordChannel(state);
+      this.maybeCatchUp(state);
+      this.resume(state);
+    }
+  }
+
+  /**
+   * Discord does not replay what a new session missed, and can deliver new messages before `shardReady` says the
+   * session is ready, so nothing is created live from the moment the connection drops until catch-up has run.
+   */
+  onDiscordDisconnected() {
+    this.discordConnected = false;
+    for (const state of this.pairs) {
+      this.lostTrack(state);
+    }
+  }
+
+  onDiscordResumed() {
+    this.discordConnected = true;
+    for (const state of this.pairs) {
       this.maybeCatchUp(state);
       this.resume(state);
     }
@@ -482,25 +502,34 @@ export class MirrorService implements OnModuleDestroy {
     return parseCommand(content, this.zulipService.ownUser?.fullName ?? '').status !== 'ignored';
   }
 
-  private async checkDiscordChannel(state: PairState) {
+  /**
+   * A webhook posts whatever the bot's permissions, so the pair goes off as soon as the bot loses the channel. Only
+   * `setUp` turns a pair on, which a pair already on skips: it would recreate a deleted webhook outside the hourly limit.
+   */
+  private async inspectDiscordChannel(state: PairState, setUp: boolean) {
     const { pair } = state;
     const channel = await this.discordMirror.getMirrorChannel(pair.discordChannelId);
     const problem = channelProblem(pair, channel);
     if (!channel || problem) {
-      state.status = 'disabled';
-      this.logger.error(`${pair.key}: Discord channel ${pair.discordChannelId} ${problem}, so the pair is off`);
+      this.turnOff(
+        state,
+        'error',
+        `${pair.key}: Discord channel ${pair.discordChannelId} ${problem}, so the pair is off`,
+      );
       return;
     }
 
     const missing = channel.missingPermissions;
-    const blocking = missing.includes('ViewChannel') || missing.includes('ManageWebhooks');
-    if (missing.length > 0) {
-      this.logger.warn(
-        `${pair.key}: the bot is missing ${missing.join(', ')} in Discord channel ${pair.discordChannelId}${blocking ? ', so the pair is off' : ''}`,
-      );
+    const missingMessage = `${pair.key}: the bot is missing ${missing.join(', ')} in Discord channel ${pair.discordChannelId}`;
+    if (missing.includes('ViewChannel') || missing.includes('ManageWebhooks')) {
+      this.turnOff(state, 'warn', `${missingMessage}, so the pair is off`);
+      return;
     }
-    if (blocking) {
-      state.status = 'disabled';
+    if (missing.length > 0 && state.missingWarned !== missingMessage) {
+      this.logger.warn(missingMessage);
+    }
+    state.missingWarned = missing.length > 0 ? missingMessage : undefined;
+    if (!setUp) {
       return;
     }
 
@@ -514,7 +543,11 @@ export class MirrorService implements OnModuleDestroy {
     }
     await this.verifyTeamMembers(channel.guildId);
 
+    if (state.status === 'disabled') {
+      this.logger.log(`${pair.key}: Discord channel ${pair.discordChannelId} can be mirrored again, so the pair is on`);
+    }
     state.status = 'ready';
+    state.offReason = undefined;
     if (!state.announced) {
       state.announced = true;
       const topic = pair.mainTopic === null ? '' : ` (main topic "${pair.mainTopic}")`;
@@ -524,18 +557,42 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
-  /** Who can see a channel, and where it sits, can change without a new gateway session. */
+  private async checkDiscordChannel(state: PairState, setUp = true) {
+    try {
+      await this.inspectDiscordChannel(state, setUp);
+    } catch (error) {
+      const failed = `${state.pair.key}: could not check Discord channel ${state.pair.discordChannelId}`;
+      if (isMirrorError(error, 'forbidden')) {
+        this.turnOff(state, 'error', `${failed}: ${describe(error)}, so the pair is off`);
+      } else {
+        this.fail(failed, error);
+      }
+    }
+  }
+
+  private turnOff(state: PairState, level: 'warn' | 'error', reason: string) {
+    if (state.status !== 'disabled' || state.offReason !== reason) {
+      this.logger[level](reason);
+    }
+    state.status = 'disabled';
+    state.offReason = reason;
+  }
+
+  /** Who can see a channel, where it sits and what the bot may do there can all change within a gateway session. */
   private async recheckChannels() {
-    for (const state of this.pairs.filter((state) => this.discordReady(state))) {
-      const { pair } = state;
-      try {
-        const problem = channelProblem(pair, await this.discordMirror.getMirrorChannel(pair.discordChannelId));
-        if (problem) {
-          state.status = 'disabled';
-          this.logger.error(`${pair.key}: Discord channel ${pair.discordChannelId} ${problem}, so the pair is off`);
-        }
-      } catch (error) {
-        this.fail(`${pair.key}: could not check Discord channel ${pair.discordChannelId}`, error);
+    if (!this.discordMirror.isReady()) {
+      return;
+    }
+    for (const state of this.pairs) {
+      if (state.status === 'ready') {
+        await this.checkDiscordChannel(state, false);
+        continue;
+      }
+      await this.checkDiscordChannel(state);
+      if (this.discordReady(state)) {
+        this.lostTrack(state);
+        this.maybeCatchUp(state);
+        this.resume(state);
       }
     }
   }
@@ -616,7 +673,7 @@ export class MirrorService implements OnModuleDestroy {
         `${pair.key}: catching up ${plural(recentDiscord.length, 'Discord message')} and ${plural(recentZulip.length, 'Zulip message')}`,
       );
     }
-    state.caughtUp = discord.complete && zulip.complete;
+    state.caughtUp = discord.complete && zulip.complete && this.discordConnected;
     state.queue.pushNext([
       ...recentDiscord.map((dto) => ({
         label: `Discord message ${dto.id}`,
