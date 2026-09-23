@@ -3070,6 +3070,29 @@ describe(MirrorService.name, () => {
         expect(discord.removeMirrorReaction).not.toHaveBeenCalled();
       });
 
+      it('should read the emotes again, at most once a minute, for a realm emoji they do not have yet', async () => {
+        vitest.useFakeTimers({ toFake: ['Date'] });
+        const unsynced = { name: 'unsynced', code: '4', type: 'realm_emoji', userId: 20 };
+        zulipReactions([unsynced]);
+
+        await reactOnZulip(70);
+        zulip.listEmoji.mockResolvedValue([
+          { id: '3', name: 'fire2', deactivated: false },
+          { id: '4', name: 'unsynced', deactivated: false },
+        ]);
+        await reactOnZulip(70);
+        expect(discord.addMirrorReaction).not.toHaveBeenCalled();
+
+        vitest.setSystemTime(Date.now() + 61_000);
+        await reactOnZulip(70);
+
+        expect(discord.addMirrorReaction).toHaveBeenCalledExactlyOnceWith(target, {
+          id: '500000000000000004',
+          name: 'unsynced',
+          animated: false,
+        });
+      });
+
       it('should change none of its reactions while the emotes cannot be matched', async () => {
         discord.getMirrorReactions.mockResolvedValue([
           { emoji: { id: EMOTE, name: 'fire', animated: false }, count: 2, me: true },

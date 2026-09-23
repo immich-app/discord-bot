@@ -106,7 +106,7 @@ const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const FILE_TRANSFER_BUDGET_MS = 120_000;
 const DISCORD_MESSAGE_LENGTH = 2000;
 const URLS = /https?:\/\/[^\s<>)]+/g;
-const CUSTOM_EMOTE = /<a?:\w+:\d+>/;
+const CUSTOM_EMOTE_IDS = /<a?:\w+:(\d+)>/g;
 const CHANNEL_MENTION = /<#(\d+)>/g;
 const THREAD_DELETED_NOTICE = 'The Discord thread for this topic was deleted; the next message here starts a new one.';
 
@@ -337,7 +337,7 @@ export class MirrorService implements OnModuleDestroy {
   private failedCreates = new Map<string, number>();
   private emojiCodes?: ZulipEmojiCodes;
   private emojiRetryAt = 0;
-  private emotes = new Map<string, { maps: EmoteMaps; expiresAt: number }>();
+  private emotes = new Map<string, { maps: EmoteMaps; loadedAt: number }>();
   /** Reaction syncs queued and not started yet, which another change to the same message need not queue again. */
   private pendingReactions = new Set<string>();
   private active = false;
@@ -1400,7 +1400,12 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     const text = [dto.content, ...dto.forwarded, dto.replyTo?.content ?? ''].join('\n');
-    const emotes = CUSTOM_EMOTE.test(text) ? (await this.emoteMaps(dto.guildId))?.zulipByEmoteId : undefined;
+    const emoteIds = [...text.matchAll(CUSTOM_EMOTE_IDS)].map(([, id]) => id);
+    const emotes =
+      emoteIds.length > 0
+        ? (await this.emoteMaps(dto.guildId, (maps) => emoteIds.some((id) => !maps.zulipByEmoteId.has(id))))
+            ?.zulipByEmoteId
+        : undefined;
     const channels = new Map<string, ZulipChannel>();
     for (const [, channelId] of text.matchAll(CHANNEL_MENTION)) {
       const channel = channels.has(channelId) ? undefined : await this.zulipChannelOf(channelId);
@@ -1557,9 +1562,11 @@ export class MirrorService implements OnModuleDestroy {
    * The names the emote sync gives the emotes, so that a renamed one (`fire2`) is found by the name it has on Zulip.
    * `undefined` while either side cannot be read, which a reaction sync must not take for an emote nobody uses.
    */
-  private async emoteMaps(guildId: string): Promise<EmoteMaps | undefined> {
+  /** An emote synced or uploaded since the maps were read is found by reading them again, at most once a minute. */
+  private async emoteMaps(guildId: string, lacks?: (maps: EmoteMaps) => boolean): Promise<EmoteMaps | undefined> {
     const cached = this.emotes.get(guildId);
-    if (cached && cached.expiresAt > Date.now()) {
+    const age = cached ? Date.now() - cached.loadedAt : Infinity;
+    if (cached && age < HOUR && (age < MINUTE || !lacks?.(cached.maps))) {
       return cached.maps;
     }
     const codes = await this.emojiTables();
@@ -1578,7 +1585,7 @@ export class MirrorService implements OnModuleDestroy {
       this.fail(`Could not match the Discord emotes of guild ${guildId} with the Zulip realm emoji`, error);
       return undefined;
     }
-    this.emotes.set(guildId, { maps, expiresAt: Date.now() + HOUR });
+    this.emotes.set(guildId, { maps, loadedAt: Date.now() });
     return maps;
   }
 
@@ -1615,7 +1622,13 @@ export class MirrorService implements OnModuleDestroy {
 
     const needsEmoji = refs.emojiNames.length > 0;
     const unicode = needsEmoji ? (await this.emojiTables())?.unicode : undefined;
-    const custom = needsEmoji ? (await this.emoteMaps(guildId))?.discordByZulipName : undefined;
+    const custom = needsEmoji
+      ? (
+          await this.emoteMaps(guildId, (maps) =>
+            refs.emojiNames.some((name) => !maps.discordByZulipName.has(name) && unicode?.[name] === undefined),
+          )
+        )?.discordByZulipName
+      : undefined;
     return toDiscordMirrorContent(raw, {
       realmOrigin: this.realmOrigin,
       messages,
@@ -2780,18 +2793,25 @@ export class MirrorService implements OnModuleDestroy {
     const copies =
       row.origin === 'zulip' ? await this.database.getMirrorMessagesByZulipIds([row.zulipMessageId]) : [row];
     const codes = await this.emojiTables();
-    const emotes = await this.emoteMaps(state.guildId!);
-    if (!codes || !emotes) {
+    if (!codes) {
       return;
     }
     const wanted = new Map<string, ZulipReactionEmoji>();
     try {
+      const read: Awaited<ReturnType<typeof this.readDiscordReactions>> = [];
       for (const copy of copies) {
-        for (const { emoji, count, me } of await this.readDiscordReactions(copy)) {
-          const zulipEmoji = count > (me ? 1 : 0) ? toZulipReactionEmoji(emoji, codes.names, emotes) : undefined;
-          if (zulipEmoji) {
-            wanted.set(zulipReactionKey(zulipEmoji), zulipEmoji);
-          }
+        read.push(...(await this.readDiscordReactions(copy)));
+      }
+      const emotes = await this.emoteMaps(state.guildId!, (maps) =>
+        read.some(({ emoji }) => emoji.id !== null && !maps.zulipByEmoteId.has(emoji.id)),
+      );
+      if (!emotes) {
+        return;
+      }
+      for (const { emoji, count, me } of read) {
+        const zulipEmoji = count > (me ? 1 : 0) ? toZulipReactionEmoji(emoji, codes.names, emotes) : undefined;
+        if (zulipEmoji) {
+          wanted.set(zulipReactionKey(zulipEmoji), zulipEmoji);
         }
       }
       const self = this.zulipService.ownUser?.userId;
@@ -2856,14 +2876,16 @@ export class MirrorService implements OnModuleDestroy {
     if (!row || this.holdFor(state, 'Discord', label, () => this.reactionsToDiscord(state, zulipMessageId))) {
       return;
     }
-    const emotes = await this.emoteMaps(state.guildId!);
-    if (!emotes) {
-      return;
-    }
     const target = toTarget(row);
     try {
       const self = this.zulipService.ownUser?.userId;
       const { reactions = [] } = await this.retryZulip(() => this.zulip.getMessage(zulipMessageId));
+      const emotes = await this.emoteMaps(state.guildId!, (maps) =>
+        reactions.some(({ type, name }) => type === 'realm_emoji' && !maps.discordByZulipName.has(name)),
+      );
+      if (!emotes) {
+        return;
+      }
       const wanted = new Map<string, DiscordReactionEmoji>();
       for (const { userId, ...emoji } of reactions) {
         const discordEmoji = userId === self ? undefined : toDiscordReactionEmoji(emoji, emotes);
