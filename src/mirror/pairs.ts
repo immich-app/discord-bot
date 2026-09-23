@@ -1,3 +1,4 @@
+import { Constants } from 'src/constants';
 import { shortenCodePoints, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH } from 'src/format';
 import { MirrorLink } from 'src/schema';
 
@@ -28,3 +29,6 @@ export const mainTopicProblem = (topic: string) =>
   topic.trim() === '' || topic.trim() !== topic || [...topic].length > ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH
     ? `the main topic must be 1 to ${ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH} characters with no surrounding whitespace`
     : undefined;
+
+export const holdsIdentityRole = (guildId: string, roleIds: string[]) =>
+  (Constants.Discord.MirrorIdentityRoles[guildId] ?? []).some((roleId) => roleIds.includes(roleId));

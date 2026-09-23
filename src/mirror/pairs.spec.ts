@@ -1,4 +1,5 @@
-import { defaultMainTopic, mainTopicProblem, toEnabledPair } from 'src/mirror/pairs';
+import { Constants } from 'src/constants';
+import { defaultMainTopic, holdsIdentityRole, mainTopicProblem, toEnabledPair } from 'src/mirror/pairs';
 import { MirrorLink } from 'src/schema';
 import { describe, expect, it } from 'vitest';
 
@@ -45,5 +46,16 @@ describe('mainTopicProblem', () => {
 
   it.each(['#dev', 'general chat', 'x'.repeat(58)])('should accept %j', (topic) => {
     expect(mainTopicProblem(topic)).toBeUndefined();
+  });
+});
+
+describe('holdsIdentityRole', () => {
+  it.each([
+    { server: 'production', guildId: '979116623879368755', roleIds: [Constants.Discord.Roles.Immich], expected: true },
+    { server: 'dev', guildId: '1369624002863173762', roleIds: ['1369628185616187414'], expected: true },
+    { server: 'dev', guildId: '1369624002863173762', roleIds: [Constants.Discord.Roles.Team], expected: false },
+    { server: 'unknown', guildId: '1', roleIds: [Constants.Discord.Roles.Team], expected: false },
+  ])('should be $expected for those roles on the $server server', ({ guildId, roleIds, expected }) => {
+    expect(holdsIdentityRole(guildId, roleIds)).toBe(expected);
   });
 });

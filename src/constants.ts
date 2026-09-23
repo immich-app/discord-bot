@@ -90,6 +90,12 @@ const discordRoles = {
   Yucca: '1437440371587158140',
 };
 
+/** Per server, the roles whose members may appear as themselves on Discord through the mirror. */
+const mirrorIdentityRoles: Record<string, string[]> = {
+  '979116623879368755': [discordRoles.Team, discordRoles.Immich],
+  '1369624002863173762': ['1369628185616187414', '1491827880932540426'],
+};
+
 const discordChannels = {
   SupportCrewDraftAnnouncements: '1073000522338017381',
   DevFocusTopic: '1045707766754451486',
@@ -230,6 +236,7 @@ export const Constants = {
     Categories: discordCategories,
     Servers: ['979116623879368755', '1369624002863173762'],
     EmoteSyncServer: { id: '979116623879368755', name: 'Immich' },
+    MirrorIdentityRoles: mirrorIdentityRoles,
   },
   Cron: {
     ImmichBirthday: '36 4 3 2 *',

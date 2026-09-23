@@ -44,7 +44,7 @@ import {
   toZulipTopicName,
 } from 'src/mirror/names';
 import { isConnectFailure } from 'src/mirror/network';
-import { EnabledPair, toEnabledPair } from 'src/mirror/pairs';
+import { EnabledPair, holdsIdentityRole, toEnabledPair } from 'src/mirror/pairs';
 import { SerialQueue } from 'src/mirror/queue';
 import {
   escapeDiscordInline,
@@ -1136,9 +1136,8 @@ export class MirrorService implements OnModuleDestroy {
 
   private async verifiedMember(guildId: string, zulipId: number, discordId: string) {
     const member = await this.discordMirror.getTeamMember(guildId, discordId);
-    const { Team, Immich } = Constants.Discord.Roles;
     const verified: DiscordTeamMember | undefined =
-      member && (member.roleIds.includes(Team) || member.roleIds.includes(Immich)) ? member : undefined;
+      member && holdsIdentityRole(guildId, member.roleIds) ? member : undefined;
     const maps = this.membersOf(guildId);
     this.memberCheckedAt.set(`${guildId}:${zulipId}`, Date.now());
     if (verified) {
