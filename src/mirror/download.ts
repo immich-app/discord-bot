@@ -1,6 +1,5 @@
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 
-/** The origins Discord serves attachments from; nothing else is fetched. */
 export const DISCORD_ATTACHMENT_ORIGINS = new Set(['https://cdn.discordapp.com', 'https://media.discordapp.net']);
 
 /** The body, or `undefined` as soon as it runs past `maxBytes`. */

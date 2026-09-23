@@ -27,7 +27,6 @@ export class SerialQueue {
     this.enqueue([{ label, run }], 'last');
   }
 
-  /** Inserts ops to run right after the current one, in the given order. */
   pushNext(ops: Op[]) {
     this.enqueue(ops, 'next');
   }

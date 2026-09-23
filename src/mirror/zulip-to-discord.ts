@@ -3,11 +3,8 @@ import { scanZulipFences, splitOutsideCode, ZulipFence } from 'src/format';
 
 export type ZulipRefs = {
   quoteReply?: { messageId: number; senderId?: number; senderName: string };
-  /** Every `/near/N` or `/with/N` in a link, plus the quote-reply target. */
   messageIds: number[];
-  /** Every user ID in a `@**Name|id**` or `@_**Name|id**` mention. */
   userIds: number[];
-  /** `/user_uploads/...` paths, in order of appearance. */
   uploads: string[];
   emojiNames: string[];
 };
@@ -20,7 +17,6 @@ export type ZulipMessageRef = {
 };
 
 export type ZulipRenderContext = {
-  /** `new URL(ZULIP_DOMAIN).origin` */
   realmOrigin: string;
   messages: Map<number, ZulipMessageRef>;
   /** Verified team members only. */

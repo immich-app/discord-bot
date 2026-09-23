@@ -14,7 +14,6 @@ export type DiscordSourceMessage = {
   author: { id: string; username: string; displayName: string };
   silent: boolean;
   content: string;
-  /** ID to display name. */
   mentions: { users: Record<string, string>; roles: Record<string, string>; channels: Record<string, string> };
   attachments: { id: string; name: string; url: string; size: number; contentType: string | null; spoiler: boolean }[];
   stickers: string[];

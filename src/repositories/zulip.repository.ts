@@ -120,7 +120,6 @@ export class ZulipRepository implements IZulipInterface {
     return this.client('events');
   }
 
-  /** The bot uploads files with a longer timeout than the API calls. */
   private get uploads() {
     return this.client('uploads');
   }
@@ -132,7 +131,6 @@ export class ZulipRepository implements IZulipInterface {
     return this.clients[identity];
   }
 
-  /** For the requests outside the API: the realm's origin and the bot's `Authorization` header. */
   private get site() {
     if (!this.botIdentity) {
       throw notInitialised();
