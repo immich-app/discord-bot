@@ -8,6 +8,7 @@ import {
   splitOutsideCode,
   toZulipQuote,
   ZULIP_MAX_MESSAGE_LENGTH,
+  zulipChannelNarrowLink,
 } from 'src/format';
 import { DiscordSourceMessage } from 'src/interfaces/discord-mirror.interface';
 import { stripBidiControls } from 'src/mirror/names';
@@ -18,7 +19,12 @@ export type DiscordRenderContext = {
   zulipUserByDiscordId: Map<string, number>;
   /** The realm emoji the emote sync made of each Discord emote, by emote ID. */
   zulipEmojiByEmoteId?: Map<string, string>;
+  /** The stream of each linked channel, with its main topic, and the stream and topic of each mirrored thread. */
+  zulipChannelByDiscordId?: Map<string, ZulipChannel>;
 };
+
+/** `topic` is left out for a forum, which has no main topic. */
+export type ZulipChannel = { streamId: number; stream: string; topic?: string };
 
 export type ZulipReplyTarget =
   | { origin: 'zulip'; zulipSenderId: number; link: string }
@@ -53,8 +59,9 @@ const URL_UNSAFE = /[\s`*$<>()[\]\\"']/g;
 
 const INLINE_ESCAPES = /[\\*_`~[\]()<>#@:$|!{}]/g;
 
-/** Zulip only renders `@**...**` after whitespace, a quote, an opening bracket, `/` or `<`. */
+/** Zulip only renders `@**...**` after whitespace, a quote, an opening bracket, `/` or `<`, and `#**...**` not after `[`. */
 const MENTION_ALLOWED_BEFORE = /[\s'"({[/<]/;
+const CHANNEL_LINK_ALLOWED_BEFORE = /[\s'"({/<]/;
 
 const BLOCK_START = /^(?:```|~~~|>|#|-|\*|\+|\d+[.)]|\||\t| {4})/;
 
@@ -89,6 +96,15 @@ const safeLabel = (label: string) =>
 const zulipMention = (zulipUserId: number, silent: boolean) => protect(`@${silent ? '_' : ''}**|${zulipUserId}**`);
 
 const zulipLink = (label: string, url: string) => protect(`[${safeLabel(label)}](${safeUrl(url)})`);
+
+/** Zulip's `#**channel>topic**` cannot hold every name, so a name it cannot is linked by its narrow instead. */
+const zulipChannelLink = ({ streamId, stream, topic }: ZulipChannel) => {
+  const syntax = !/[*>\n]/.test(stream) && (topic === undefined || !/[*\n]|@\d+$/.test(topic));
+  if (syntax) {
+    return protect(`#**${stream}${topic === undefined ? '' : `>${topic}`}**`);
+  }
+  return zulipLink(topic ? `#${stream} > ${topic}` : `#${stream}`, zulipChannelNarrowLink(streamId, topic));
+};
 
 const DOMAIN = /(?:[a-z][\w+.-]*:\/\/)?((?:[a-z\d-]+\.)+[a-z]{2,})/gi;
 
@@ -169,7 +185,10 @@ const translateInline = (part: string, message: TranslatedMessage, ctx: DiscordR
       return `&#64;${escapeZulipInline(message.mentions.roles[groups.role] ?? 'unknown-role')}`;
     }
     if (groups.channel !== undefined) {
-      return `&#35;${escapeZulipInline(message.mentions.channels[groups.channel] ?? 'unknown-channel')}`;
+      const zulip = ctx.zulipChannelByDiscordId?.get(groups.channel);
+      return zulip
+        ? zulipChannelLink(zulip)
+        : `&#35;${escapeZulipInline(message.mentions.channels[groups.channel] ?? 'unknown-channel')}`;
     }
     if (groups.emote !== undefined) {
       return `:${ctx.zulipEmojiByEmoteId?.get(groups.emoteId!) ?? toZulipEmojiName(groups.emote)}:`;
@@ -326,9 +345,12 @@ const finalise = (content: string) =>
   mapOutsideCode(content, neutraliseUnprotected)
     .replaceAll(PROTECTED, (_match: string, payload: string, offset: number, whole: string) => {
       const before = whole[offset - 1];
-      return payload.startsWith('@') && before !== undefined && !MENTION_ALLOWED_BEFORE.test(before)
-        ? ` ${payload}`
-        : payload;
+      const allowed = payload.startsWith('@')
+        ? MENTION_ALLOWED_BEFORE
+        : payload.startsWith('#**')
+          ? CHANNEL_LINK_ALLOWED_BEFORE
+          : undefined;
+      return allowed && before !== undefined && !allowed.test(before) ? ` ${payload}` : payload;
     })
     .replaceAll(RESERVED, '');
 

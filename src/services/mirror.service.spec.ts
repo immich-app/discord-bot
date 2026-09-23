@@ -2490,6 +2490,71 @@ describe(MirrorService.name, () => {
     });
   });
 
+  describe('channel and topic links', () => {
+    const streams: Record<number, string> = {
+      [DEV_STREAM]: 'immich-dev',
+      [OFF_TOPIC_STREAM]: 'immich-dev-off-topic',
+      [FORUM_STREAM]: 'immich-dev-focus-topic',
+    };
+
+    beforeEach(async () => {
+      zulip.getStream.mockImplementation(async (streamId) => ({ streamId, name: streams[streamId], inviteOnly: true }));
+      await start();
+    });
+
+    it('should turn a Zulip link to a linked stream or mirrored topic into a Discord mention', async () => {
+      const thread = seedThread({ zulipAnchorMessageId: 60 });
+
+      await fromZulip(
+        zulipMessage({
+          content: `#**IMMICH-DEV** #**immich-dev>#dev** #**immich-dev>crash on upload** #narrow/channel/${FORUM_STREAM}-x #**immich-dev>new**`,
+        }),
+      );
+
+      expect(sent(0).content).toBe(
+        `<#${DEV_CHANNEL}> <#${DEV_CHANNEL}> <#${thread.discordThreadId}> <#${FORUM}> *(Zulip link)*`,
+      );
+      expect(zulip.getStream).toHaveBeenCalledOnce();
+    });
+
+    it('should read the stream names again after a queue registration', async () => {
+      await fromZulip(zulipMessage({ content: '#**immich-dev**' }));
+      await register();
+      await fromZulip(zulipMessage({ id: 1002, content: '#**immich-dev**' }));
+
+      expect(zulip.getStream).toHaveBeenCalledTimes(2);
+    });
+
+    it('should turn a Discord mention of a linked channel or mirrored thread into a Zulip link', async () => {
+      const thread = seedThread();
+      zulip.getMessage.mockResolvedValue({ id: 70, topic: 'Crash on upload', streamId: DEV_STREAM });
+
+      await fromDiscord(
+        discordMessage({
+          content: `see <#${DEV_CHANNEL}>, <#${FORUM}>, <#${thread.discordThreadId}> and <#100000000000000555>`,
+          mentions: { users: {}, roles: {}, channels: { '100000000000000555': 'rules' } },
+        }),
+      );
+
+      expect(sentMessages()[0].content).toBe(
+        '**Contrib** (&#64;contrib123): see #**immich-dev>#dev**, #**immich-dev-focus-topic**, #**immich-dev>Crash on upload** and &#35;rules',
+      );
+    });
+
+    it('should leave a mention as text when the stream name cannot be read', async () => {
+      zulip.getStream.mockRejectedValue(new Error('Zulip returned no stream 900'));
+
+      await fromDiscord(
+        discordMessage({
+          content: `see <#${DEV_CHANNEL}>`,
+          mentions: { users: {}, roles: {}, channels: { [DEV_CHANNEL]: 'dev' } },
+        }),
+      );
+
+      expect(sentMessages()[0].content).toBe('**Contrib** (&#64;contrib123): see &#35;dev');
+    });
+  });
+
   describe('reactions', () => {
     const SOURCE = '300000000000000001';
     const EMOTE = '500000000000000003';

@@ -224,6 +224,27 @@ describe('toZulipMirrorBody', () => {
       ).toBe('&#35;dev&#95;ops &#35;unknown-channel');
     });
 
+    it('should link a linked channel or mirrored thread as its Zulip stream and topic', () => {
+      const linked = {
+        ...ctx,
+        zulipChannelByDiscordId: new Map([
+          ['100000000000000001', { streamId: 900, stream: 'immich-dev', topic: '' }],
+          ['100000000000000002', { streamId: 901, stream: 'immich-dev-focus-topic' }],
+          ['200000000000000001', { streamId: 900, stream: 'immich-dev', topic: 'Crash on upload' }],
+          ['200000000000000002', { streamId: 900, stream: 'immich-dev', topic: 'a *b* @12' }],
+          ['200000000000000003', { streamId: 902, stream: 'odd>name', topic: 'x' }],
+        ]),
+      };
+      const dto = message({
+        content:
+          'see <#100000000000000001>, <#100000000000000002> and <#200000000000000001>: <#200000000000000002> <#200000000000000003> [<#200000000000000001>]',
+      });
+
+      expect(zulipMirrorContent('**contrib123**', toZulipMirrorBody(dto, linked), '')).toBe(
+        '**contrib123**: see #**immich-dev>**, #**immich-dev-focus-topic** and #**immich-dev>Crash on upload**: [#immich-dev > a *b* @12](#narrow/channel/900/topic/a.20.2Ab.2A.20.4012) [#odd>name > x](#narrow/channel/902/topic/x) &#91; #**immich-dev>Crash on upload**&#93;',
+      );
+    });
+
     it('should put a space before a mention Zulip would not render after the character before it', () => {
       expect(body('cc,<@222222222222222222> (<@222222222222222222>)')).toBe('cc, @**|8** (@**|8**)');
     });

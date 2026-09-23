@@ -34,6 +34,7 @@ import {
   toZulipReplySnippet,
   ZulipAttachmentResult,
   zulipAuthorHeader,
+  ZulipChannel,
   zulipMirrorContent,
   zulipMirrorLead,
   ZulipReplyTarget,
@@ -60,10 +61,12 @@ import {
   zulipReactionKey,
 } from 'src/mirror/reactions';
 import {
+  channelRefKey,
   escapeDiscordInline,
   parseZulipRefs,
   splitDiscordContent,
   toDiscordMirrorContent,
+  ZulipChannelRef,
   ZulipMessageRef,
 } from 'src/mirror/zulip-to-discord';
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
@@ -98,6 +101,7 @@ const FILE_TRANSFER_BUDGET_MS = 120_000;
 const DISCORD_MESSAGE_LENGTH = 2000;
 const URLS = /https?:\/\/[^\s<>)]+/g;
 const CUSTOM_EMOTE = /<a?:\w+:\d+>/;
+const CHANNEL_MENTION = /<#(\d+)>/g;
 const THREAD_DELETED_NOTICE = 'The Discord thread for this topic was deleted; the next message here starts a new one.';
 
 const NOTICE_REASONS: Partial<Record<DiscordMirrorErrorKind, string>> = {
@@ -307,6 +311,8 @@ export class MirrorService implements OnModuleDestroy {
   private memberCheckedAt = new Map<string, number>();
   private identities = new Map<string, { identity: Identity; expiresAt: number }>();
   private senderNames = new Map<number, string>();
+  /** Read once per queue registration, so that a renamed stream is named anew. */
+  private streamNames = new Map<number, string>();
   private verifiedConversations = new Set<string>();
   /** Names the mirror gave threads whose `threadUpdate` has not come back yet, oldest first. */
   private ownThreadNames = new Map<string, { name: string; at: number }[]>();
@@ -598,6 +604,7 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     this.verifiedConversations.clear();
+    this.streamNames.clear();
     this.zulipRegistered = true;
     for (const state of this.pairs) {
       this.lostTrack(state);
@@ -1181,10 +1188,76 @@ export class MirrorService implements OnModuleDestroy {
     }
     const text = [dto.content, ...dto.forwarded, dto.replyTo?.content ?? ''].join('\n');
     const emotes = CUSTOM_EMOTE.test(text) ? (await this.emoteMaps(dto.guildId))?.zulipByEmoteId : undefined;
+    const channels = new Map<string, ZulipChannel>();
+    for (const [, channelId] of text.matchAll(CHANNEL_MENTION)) {
+      const channel = channels.has(channelId) ? undefined : await this.zulipChannelOf(channelId);
+      if (channel) {
+        channels.set(channelId, channel);
+      }
+    }
     return {
       zulipUserByDiscordId: this.membersOf(dto.guildId).zulipByDiscord,
       ...(emotes ? { zulipEmojiByEmoteId: new Map([...emotes].map(([id, { name }]) => [id, name])) } : {}),
+      ...(channels.size > 0 ? { zulipChannelByDiscordId: channels } : {}),
     };
+  }
+
+  /** The stream of a linked channel, with its main topic, or the stream and topic of a mirrored thread. */
+  private async zulipChannelOf(channelId: string): Promise<ZulipChannel | undefined> {
+    const linked = this.pairs.find(({ pair }) => pair.discordChannelId === channelId)?.pair;
+    let found: { streamId: number; topic?: string } | undefined = linked && {
+      streamId: linked.zulipStreamId,
+      ...(linked.mainTopic === null ? {} : { topic: linked.mainTopic }),
+    };
+    for (const { pair } of found ? [] : this.pairs) {
+      const conversation = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, channelId);
+      if (conversation) {
+        found = { streamId: conversation.zulipStreamId, topic: conversation.zulipTopic };
+        break;
+      }
+    }
+    const stream = found && (await this.streamName(found.streamId));
+    return found && stream !== undefined ? { ...found, stream } : undefined;
+  }
+
+  private async streamName(streamId: number) {
+    const known = this.streamNames.get(streamId);
+    if (known !== undefined) {
+      return known;
+    }
+    try {
+      const { name } = await this.retryZulip(() => this.zulip.getStream(streamId));
+      this.streamNames.set(streamId, name);
+      return name;
+    } catch (error) {
+      this.fail(`Could not read the name of Zulip stream ${streamId}`, error);
+      return undefined;
+    }
+  }
+
+  /** The Discord channel of a linked stream or its main topic, or the thread of a mirrored topic. */
+  private async discordChannelOf({ stream, topic }: ZulipChannelRef) {
+    let state: PairState | undefined;
+    for (const candidate of this.pairs) {
+      const { zulipStreamId } = candidate.pair;
+      if (
+        typeof stream === 'number'
+          ? zulipStreamId === stream
+          : (await this.streamName(zulipStreamId))?.toLowerCase() === stream.toLowerCase()
+      ) {
+        state = candidate;
+        break;
+      }
+    }
+    if (!state || topic === undefined) {
+      return state?.pair.discordChannelId;
+    }
+    const key = topicKey(this.fromZulipTopic(topic));
+    if (isMainTopic(state.pair, key)) {
+      return state.pair.discordChannelId;
+    }
+    const conversation = await this.database.getMirrorConversationByZulipTopic(state.pair.zulipStreamId, key);
+    return conversation?.discordThreadId ?? undefined;
   }
 
   private async verifyTeamMembers(guildId: string) {
@@ -1316,6 +1389,14 @@ export class MirrorService implements OnModuleDestroy {
       });
     }
 
+    const channels = new Map<string, string>();
+    for (const ref of refs.channels) {
+      const channelId = await this.discordChannelOf(ref);
+      if (channelId !== undefined) {
+        channels.set(channelRefKey(ref), channelId);
+      }
+    }
+
     const needsEmoji = refs.emojiNames.length > 0;
     const unicode = needsEmoji ? (await this.emojiTables())?.unicode : undefined;
     const custom = needsEmoji ? (await this.emoteMaps(guildId))?.discordByZulipName : undefined;
@@ -1323,6 +1404,7 @@ export class MirrorService implements OnModuleDestroy {
       realmOrigin: this.realmOrigin,
       messages,
       deletedMessageIds: new Set([...deleted].filter((id) => !messages.has(id))),
+      channels,
       discordUserByZulipId: this.membersOf(guildId).discordByZulip,
       emoji: (name) => {
         const emote = custom?.get(name);
