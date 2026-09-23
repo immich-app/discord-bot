@@ -2935,7 +2935,9 @@ export class MirrorService implements OnModuleDestroy {
         if (!isMirrorError(again, 'unknown-emoji')) {
           throw again;
         }
-        this.logger.log(`${state.pair.key}: Discord knows no emoji ${emoji.name}, so that reaction is not mirrored`);
+        this.logger.log(
+          `${state.pair.key}: Discord does not support an emoji a Zulip user reacted with, so that reaction to Discord message ${target.messageId} is not mirrored`,
+        );
       }
     }
   }
