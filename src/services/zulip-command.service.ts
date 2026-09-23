@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Constants } from 'src/constants';
-import { neutraliseZulipLabel, neutraliseZulipMentions, plural, shorten, shortenCodePoints } from 'src/format';
+import { neutraliseZulipLabel, neutraliseZulipMentions, shorten, shortenCodePoints } from 'src/format';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
@@ -151,13 +151,13 @@ export class ZulipCommandService {
       positionals: 0,
       options: [],
       run: (context) =>
-        this.inBackground('emote-sync', context, () => ({
+        this.inBackground('emote-sync', context, {
           ack: `Syncing the emotes of ${EMOTE_SYNC_SERVER} to Zulip and Mattermost, this can take a few minutes…`,
           work: async () => {
             const report = await this.chatService.syncEmotes(Constants.Discord.EmoteSyncServer.id);
             return neutraliseZulipMentions(formatEmoteSyncReport(report, `the emotes of ${EMOTE_SYNC_SERVER}`));
           },
-        })),
+        }),
     },
     'backfill-pull-requests': {
       usage: 'backfill-pull-requests <number|all>',
@@ -286,21 +286,14 @@ export class ZulipCommandService {
     }
   }
 
-  /** The loop waits at most 30s on a handler and polls nothing meanwhile, so a slow command is acknowledged at once and its outcome posted when done. */
-  private async inBackground(
-    name: string,
-    { message }: CommandContext,
-    start: () => BackgroundJob | Promise<BackgroundJob>,
-  ) {
+  /** The loop waits at most 30s on a handler and polls nothing meanwhile, so a slow command is acknowledged before any of its work starts and its outcome posted when done. */
+  private async inBackground(name: string, { message }: CommandContext, { ack, work }: BackgroundJob) {
     if (this.running.has(name)) {
       return this.alreadyRunning(name);
     }
     this.running.add(name);
-    let work: BackgroundJob['work'];
     try {
-      const job = await start();
-      work = job.work;
-      await this.reply(message, job.ack);
+      await this.reply(message, ack);
     } catch (error) {
       this.running.delete(name);
       throw error;
@@ -338,13 +331,13 @@ export class ZulipCommandService {
         return formatBackfillReport(report, `pull request #${number}`);
       });
     }
-    return this.inBackground('backfill-pull-requests', context, async () => {
-      const pullRequests = await this.githubService.getOpenPullRequests();
-      return {
-        ack: `Going through ${plural(pullRequests.length, 'open pull request')}, creating the Discord thread and the Zulip topic each one lacks; this can take a while…`,
-        work: async () =>
-          formatBackfillReport(await this.webhookService.backfillPullRequests(pullRequests, BOTH_PLATFORMS)),
-      };
+    // Listing the pull requests is part of the work: a rate-limited GitHub client can wait an hour before it answers.
+    return this.inBackground('backfill-pull-requests', context, {
+      ack: 'Going through every open pull request, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
+      work: async () => {
+        const pullRequests = await this.githubService.getOpenPullRequests();
+        return formatBackfillReport(await this.webhookService.backfillPullRequests(pullRequests, BOTH_PLATFORMS));
+      },
     });
   }
 
@@ -369,13 +362,13 @@ export class ZulipCommandService {
         return `Updated Fourthwall order ${code(id)}.`;
       });
     }
-    return this.inBackground('fourthwall', context, () => ({
+    return this.inBackground('fourthwall', context, {
       ack: 'Updating every Fourthwall order, this can take a while…',
       work: async () => {
         await this.chatService.updateFourthwallOrders();
         return 'Updated every Fourthwall order.';
       },
-    }));
+    });
   }
 
   private async similar({ message, args, options }: CommandContext) {

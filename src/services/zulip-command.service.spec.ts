@@ -600,16 +600,21 @@ describe('ZulipCommandService', () => {
   });
 
   describe('backfill-pull-requests', () => {
-    it('should list the open pull requests, say how many it is about to go through, then backfill them on both platforms in the background', async () => {
+    const ACK =
+      'Going through every open pull request, creating the Discord thread and the Zulip topic each one lacks; this can take a while…';
+
+    it('should acknowledge, then list the open pull requests and backfill them on both platforms in the background', async () => {
       let finish!: (report: BackfillReport) => void;
       githubServiceMock.getOpenPullRequests.mockResolvedValue([pullRequest(1), pullRequest(2)]);
       webhookServiceMock.backfillPullRequests.mockReturnValue(new Promise((resolve) => (finish = resolve)));
 
       await send('@**Immich** backfill-pull-requests all');
+      await flush();
 
-      expect(replies().map(({ content }) => content)).toEqual([
-        'Going through 2 open pull requests, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
-      ]);
+      expect(replies().map(({ content }) => content)).toEqual([ACK]);
+      expect(zulipMock.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        githubServiceMock.getOpenPullRequests.mock.invocationCallOrder[0],
+      );
       expect(webhookServiceMock.backfillPullRequests).toHaveBeenCalledExactlyOnceWith(
         [pullRequest(1), pullRequest(2)],
         BOTH_PLATFORMS,
@@ -658,20 +663,47 @@ describe('ZulipCommandService', () => {
       await flush();
 
       expect(replies().map(({ content }) => content)).toEqual([
-        'Going through 1 open pull request, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
+        ACK,
         'Backfill of 1 open pull request done: created 1 Discord thread and 1 Zulip topic; skipped 0; failed 0.',
-        'Going through 0 open pull requests, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
+        ACK,
         'Backfill of 0 open pull requests done: created 0 Discord threads and 0 Zulip topics; skipped 0; failed 0.',
       ]);
     });
 
-    it('should say so in the topic when the pull requests cannot be listed, before any acknowledgement, and not stay locked', async () => {
+    it('should acknowledge at once and hold the lock while GitHub keeps the list waiting, as a rate limit does', async () => {
+      let list!: (pullRequests: PullRequestBaseEvent[]) => void;
+      githubServiceMock.getOpenPullRequests.mockReturnValueOnce(new Promise((resolve) => (list = resolve)));
+
+      await send('@**Immich** backfill-pull-requests all');
+      await flush();
+
+      expect(replies().map(({ content }) => content)).toEqual([ACK]);
+      expect(webhookServiceMock.backfillPullRequests).not.toHaveBeenCalled();
+
+      await send('@**Immich** backfill-pull-requests all', { id: 501 });
+
+      expect(githubServiceMock.getOpenPullRequests).toHaveBeenCalledOnce();
+      expect(replies().at(-1)?.content).toBe('`backfill-pull-requests` is already running; wait for it to finish.');
+
+      list([pullRequest(1)]);
+      await flush();
+
+      expect(replies().at(-1)?.content).toBe(
+        'Backfill of 1 open pull request done: created 1 Discord thread and 1 Zulip topic; skipped 0; failed 0.',
+      );
+    });
+
+    it('should say so in the topic when the pull requests cannot be listed, after the acknowledgement, and not stay locked', async () => {
       githubServiceMock.getOpenPullRequests.mockRejectedValueOnce(new Error('GitHub is down')).mockResolvedValue([]);
 
       await send('@**Immich** backfill-pull-requests all');
       await flush();
 
-      expect(replies().map(({ content }) => content)).toEqual(['`backfill-pull-requests` failed: `GitHub is down`']);
+      expect(replies().map(({ content }) => content)).toEqual([
+        ACK,
+        '`backfill-pull-requests` failed: `GitHub is down`',
+      ]);
+      expect(webhookServiceMock.backfillPullRequests).not.toHaveBeenCalled();
       expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
         'The Zulip command backfill-pull-requests failed on message 500',
         expect.any(Error),
