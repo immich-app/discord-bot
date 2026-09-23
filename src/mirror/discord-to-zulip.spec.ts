@@ -331,15 +331,19 @@ describe('toZulipMirrorBody', () => {
       expect(body('cc,<@222222222222222222> (<@222222222222222222>)')).toBe('cc, @**|8** (@**|8**)');
     });
 
-    it('should map custom emotes to the names emote sync gives them', () => {
-      expect(body('<:catJam:123456789012345678> <a:party_parrot_:123456789012345678>')).toBe(':catjam: :party_parrot:');
+    it('should link the image of an emote with no realm emoji, animated or not, under the name emote sync would give it', () => {
+      expect(body('<:catJam:123456789012345678> <a:party_parrot_:123456789012345678>')).toBe(
+        '[:catjam:](https://cdn.discordapp.com/emojis/123456789012345678.webp?size=48) [:party_parrot:](https://cdn.discordapp.com/emojis/123456789012345678.gif?size=48)',
+      );
     });
 
     it('should map an emote to the realm emoji the emote sync made of it, renamed or not', () => {
       const emotes = { ...ctx, zulipEmojiByEmoteId: new Map([['123456789012345671', 'fire2']]) };
       const dto = message({ content: '<:fire:123456789012345671> <:fire:123456789012345672>' });
 
-      expect(toZulipMirrorBody(dto, emotes)).toBe(':fire2: :fire:');
+      expect(zulipMirrorContent('**x**', toZulipMirrorBody(dto, emotes), '')).toBe(
+        '**x**: :fire2: [:fire:](https://cdn.discordapp.com/emojis/123456789012345672.webp?size=48)',
+      );
     });
 
     it('should turn timestamps into Zulip times', () => {

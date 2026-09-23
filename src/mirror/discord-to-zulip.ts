@@ -72,7 +72,7 @@ const DISCORD_INLINE = new RegExp(
     String.raw`<@!?(?<user>\d+)>`,
     String.raw`<@&(?<role>\d+)>`,
     String.raw`<#(?<channel>\d+)>`,
-    String.raw`<a?:(?<emote>\w+):(?<emoteId>\d+)>`,
+    String.raw`<(?<animated>a)?:(?<emote>\w+):(?<emoteId>\d+)>`,
     String.raw`<t:(?<unix>-?\d{1,13})(?::[tTdDfFR])?>`,
     String.raw`<\/(?<command>[^:<>\n]+):\d+>`,
   ].join('|'),
@@ -191,7 +191,16 @@ const translateInline = (part: string, message: TranslatedMessage, ctx: DiscordR
         : `&#35;${escapeZulipInline(message.mentions.channels[groups.channel] ?? 'unknown-channel')}`;
     }
     if (groups.emote !== undefined) {
-      return `:${ctx.zulipEmojiByEmoteId?.get(groups.emoteId!) ?? toZulipEmojiName(groups.emote)}:`;
+      const synced = ctx.zulipEmojiByEmoteId?.get(groups.emoteId!);
+      if (synced) {
+        return `:${synced}:`;
+      }
+      // An emote of a server that is not synced (a Nitro user's) has no realm emoji; Zulip previews its image instead.
+      const extension = groups.animated ? 'gif' : 'webp';
+      return zulipLink(
+        `:${toZulipEmojiName(groups.emote)}:`,
+        `https://cdn.discordapp.com/emojis/${groups.emoteId}.${extension}?size=48`,
+      );
     }
     if (groups.unix !== undefined) {
       const date = new Date(Number(groups.unix) * 1000);
