@@ -26,6 +26,7 @@ export enum DiscordEvents {
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
   isReady(): boolean;
+  onHandlerError(handler: (error: unknown) => Promise<void>): void;
   sendMessage({
     channelId,
     threadId,

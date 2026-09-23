@@ -62,6 +62,10 @@ Commands live in `src/discord/commands.ts`. Use discordx decorators:
 
 Legacy commands use `authGuard()` to restrict to allowed channels (BotSpam, SupportCrew, QQ). **New commands should NOT use `authGuard`** — permissions will be configured via Discord's built-in command permissions UI instead.
 
+### Discord handler errors
+
+discordx drops whatever an `@On`/`@Once` handler throws: no log, and no client `error` event. The client therefore has one global guard, `reportErrors` (`src/discord/guards.ts`), which runs around every discordx handler (events, slash commands, context menus, buttons, modals, simple commands) and hands what it throws to the handler set with `DiscordRepository.onHandlerError`. `ChatService.init` sets that to `ChatService.onError`, the same method the client `error` event reaches through `DiscordEvents.onError`: `DiscordAPIError[10008]` is ignored, anything else goes through `logError` as `Discord bot error: …` to `team.bot`. A throwing interaction handler is caught by the guard as well, so it no longer reaches the client `error` event and is reported once. The guard never throws: a failed report is logged. It calls the handler directly instead of emitting `error`, so a failing `error` handler cannot recurse.
+
 ### Cron Jobs
 
 Use `@Cron(expression)` decorator from `@nestjs/schedule`. Cron expressions stored in `Constants.Cron`.
