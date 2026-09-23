@@ -45,7 +45,6 @@ const message = (overrides: Partial<DiscordSourceMessage> = {}): DiscordSourceMe
 const mirror = (dto: DiscordSourceMessage, header: Partial<ZulipHeaderContext> = {}, attachments = '') =>
   zulipMirrorContent(zulipAuthorHeader(dto, { ...ctx, ...header }), toZulipMirrorBody(dto, ctx), attachments);
 
-/** The mirrored message after the `**contrib123**: ` header. */
 const body = (content: string, overrides: Partial<DiscordSourceMessage> = {}) => {
   const output = mirror(message({ content, ...overrides }));
   const header = /^\*\*contrib123\*\*(?::\n|: )/.exec(output)![0];

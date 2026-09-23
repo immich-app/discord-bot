@@ -918,7 +918,6 @@ export class MirrorService implements OnModuleDestroy {
     return call();
   }
 
-  /** Recreates a deleted webhook and unarchives an archived thread, each at most once, then repeats the call. */
   private async onDiscord<T>(state: PairState, threadId: string | null | undefined, call: () => Promise<T>) {
     let recreated = false;
     let unarchived = false;

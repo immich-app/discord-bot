@@ -90,7 +90,6 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   isReady(): boolean;
   /** `undefined` when the channel does not exist or is not in a guild. */
   getMirrorChannel(channelId: string): Promise<DiscordMirrorChannel | undefined>;
-  /** Finds or creates the bot's webhook in the channel; a no-op once found. */
   ensureMirrorWebhook(channelId: string): Promise<void>;
   sendMirrorMessage(message: DiscordMirrorSend): Promise<DiscordMirrorSent>;
   /** Always sends allowedMentions { parse: [], users: [] }. */

@@ -989,7 +989,6 @@ describe('ZulipRepository', () => {
       new Response(null, { status: 302, headers: location === undefined ? {} : { location } });
     const init = (index: number) => fetchMock.mock.calls[index][1];
 
-    /** A body handing out `size`-byte chunks as they are read, `count` of them. */
     const trickle = (size: number, count = Number.POSITIVE_INFINITY) => {
       const state = { read: 0, cancelled: false };
       const body = new ReadableStream<Uint8Array>(
