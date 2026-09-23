@@ -1030,7 +1030,8 @@ describe('ZulipRepository', () => {
       '/user_uploads/2/ab/x.txt',
       '/user_uploads/2/a.b/cd/x.txt',
       '/user_uploads/2/ab/cd/r%zz.txt',
-      '/user_uploads/2/ab/cd/résumé.pdf',
+      '/user_uploads/2/ab/cd/x\t.txt',
+      '/user_uploads/2/ab/cd/.\t.',
       '//evil.example/user_uploads/2/ab/cd/x.txt',
       'https://evil.example/user_uploads/2/ab/cd/x.txt',
       '/api/v1/users/me',
@@ -1039,6 +1040,20 @@ describe('ZulipRepository', () => {
       await expect(sut.downloadUpload(path, 100)).rejects.toThrow(ZulipUploadRefused);
 
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['as Zulip links it', '/user_uploads/2/df/-U55VJFs070o1ZEF/café résumé.txt'],
+      ['percent-encoded', '/user_uploads/2/df/-U55VJFs070o1ZEF/caf%C3%A9%20r%C3%A9sum%C3%A9.txt'],
+    ])('should download a file with a non-ASCII name linked %s', async (_, path) => {
+      fetchMock.mockResolvedValue(file());
+
+      const result = await sut.downloadUpload(path, 100);
+
+      expect(result!.name).toBe('café résumé.txt');
+      expect(request(0).url).toBe(
+        'https://zulip.example.com/user_uploads/2/df/-U55VJFs070o1ZEF/caf%C3%A9%20r%C3%A9sum%C3%A9.txt',
+      );
     });
 
     it('should follow a redirect to another HTTPS origin once, without credentials and refusing any further redirect', async () => {

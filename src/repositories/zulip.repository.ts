@@ -43,7 +43,8 @@ const UPLOAD_PATH = /^\/user_uploads\/\d+\/[\w-]+\/[\w-]+\/([^/?#\\]+)$/;
 
 /**
  * The bot's credentials go with the request, so a path that URL normalisation or the server could steer to another
- * route (`..`, encoded slashes and dots) is refused before anything is fetched.
+ * route (`..`, encoded slashes and dots) is refused before anything is fetched. Zulip links a file with a non-ASCII
+ * name as it is, which URL parsing percent-encodes, so the paths are compared decoded.
  */
 const toUploadUrl = (path: string, origin: string) => {
   const refuse = () => new ZulipUploadRefused('Not a Zulip upload path');
@@ -51,15 +52,17 @@ const toUploadUrl = (path: string, origin: string) => {
   if (!segment || segment === '.' || segment === '..' || /%(2f|5c|2e)/i.test(path)) {
     throw refuse();
   }
-  const url = new URL(path, origin);
-  if (url.origin !== origin || url.pathname !== path) {
-    throw refuse();
-  }
+  let upload: { url: URL; name: string };
   try {
-    return { url, name: decodeURIComponent(segment) };
+    const url = new URL(path, origin);
+    upload = { url, name: decodeURIComponent(segment) };
+    if (url.origin !== origin || decodeURI(url.pathname) !== decodeURI(path)) {
+      throw refuse();
+    }
   } catch {
     throw refuse();
   }
+  return upload;
 };
 
 const toEmoji = (codepoints: unknown) => {
