@@ -563,6 +563,9 @@ export class MirrorService implements OnModuleDestroy {
     state.retryTimer = setTimeout(() => {
       state.retryTimer = undefined;
       this.maybeCatchUp(state);
+      if (!state.catchUpQueued && state.status === 'ready' && this.zulipRegistered) {
+        this.retryCatchUp(state);
+      }
     }, delay);
   }
 

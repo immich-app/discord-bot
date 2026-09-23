@@ -2808,6 +2808,26 @@ describe(MirrorService.name, () => {
       expect(contents()).toEqual(['first', 'first', 'first', 'second']);
     });
 
+    it('should keep trying to catch up while the Discord gateway is reconnecting', async () => {
+      seedHighWaters();
+      await start();
+      vitest.useFakeTimers();
+      zulip.sendMessage.mockRejectedValueOnce(new TypeError('fetch failed', { cause: refused() }));
+      const first = missedOnDiscord({ content: 'first' });
+      onDiscord(DEV_CHANNEL, first);
+      await fromDiscord(first);
+      discord.isReady.mockReturnValue(false);
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+      expect(posted()).toEqual(['first']);
+
+      discord.isReady.mockReturnValue(true);
+      await vitest.advanceTimersByTimeAsync(60_000);
+      await sut.whenIdle();
+      expect(posted()).toEqual(['first', 'first']);
+    });
+
     it('should give up on a message that keeps failing, so that the rest can follow', async () => {
       seedHighWaters();
       await start();
