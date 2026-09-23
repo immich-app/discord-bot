@@ -121,6 +121,8 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   /** As the bot; adding a reaction it has, or removing one it has not, changes nothing. */
   addMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji): Promise<void>;
   removeMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji): Promise<void>;
+  /** Any message, whoever sent it; `undefined` when there is none. `channelId` may be a thread. */
+  fetchMirrorMessage(channelId: string, messageId: string): Promise<DiscordSourceMessage | undefined>;
   /** `channelId` may be a thread. */
   fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
 }

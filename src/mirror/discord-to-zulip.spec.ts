@@ -11,6 +11,7 @@ import {
   ZulipHeaderContext,
   zulipMirrorContent,
   zulipMirrorLead,
+  zulipThreadContext,
 } from 'src/mirror/discord-to-zulip';
 import { describe, expect, it } from 'vitest';
 
@@ -159,6 +160,28 @@ describe('zulipAuthorHeader', () => {
       const content = zulipMirrorContent(zulipMirrorLead('**contrib123**', snippet), 'mine', '');
       expect(content).toBe(`**contrib123**:\n~~~ quote\n${'x'.repeat(185)} \`a @${ZWSP}**all**...\n~~~\nmine`);
     });
+  });
+});
+
+describe('zulipThreadContext', () => {
+  const starter = {
+    zulipLink: '#narrow/channel/900/topic//with/70',
+    jumpUrl: JUMP_URL,
+    authorName: 'Alex *A*',
+    content: 'why does <@222222222222222222> crash?',
+  };
+  const lead = (context: string) => zulipMirrorContent(`${context}**contrib123**`, 'I think so', '');
+
+  it('should link the Zulip copy of the message and quote it', () => {
+    expect(lead(zulipThreadContext(starter, ctx))).toBe(
+      '↪ Thread started from [a message](#narrow/channel/900/topic//with/70) by **Alex &#42;A&#42;**:\n~~~ quote\nwhy does @_**|8** crash?\n~~~\n**contrib123**: I think so',
+    );
+  });
+
+  it('should link the Discord message when it was not mirrored, and quote nothing when it says nothing', () => {
+    expect(lead(zulipThreadContext({ ...starter, zulipLink: null, authorName: null, content: '' }, ctx))).toBe(
+      `↪ Thread started from [a message](${JUMP_URL}) on Discord\n**contrib123**: I think so`,
+    );
   });
 });
 

@@ -836,6 +836,24 @@ describe(DiscordRepository.name, () => {
       channel.messages.fetch.mockRejectedValue(apiError(50_001, 403));
       await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
     });
+
+    it('should read one message, whoever sent it', async () => {
+      channel.messages.fetch.mockResolvedValue(makeMessage('1000000000000000003', { webhookId: '700000000000000001' }));
+
+      await expect(sut.fetchMirrorMessage(channelId, '1000000000000000003')).resolves.toMatchObject({
+        id: '1000000000000000003',
+        content: 'message 1000000000000000003',
+      });
+      expect(channel.messages.fetch).toHaveBeenCalledWith('1000000000000000003');
+    });
+
+    it('should find no message that is gone, and map other errors', async () => {
+      channel.messages.fetch.mockRejectedValueOnce(apiError(10_008, 404));
+      await expect(sut.fetchMirrorMessage(channelId, '1')).resolves.toBeUndefined();
+
+      channel.messages.fetch.mockRejectedValueOnce(apiError(50_001, 403));
+      await expect(sut.fetchMirrorMessage(channelId, '1')).rejects.toMatchObject({ kind: 'forbidden' });
+    });
   });
 
   describe('sendMirrorNotice', () => {

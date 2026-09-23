@@ -297,6 +297,7 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     unarchiveMirrorThread: vitest.fn().mockResolvedValue(undefined),
     getTeamMember: vitest.fn().mockResolvedValue(TEAM_MEMBER),
     fetchMirrorMessagesBefore: vitest.fn().mockResolvedValue({ messages: [], oldestId: null, full: false }),
+    fetchMirrorMessage: vitest.fn().mockResolvedValue(undefined),
     sendMirrorNotice: vitest.fn(),
     unpinMirrorNotice: vitest.fn(),
     getMirrorReactions: vitest.fn().mockResolvedValue([]),
@@ -1892,6 +1893,76 @@ describe(MirrorService.name, () => {
       );
 
       expect(sentMessages()[0]).toEqual(expect.objectContaining({ stream: FORUM_STREAM, topic: 'quick question' }));
+    });
+
+    describe('the thread context line', () => {
+      const THREAD = '300000000000000050';
+      const starter = (overrides: Partial<DiscordSourceMessage> = {}) =>
+        discordMessage({
+          id: THREAD,
+          content: 'is it the thumbnails?',
+          author: { id: '400000000000000050', username: 'alex', displayName: 'Alex' },
+          ...overrides,
+        });
+      const inThread = (id: string) =>
+        discordMessage({ id, threadId: THREAD, threadName: 'Thumbnails', content: 'yes' });
+
+      it('should link the Zulip copy of the message a thread started from, and quote it, in the first message only', async () => {
+        const main = await db.repository.createMirrorConversation({
+          discordChannelId: DEV_CHANNEL,
+          discordThreadId: null,
+          zulipStreamId: DEV_STREAM,
+          zulipTopic: '#dev',
+          zulipTopicKey: '#dev',
+        });
+        seedRow({ discordMessageId: THREAD, origin: 'discord', zulipMessageId: 70, conversationId: main.id });
+        discord.fetchMirrorMessage.mockResolvedValue(starter());
+
+        await fromDiscord(inThread('300000000000000051'));
+        await fromDiscord(inThread('300000000000000052'));
+
+        expect(discord.fetchMirrorMessage).toHaveBeenCalledExactlyOnceWith(DEV_CHANNEL, THREAD);
+        expect(sentMessages().map(({ content }) => content)).toEqual([
+          '↪ Thread started from [a message](#narrow/channel/900/topic/.23dev/with/70) by **Alex**:\n~~~ quote\nis it the thumbnails?\n~~~\n**Contrib** (&#64;contrib123): yes',
+          '**Contrib** (&#64;contrib123): yes',
+        ]);
+        expect(
+          db.messages.find(({ discordMessageId }) => discordMessageId === '300000000000000051')?.zulipHeader,
+        ).toMatch(/^↪ Thread started from/);
+      });
+
+      it('should link the Discord message a thread started from when it was never mirrored', async () => {
+        discord.fetchMirrorMessage.mockResolvedValue(starter({ content: '' }));
+
+        await fromDiscord(inThread('300000000000000051'));
+
+        expect(sentMessages()[0].content).toBe(
+          `↪ Thread started from [a message](https://discord.com/channels/${GUILD}/${DEV_CHANNEL}/${THREAD}) by **Alex** on Discord\n**Contrib** (&#64;contrib123): yes`,
+        );
+      });
+
+      it('should add nothing to a thread started without a message, or whose message cannot be read', async () => {
+        await fromDiscord(inThread('300000000000000051'));
+        discord.fetchMirrorMessage.mockRejectedValue(new DiscordMirrorError('forbidden', 50_001));
+        await fromDiscord(
+          discordMessage({ id: '300000000000000053', threadId: '300000000000000060', threadName: 'Other' }),
+        );
+
+        expect(sentMessages().map(({ content }) => content)).toEqual([
+          '**Contrib** (&#64;contrib123): yes',
+          '**Contrib** (&#64;contrib123): hello',
+        ]);
+        expect(warn()).toHaveBeenCalledWith(
+          `${DEV_CHANNEL}: could not read the message Discord thread 300000000000000060 was started from: forbidden (50001)`,
+        );
+      });
+
+      it('should not look for one in a forum, whose posts start with their first message', async () => {
+        const post = '300000000000000007';
+        await fromDiscord(discordMessage({ id: post, channelId: FORUM, threadId: post, threadName: 'Feature idea' }));
+
+        expect(discord.fetchMirrorMessage).not.toHaveBeenCalled();
+      });
     });
 
     it('should post a forum starter once, as the first message of its topic', async () => {

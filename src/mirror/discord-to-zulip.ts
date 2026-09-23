@@ -317,6 +317,25 @@ export const zulipAuthorHeader = (dto: DiscordSourceMessage, ctx: ZulipHeaderCon
   return `${author}${reply}${late}`;
 };
 
+/** `zulipLink` is the Zulip copy of the message a Discord thread was started from, if it has one. */
+export type ZulipThreadStarter = {
+  zulipLink: string | null;
+  jumpUrl: string;
+  authorName: string | null;
+  content: string;
+};
+
+/** The line that opens a Zulip topic made of a Discord thread started from a message, to put before its lead. */
+export const zulipThreadContext = (
+  { zulipLink: link, jumpUrl, authorName, content }: ZulipThreadStarter,
+  ctx: DiscordRenderContext,
+) => {
+  const by = authorName ? ` by ${bold(authorName)}` : '';
+  const line = `↪ Thread started from ${zulipLink('a message', link ?? jumpUrl)}${by}${link ? '' : ' on Discord'}`;
+  const snippet = toZulipReplySnippet(content, ctx);
+  return snippet.trim() ? `${line}:\n${toZulipQuote(snippet)}\n` : `${line}\n`;
+};
+
 export const zulipMirrorLead = (header: string, replySnippet: string | null) =>
   replySnippet ? `${header}:\n${toZulipQuote(replySnippet)}\n` : header;
 

@@ -38,6 +38,7 @@ import {
   zulipMirrorContent,
   zulipMirrorLead,
   ZulipReplyTarget,
+  zulipThreadContext,
 } from 'src/mirror/discord-to-zulip';
 import { downloadDiscordAttachment } from 'src/mirror/download';
 import {
@@ -2185,7 +2186,9 @@ export class MirrorService implements OnModuleDestroy {
       const reply = await this.replyTarget(dto, topic);
       const late = Date.now() - dto.createdTimestamp > LATE_MS;
       const header = zulipAuthorHeader(dto, { ...ctx, reply, late });
-      const lead = zulipMirrorLead(header, dto.replyTo?.content ? toZulipReplySnippet(dto.replyTo.content, ctx) : null);
+      const context = conversation || pair.kind !== 'text' ? '' : await this.threadContext(state, dto.threadId!, ctx);
+      const lead =
+        context + zulipMirrorLead(header, dto.replyTo?.content ? toZulipReplySnippet(dto.replyTo.content, ctx) : null);
       const attachments = toZulipAttachmentLines(await this.uploadAttachments(state, dto), dto.jumpUrl);
       if (body.trim() === '' && attachments === '') {
         return;
@@ -2225,6 +2228,37 @@ export class MirrorService implements OnModuleDestroy {
       this.createFailed(state, source, error, attempt, turnAway);
       this.fail(`${pair.key}: could not mirror Discord message ${dto.id} to Zulip`, error);
     }
+  }
+
+  /** A thread started from a message has that message's ID, and a thread started without one none of a message. */
+  private async threadContext(state: PairState, threadId: string, ctx: DiscordRenderContext) {
+    const { pair } = state;
+    let starter: DiscordSourceMessage | undefined;
+    try {
+      starter = await this.discordMirror.fetchMirrorMessage(pair.discordChannelId, threadId);
+    } catch (error) {
+      this.logger.warn(
+        `${pair.key}: could not read the message Discord thread ${threadId} was started from: ${describe(error)}`,
+      );
+      return '';
+    }
+    if (!starter) {
+      return '';
+    }
+    const [row] = await this.database.getMirrorMessagesByDiscordIds([threadId]);
+    const conversation =
+      !row || row.conversationId === null ? undefined : await this.database.getMirrorConversation(row.conversationId);
+    return zulipThreadContext(
+      {
+        zulipLink: row
+          ? zulipNarrowLink(row.zulipStreamId, conversation?.zulipTopic ?? pair.mainTopic ?? '', row.zulipMessageId)
+          : null,
+        jumpUrl: starter.jumpUrl,
+        authorName: starter.author.displayName || starter.author.username,
+        content: starter.content,
+      },
+      ctx,
+    );
   }
 
   private async replyTarget(dto: DiscordSourceMessage, topic: string): Promise<ZulipReplyTarget | null> {

@@ -593,6 +593,22 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
+  async fetchMirrorMessage(channelId: string, messageId: string) {
+    try {
+      const channel = await bot.channels.fetch(channelId);
+      if (!channel?.isTextBased() || channel.isDMBased()) {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+      const message = await channel.messages.fetch(messageId);
+      return message.inGuild() ? toDiscordSourceMessage(message) : undefined;
+    } catch (error) {
+      if (hasCode(error, RESTJSONErrorCodes.UnknownMessage)) {
+        return undefined;
+      }
+      throw toMirrorError(error);
+    }
+  }
+
   async fetchMirrorMessagesBefore(
     channelId: string,
     beforeId: string | undefined,
