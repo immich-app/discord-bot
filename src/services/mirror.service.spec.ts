@@ -2508,6 +2508,22 @@ describe(MirrorService.name, () => {
       expect(zulip.updateMessage).not.toHaveBeenCalled();
     });
 
+    it('should skip the echo of a rename the mirror made before the next one it made', async () => {
+      await updateFromZulip({ messageId: 1001, topic: 'bar', propagateMode: 'change_all' });
+      await updateFromZulip({ messageId: 1001, topic: 'baz', propagateMode: 'change_all' });
+
+      sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'bar' });
+      sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'baz' });
+      await sut.whenIdle();
+
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+      expect(db.conversations[0].zulipTopic).toBe('baz');
+
+      sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'bar' });
+      await sut.whenIdle();
+      expect(zulip.updateMessage).toHaveBeenCalledOnce();
+    });
+
     it('should skip the echo of a resolved topic at the length limit', async () => {
       const topic = `✔ ${'x'.repeat(58)}`;
       await updateFromZulip({ messageId: 1001, topic, propagateMode: 'change_all' });

@@ -298,6 +298,8 @@ export class MirrorService implements OnModuleDestroy {
   private identities = new Map<string, { identity: Identity; expiresAt: number }>();
   private senderNames = new Map<number, string>();
   private verifiedConversations = new Set<string>();
+  /** Names the mirror gave threads whose `threadUpdate` has not come back yet, oldest first. */
+  private ownThreadNames = new Map<string, { name: string; at: number }[]>();
   private throttled = new Map<string, number>();
   private failedCreates = new Map<string, number>();
   private emojiCodes?: Record<string, string>;
@@ -1817,6 +1819,8 @@ export class MirrorService implements OnModuleDestroy {
     }
     try {
       await this.onDiscord(state, threadId, () => this.discordMirror.renameMirrorThread(threadId, name));
+      const names = (this.ownThreadNames.get(threadId) ?? []).filter(({ at }) => Date.now() - at < THROTTLE_MS);
+      this.ownThreadNames.set(threadId, [...names, { name, at: Date.now() }]);
     } catch (error) {
       if (isMirrorError(error, 'unknown-channel')) {
         await this.detach(state, conversation, 'the Discord thread no longer exists');
@@ -2139,8 +2143,19 @@ export class MirrorService implements OnModuleDestroy {
     await this.reanchor(state, [row.zulipMessageId]);
   }
 
+  /** Whether the rename is the echo of one the mirror made, which a later one may already have overtaken. */
+  private isOwnRename(threadId: string, name: string) {
+    const names = (this.ownThreadNames.get(threadId) ?? []).filter(({ at }) => Date.now() - at < THROTTLE_MS);
+    const index = names.findIndex((entry) => entry.name === name);
+    this.ownThreadNames.set(threadId, index < 0 ? names : names.slice(index + 1));
+    return index >= 0;
+  }
+
   private async renameFromDiscord(state: PairState, thread: { threadId: string; name: string }) {
     const { pair } = state;
+    if (this.isOwnRename(thread.threadId, thread.name)) {
+      return;
+    }
     if (
       this.holdFor(state, 'Zulip', `rename of Discord thread ${thread.threadId}`, () =>
         this.renameFromDiscord(state, thread),
