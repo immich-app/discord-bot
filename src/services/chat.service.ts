@@ -1,4 +1,4 @@
-import { WebSocketEvents } from '@mattermost/client';
+import { ClientError, WebSocketEvents } from '@mattermost/client';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { CommandInteraction, GuildMember, Message, OmitPartialGroupDMChannel, SendableChannels } from 'discord.js';
@@ -108,6 +108,8 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
   return candidate;
 };
 
+const MATTERMOST_DUPLICATE_EMOJI = 'api.emoji.create.duplicate.app_error';
+
 export type EmoteSyncReport = {
   total: number;
   zulipUploaded: number;
@@ -115,11 +117,21 @@ export type EmoteSyncReport = {
   zulipSkipped: boolean;
   failed: string[];
   renamed: string[];
-  alreadySynced: string[];
+  alreadyOnZulip: string[];
+  alreadyOnMattermost: string[];
 };
 
 export const formatEmoteSyncReport = (
-  { total, zulipUploaded, mattermostUploaded, zulipSkipped, failed, renamed, alreadySynced }: EmoteSyncReport,
+  {
+    total,
+    zulipUploaded,
+    mattermostUploaded,
+    zulipSkipped,
+    failed,
+    renamed,
+    alreadyOnZulip,
+    alreadyOnMattermost,
+  }: EmoteSyncReport,
   subject?: string,
 ) => {
   const done = subject ? `Done syncing ${subject}` : 'Done syncing';
@@ -132,7 +144,9 @@ export const formatEmoteSyncReport = (
     `${mattermostUploaded} uploaded to Mattermost`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
-    alreadySynced.length > 0 && `${alreadySynced.length} already on Zulip: ${alreadySynced.join(', ')}`,
+    alreadyOnZulip.length > 0 && `${alreadyOnZulip.length} already on Zulip: ${alreadyOnZulip.join(', ')}`,
+    alreadyOnMattermost.length > 0 &&
+      `${alreadyOnMattermost.length} already on Mattermost: ${alreadyOnMattermost.join(', ')}`,
   ];
   return `${done}: ${outcome.filter(Boolean).join(', ')}`;
 };
@@ -761,13 +775,15 @@ ${formattedCode}
       );
     }
     const existing = await this.listZulipEmoji();
+    const onMattermost = await this.listMattermostEmoji();
     const claimed = new Set<string>();
 
     let zulipUploaded = 0;
     let mattermostUploaded = 0;
     const failed: string[] = [];
     const renamed: string[] = [];
-    const alreadySynced: string[] = [];
+    const alreadyOnZulip: string[] = [];
+    const alreadyOnMattermost: string[] = [];
     for (const emote of emotes) {
       const name = emote.name ?? emote.identifier;
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
@@ -778,7 +794,7 @@ ${formattedCode}
         const zulipName = claimZulipEmojiName(name, claimed);
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
         if (existing.has(zulipName)) {
-          alreadySynced.push(asZulip);
+          alreadyOnZulip.push(asZulip);
         } else {
           if (asZulip !== name) {
             renamed.push(asZulip);
@@ -787,11 +803,13 @@ ${formattedCode}
           zulipUploaded += zulipFailed ? 0 : 1;
         }
       }
-      const mattermostFailed = !(await this.syncEmote('Mattermost', name, url, () =>
-        this.mattermost.createEmote(name, url),
-      ));
-      mattermostUploaded += mattermostFailed ? 0 : 1;
-      if (zulipFailed || mattermostFailed) {
+      const mattermost = onMattermost?.has(name) ? 'exists' : await this.uploadToMattermost(name, url);
+      if (mattermost === 'uploaded') {
+        mattermostUploaded++;
+      } else if (mattermost === 'exists') {
+        alreadyOnMattermost.push(name);
+      }
+      if (zulipFailed || mattermost === 'failed') {
         failed.push(name);
       }
     }
@@ -803,8 +821,35 @@ ${formattedCode}
       zulipSkipped: !existing,
       failed,
       renamed,
-      alreadySynced,
+      alreadyOnZulip,
+      alreadyOnMattermost,
     };
+  }
+
+  private async listMattermostEmoji() {
+    try {
+      return new Set(await this.mattermost.listEmoji());
+    } catch (error) {
+      this.logger.error(
+        'Could not list the Mattermost emoji, so every emote is uploaded and a name Mattermost already has counts as already there',
+        error,
+      );
+      return undefined;
+    }
+  }
+
+  /** Checked on the upload too, not only against the listing: the listing may have failed, or the name been taken since. */
+  private async uploadToMattermost(name: string, url: string): Promise<'uploaded' | 'exists' | 'failed'> {
+    try {
+      await this.mattermost.createEmote(name, url);
+      return 'uploaded';
+    } catch (error) {
+      if (error instanceof ClientError && error.server_error_id === MATTERMOST_DUPLICATE_EMOJI) {
+        return 'exists';
+      }
+      this.logger.error(`Could not sync emote ${name} - ${url} to Mattermost`, error);
+      return 'failed';
+    }
   }
 
   private async listZulipEmoji() {

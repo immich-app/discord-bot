@@ -16,6 +16,9 @@ import {
 } from 'src/interfaces/mattermost.interface';
 import WebSocket from 'ws';
 
+/** The most `GET /emoji` returns per page. */
+const EMOJI_PAGE_SIZE = 200;
+
 export class MattermostRepository implements IMattermostInterface {
   #client: Client4;
   #wsClient: WebSocketClient;
@@ -207,6 +210,17 @@ export class MattermostRepository implements IMattermostInterface {
   async createEmote(name: string, emoteUrl: string) {
     const emote = await fetch(emoteUrl).then((response) => response.blob());
     await this.#client.createCustomEmoji({ creator_id: this.#user.id, name }, new File([emote], name));
+  }
+
+  async listEmoji() {
+    const names: string[] = [];
+    for (let page = 0; ; page++) {
+      const emoji = await this.#client.getCustomEmojis(page, EMOJI_PAGE_SIZE);
+      names.push(...emoji.map(({ name }) => name));
+      if (emoji.length < EMOJI_PAGE_SIZE) {
+        return names;
+      }
+    }
   }
 
   async *streamChannels(teamId?: string) {

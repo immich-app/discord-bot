@@ -36,6 +36,7 @@ const newMattermostMock = (): Mocked<IMattermostInterface> => ({
   reply: vitest.fn(),
   runCommand: vitest.fn(),
   send: vitest.fn(),
+  listEmoji: vitest.fn(),
   streamChannels: vitest.fn(),
   updatePost: vitest.fn(),
   openDialog: vitest.fn(),

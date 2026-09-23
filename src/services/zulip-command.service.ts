@@ -147,7 +147,7 @@ export class ZulipCommandService {
     },
     'emote-sync': {
       usage: 'emote-sync',
-      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip, skipping a name Zulip already has, and to Mattermost, which is sent every one`,
+      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
       positionals: 0,
       options: [],
       run: (context) =>

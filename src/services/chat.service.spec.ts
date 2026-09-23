@@ -1,3 +1,4 @@
+import { ClientError } from '@mattermost/client';
 import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
 import { Constants } from 'src/constants';
@@ -109,6 +110,7 @@ const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
   reply: vitest.fn(),
   updatePost: vitest.fn(),
   createEmote: vitest.fn(),
+  listEmoji: vitest.fn(),
   streamChannels: vitest.fn(),
   joinChannel: vitest.fn(),
   registerCommand: vitest.fn() as any,
@@ -660,6 +662,7 @@ describe('Bot test', () => {
 
     beforeEach(() => {
       zulipMock.listEmoji.mockResolvedValue([]);
+      mattermostMock.listEmoji.mockResolvedValue([]);
     });
 
     it('should upload every Discord emote to Zulip and Mattermost, then report done', async () => {
@@ -891,6 +894,94 @@ describe('Bot test', () => {
       expect(mattermostMock.createEmote).not.toHaveBeenCalled();
     });
 
+    describe('Mattermost names', () => {
+      const emotes = [
+        { identifier: 'catJAM:1', name: 'catJAM', url: 'https://cdn.discordapp.com/emojis/1.webp', animated: false },
+        { identifier: 'pepeD:2', name: 'pepeD', url: 'https://cdn.discordapp.com/emojis/2.webp', animated: false },
+      ];
+      const duplicate = () =>
+        new ClientError('https://mattermost.example.com', {
+          message: 'Unable to create emoji. Another emoji with the same name already exists.',
+          server_error_id: 'api.emoji.create.duplicate.app_error',
+          status_code: 400,
+          url: 'https://mattermost.example.com/api/v4/emoji',
+        });
+
+      beforeEach(() => {
+        vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+        discordMock.getEmotes.mockResolvedValue(emotes);
+      });
+
+      afterEach(() => {
+        vitest.restoreAllMocks();
+      });
+
+      it('should skip a name Mattermost already has instead of uploading it again, and say so', async () => {
+        const { interaction, reply } = newInteraction();
+        mattermostMock.listEmoji.mockResolvedValue(['catJAM', 'someone_elses']);
+
+        await syncEmotes(interaction);
+
+        expect(mattermostMock.createEmote.mock.calls).toEqual([['pepeD', 'https://cdn.discordapp.com/emojis/2.webp']]);
+        expect(zulipMock.createEmote).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 already on Mattermost: catJAM',
+        );
+      });
+
+      it('should count a name Mattermost refuses as a duplicate as already there, not as a failure', async () => {
+        const { interaction, reply } = newInteraction();
+        mattermostMock.createEmote.mockRejectedValueOnce(duplicate());
+
+        await syncEmotes(interaction);
+
+        expect(mattermostMock.createEmote).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 already on Mattermost: catJAM',
+        );
+      });
+
+      it('should still report another Mattermost refusal as a failure', async () => {
+        const { interaction, reply } = newInteraction();
+        mattermostMock.createEmote.mockRejectedValueOnce(
+          new ClientError('https://mattermost.example.com', {
+            message: 'Invalid emoji name.',
+            server_error_id: 'model.emoji.name.app_error',
+            status_code: 400,
+          }),
+        );
+
+        await syncEmotes(interaction);
+
+        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+          'Could not sync emote catJAM - https://cdn.discordapp.com/emojis/1.webp to Mattermost',
+          expect.any(ClientError),
+        );
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 failed: catJAM',
+        );
+      });
+
+      it('should upload every emote when Mattermost cannot list its emoji, still counting a duplicate as already there', async () => {
+        const { interaction, reply } = newInteraction();
+        mattermostMock.listEmoji.mockRejectedValue(new Error('fetch failed'));
+        mattermostMock.createEmote.mockRejectedValueOnce(duplicate());
+
+        await syncEmotes(interaction);
+
+        expect(mattermostMock.createEmote).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+          'Could not list the Mattermost emoji, so every emote is uploaded and a name Mattermost already has counts as already there',
+          expect.any(Error),
+        );
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 already on Mattermost: catJAM',
+        );
+      });
+    });
+
     describe('failures', () => {
       const emotes = [
         { identifier: 'catJAM:1', name: 'catJAM', url: 'https://cdn.discordapp.com/emojis/1.webp', animated: false },
@@ -1034,23 +1125,32 @@ describe('Bot test', () => {
       zulipSkipped: false,
       failed: ['pepeD'],
       renamed: [],
-      alreadySynced: ['catJAM'],
+      alreadyOnZulip: ['catJAM'],
+      alreadyOnMattermost: ['kekw'],
     };
 
     it('should start with "Done syncing" and say how many were uploaded where when no subject is given, as Discord posts it', () => {
       expect(formatEmoteSyncReport(report)).toBe(
-        'Done syncing: 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, 1 already on Zulip: catJAM',
+        'Done syncing: 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, 1 already on Zulip: catJAM, 1 already on Mattermost: kekw',
       );
     });
 
     it('should name the subject when one is given, as the Zulip command does, since its target is not where it is run', () => {
       expect(formatEmoteSyncReport(report, 'the emotes of the Immich Discord server (979116623879368755)')).toBe(
-        'Done syncing the emotes of the Immich Discord server (979116623879368755): 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, 1 already on Zulip: catJAM',
+        'Done syncing the emotes of the Immich Discord server (979116623879368755): 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, 1 already on Zulip: catJAM, 1 already on Mattermost: kekw',
       );
     });
 
     it('should say so plainly when the server has no emotes', () => {
-      const empty = { ...report, total: 0, zulipUploaded: 0, mattermostUploaded: 0, failed: [], alreadySynced: [] };
+      const empty = {
+        ...report,
+        total: 0,
+        zulipUploaded: 0,
+        mattermostUploaded: 0,
+        failed: [],
+        alreadyOnZulip: [],
+        alreadyOnMattermost: [],
+      };
 
       expect(formatEmoteSyncReport(empty)).toBe(
         'Done syncing: the Discord server has no emotes, so nothing was uploaded',

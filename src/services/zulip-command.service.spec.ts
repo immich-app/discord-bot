@@ -94,7 +94,7 @@ const SERVER = 'the Immich Discord server (979116623879368755)';
 const HELP = [
   'Mention me at the start of a message in a team stream, then one of:',
   '- `help`: this list',
-  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has, and to Mattermost, which is sent every one`,
+  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
   '- `backfill-pull-requests <number|all>`: create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
   '- `fourthwall update <id|all>`: fetch that Fourthwall order again and update its row in the database, or with `all` every order',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
@@ -450,7 +450,8 @@ describe('ZulipCommandService', () => {
       zulipSkipped: false,
       failed: [],
       renamed: ['nameless:3 → nameless_3'],
-      alreadySynced: [],
+      alreadyOnZulip: [],
+      alreadyOnMattermost: [],
     };
     const DONE = `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 renamed: nameless:3 → nameless_3`;
 
@@ -483,14 +484,15 @@ describe('ZulipCommandService', () => {
         zulipSkipped: true,
         failed: ['pepeD'],
         renamed: [],
-        alreadySynced: ['catJAM', 'CatJam → catjam2'],
+        alreadyOnZulip: ['catJAM', 'CatJam → catjam2'],
+        alreadyOnMattermost: ['kekw'],
       });
 
       await send('@**Immich** emote-sync');
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2, 1 already on Mattermost: kekw`,
       );
     });
 

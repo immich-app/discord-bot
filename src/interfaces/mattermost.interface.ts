@@ -148,6 +148,8 @@ export interface IMattermostInterface {
   reply: (reply: { channelId: string; rootId: string; message: string }) => Promise<void>;
   updatePost: (post: Partial<Post> & { id: string }) => Promise<void>;
   createEmote: (name: string, emoteUrl: string) => Promise<void>;
+  /** The names of every custom emoji. */
+  listEmoji: () => Promise<string[]>;
   streamChannels: (
     teamId?: string,
   ) => AsyncGenerator<Awaited<ReturnType<Client4['getAllChannels']>>['channels'][number]>;
