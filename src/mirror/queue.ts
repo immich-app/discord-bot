@@ -38,7 +38,6 @@ export class SerialQueue {
     return new Promise<void>((resolve) => this.idle.push(resolve));
   }
 
-  /** Refuses new ops; the ones already queued still run. */
   close() {
     this.closed = true;
   }

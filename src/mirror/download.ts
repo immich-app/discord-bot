@@ -2,7 +2,6 @@ const DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export const DISCORD_ATTACHMENT_ORIGINS = new Set(['https://cdn.discordapp.com', 'https://media.discordapp.net']);
 
-/** The body, or `undefined` as soon as it runs past `maxBytes`. */
 export const readAtMost = async (body: ReadableStream<Uint8Array> | null, maxBytes: number) => {
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -26,7 +25,6 @@ export const readAtMost = async (body: ReadableStream<Uint8Array> | null, maxByt
   return bytes;
 };
 
-/** Resolves to `undefined` when the file is larger than `maxBytes`. */
 export const downloadDiscordAttachment = async (
   attachment: { url: string; name: string; contentType: string | null },
   maxBytes: number,
