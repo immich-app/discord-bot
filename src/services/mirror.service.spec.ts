@@ -990,9 +990,36 @@ describe(MirrorService.name, () => {
       expect(zulip.downloadUpload).toHaveBeenCalledWith(
         '/user_uploads/2/ab/cdef/shot.png',
         Constants.Mirror.MaxFileBytes,
+        expect.any(AbortSignal),
       );
       expect(sent(0).content).toBe('look\n*(attachment not mirrored: big.zip)*');
       expect(sent(0).files?.map(({ name }) => name)).toEqual(['shot.png']);
+    });
+
+    it('should note the uploads it has no time left for, well before the queue gives up on the message', async () => {
+      vitest.useFakeTimers();
+      zulip.downloadUpload.mockImplementation(async (path, _maxBytes, signal) => {
+        await new Promise((resolve) => setTimeout(resolve, 70_000));
+        signal?.throwIfAborted();
+        return new File(['bytes'], path.slice(path.lastIndexOf('/') + 1));
+      });
+
+      for (const handler of stub.handlers.message) {
+        await handler(
+          zulipMessage({
+            content: ['a.png', 'b.png', 'c.png'].map((name) => `[${name}](/user_uploads/2/ab/cdef/${name})`).join('\n'),
+          }),
+        );
+      }
+      await vitest.advanceTimersByTimeAsync(150_000);
+      await sut.whenIdle();
+
+      expect(zulip.downloadUpload).toHaveBeenCalledTimes(2);
+      expect(sent(0).files?.map(({ name }) => name)).toEqual(['a.png']);
+      expect(sent(0).content).toBe('*(attachment not mirrored: b.png)*\n*(attachment not mirrored: c.png)*');
+      expect(warn()).toHaveBeenCalledWith(
+        'Dev: could not download upload 2 of Zulip message 1001: The files of this message took too long to transfer',
+      );
     });
 
     it('should resend without files when Discord finds the message too large', async () => {
@@ -1457,8 +1484,12 @@ describe(MirrorService.name, () => {
         discordMessage({ content: '', attachments: [attachment, { ...attachment, id: 'a2', name: 'gone.txt' }] }),
       );
 
-      expect(downloadDiscordAttachment).toHaveBeenCalledWith(attachment, Constants.Mirror.MaxUploadBytes);
-      expect(zulip.uploadFile).toHaveBeenCalledOnce();
+      expect(downloadDiscordAttachment).toHaveBeenCalledWith(
+        attachment,
+        Constants.Mirror.MaxUploadBytes,
+        expect.any(AbortSignal),
+      );
+      expect(zulip.uploadFile).toHaveBeenCalledExactlyOnceWith(expect.any(File), expect.any(AbortSignal));
       const content = sentMessages()[0].content;
       expect(content).toContain(`[log 1.txt](${UPLOAD_URL})`);
       expect(content).toContain('*(attachment not mirrored: gone.txt, see [Discord](https://discord.com/channels/');
@@ -1466,6 +1497,38 @@ describe(MirrorService.name, () => {
       expect(warn()).toHaveBeenCalledWith(
         'Dev: could not mirror attachment a2 of Discord message 300000000000000001: Discord answered the attachment download with status 404',
       );
+    });
+
+    it('should note the attachments it has no time left for, well before the queue gives up on the message', async () => {
+      vitest.useFakeTimers();
+      vitest.mocked(downloadDiscordAttachment).mockImplementation(async (attachment, _maxBytes, signal) => {
+        await new Promise((resolve) => setTimeout(resolve, 70_000));
+        signal?.throwIfAborted();
+        return new File(['log'], attachment.name);
+      });
+      const attachment = (name: string) => ({
+        id: name,
+        name,
+        url: `https://cdn.discordapp.com/a/${name}`,
+        size: 3,
+        contentType: 'text/plain',
+        spoiler: false,
+      });
+
+      sut.onDiscordMessage(
+        discordMessage({
+          content: 'logs',
+          attachments: [attachment('a.txt'), attachment('b.txt'), attachment('c.txt')],
+        }),
+      );
+      await vitest.advanceTimersByTimeAsync(150_000);
+      await sut.whenIdle();
+
+      expect(downloadDiscordAttachment).toHaveBeenCalledTimes(2);
+      expect(zulip.uploadFile).toHaveBeenCalledOnce();
+      const content = sentMessages()[0].content;
+      expect(content).toContain('attachment not mirrored: b.txt');
+      expect(content).toContain('attachment not mirrored: c.txt');
     });
 
     it('should not upload an attachment over the size limit', async () => {

@@ -58,6 +58,16 @@ describe('downloadDiscordAttachment', () => {
     expect(await file?.text()).toBe('hello');
   });
 
+  it("should give up when the caller's deadline passes", async () => {
+    fetchMock.mockResolvedValue(new Response('hello'));
+    const deadline = new AbortController();
+
+    await downloadDiscordAttachment(attachment, 100, deadline.signal);
+    deadline.abort();
+
+    expect(fetchMock.mock.calls[0][1]!.signal!.aborted).toBe(true);
+  });
+
   it('should take the type from the answer when Discord gave none', async () => {
     fetchMock.mockResolvedValue(new Response('hello', { headers: { 'content-type': 'image/png' } }));
 

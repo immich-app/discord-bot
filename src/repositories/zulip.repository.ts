@@ -181,8 +181,8 @@ export class ZulipRepository implements IZulipInterface {
     await this.bot.DELETE('/messages/{message_id}', { params: { path: { message_id: id } } });
   }
 
-  async uploadFile(file: File) {
-    const { data } = await this.uploads.POST('/user_uploads', multipart({ filename: file }));
+  async uploadFile(file: File, signal?: AbortSignal) {
+    const { data } = await this.uploads.POST('/user_uploads', { ...multipart({ filename: file }), signal });
     if (!data?.url) {
       throw new Error('Zulip returned no URL for the upload');
     }
@@ -193,10 +193,10 @@ export class ZulipRepository implements IZulipInterface {
    * An anonymous or unauthenticated request is redirected to the login page on the realm itself, or answered with it,
    * so only a redirect to another HTTPS origin (the S3 backend) is followed, once and without credentials.
    */
-  async downloadUpload(path: string, maxBytes: number) {
+  async downloadUpload(path: string, maxBytes: number, deadline?: AbortSignal) {
     const { origin, authorization } = this.site;
     const { url, name } = toUploadUrl(path, origin);
-    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+    const signal = AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), ...(deadline ? [deadline] : [])]);
 
     let response = await fetch(url, { headers: { Authorization: authorization }, redirect: 'manual', signal });
     if (response.status >= 300 && response.status < 400) {

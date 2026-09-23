@@ -120,12 +120,12 @@ export interface IZulipInterface {
   getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;
   deleteQueue(queueId: string): Promise<void>;
   deleteMessage(id: number): Promise<void>;
-  uploadFile(file: File): Promise<{ url: string; filename: string }>;
+  uploadFile(file: File, signal?: AbortSignal): Promise<{ url: string; filename: string }>;
   /**
    * Resolves to `undefined` when the file is larger than `maxBytes`; rejects with `ZulipUploadRefused` for anything
    * but a plain `/user_uploads/` path, and for an answer that is not the file.
    */
-  downloadUpload(path: string, maxBytes: number): Promise<File | undefined>;
+  downloadUpload(path: string, maxBytes: number, signal?: AbortSignal): Promise<File | undefined>;
   /** Up to `count` messages of the stream before `before`, or the newest ones, oldest first, as raw markdown. */
   getStreamMessagesBefore(query: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]>;
   /** Emoji name to its Unicode string, from the realm's static emoji table. */

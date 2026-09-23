@@ -936,6 +936,16 @@ describe('ZulipRepository', () => {
       expect(await part.text()).toBe('hello s1');
     });
 
+    it("should give up when the caller's deadline passes", async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', url: '/user_uploads/2/ab/cd/x.txt' }));
+      const deadline = new AbortController();
+
+      await sut.uploadFile(new File(['x'], 'x.txt'), deadline.signal);
+      deadline.abort();
+
+      expect(fetchMock.mock.calls[0][1]!.signal!.aborted).toBe(true);
+    });
+
     it('should fall back to the name it sent when Zulip does not say', async () => {
       fetchMock.mockResolvedValue(json({ result: 'success', msg: '', url: '/user_uploads/2/ab/cd/x.txt' }));
 
@@ -1060,6 +1070,16 @@ describe('ZulipRepository', () => {
       expect(request(0).url).toBe(
         'https://zulip.example.com/user_uploads/2/df/-U55VJFs070o1ZEF/caf%C3%A9%20r%C3%A9sum%C3%A9.txt',
       );
+    });
+
+    it("should give up when the caller's deadline passes", async () => {
+      fetchMock.mockResolvedValue(file());
+      const deadline = new AbortController();
+
+      await sut.downloadUpload(PATH, 100, deadline.signal);
+      deadline.abort();
+
+      expect(init(0)?.signal?.aborted).toBe(true);
     });
 
     it('should follow a redirect to another HTTPS origin once, without credentials and refusing any further redirect', async () => {

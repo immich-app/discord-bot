@@ -75,6 +75,7 @@ const ACTIVE_THREAD_DAYS = 7;
 const ACTIVE_THREAD_LIMIT = 20;
 const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
+const FILE_TRANSFER_BUDGET_MS = 120_000;
 const DISCORD_MESSAGE_LENGTH = 2000;
 const URLS = /https?:\/\/[^\s<>)]+/g;
 const THREAD_DELETED_NOTICE = 'The Discord thread for this topic was deleted; the next message here starts a new one.';
@@ -156,6 +157,16 @@ const uploadName = (path: string) => {
   } catch {
     return segment;
   }
+};
+
+/** The files of one message share a deadline well inside the queue's watchdog; one past it becomes a note. */
+const transferDeadline = () => {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('The files of this message took too long to transfer', 'TimeoutError')),
+    FILE_TRANSFER_BUDGET_MS,
+  );
+  return { signal: controller.signal, done: () => clearTimeout(timer) };
 };
 
 const noteLine = (name: string) => `*(attachment not mirrored: ${escapeDiscordInline(name)})*`;
@@ -899,14 +910,15 @@ export class MirrorService implements OnModuleDestroy {
     const files: File[] = [];
     const notes: string[] = [];
     let total = 0;
+    const deadline = transferDeadline();
     for (const [index, path] of paths.entries()) {
       const name = uploadName(path);
-      if (index >= MAX_FILES) {
+      if (index >= MAX_FILES || deadline.signal.aborted) {
         notes.push(name);
         continue;
       }
       try {
-        const file = await this.zulip.downloadUpload(path, Constants.Mirror.MaxFileBytes);
+        const file = await this.zulip.downloadUpload(path, Constants.Mirror.MaxFileBytes, deadline.signal);
         if (file && total + file.size <= MAX_TOTAL_FILE_BYTES) {
           total += file.size;
           files.push(file);
@@ -920,6 +932,7 @@ export class MirrorService implements OnModuleDestroy {
         );
       }
     }
+    deadline.done();
     return { files, notes };
   }
 
@@ -1660,12 +1673,13 @@ export class MirrorService implements OnModuleDestroy {
 
   private async uploadAttachments(state: PairState, dto: DiscordSourceMessage) {
     const results: ZulipAttachmentResult[] = [];
+    const deadline = transferDeadline();
     for (const [index, attachment] of dto.attachments.entries()) {
       let url: string | null = null;
-      if (index < MAX_FILES && attachment.size <= Constants.Mirror.MaxUploadBytes) {
+      if (index < MAX_FILES && attachment.size <= Constants.Mirror.MaxUploadBytes && !deadline.signal.aborted) {
         try {
-          const file = await downloadDiscordAttachment(attachment, Constants.Mirror.MaxUploadBytes);
-          url = file ? (await this.zulip.uploadFile(file)).url : null;
+          const file = await downloadDiscordAttachment(attachment, Constants.Mirror.MaxUploadBytes, deadline.signal);
+          url = file ? (await this.zulip.uploadFile(file, deadline.signal)).url : null;
         } catch (error) {
           this.logger.warn(
             `${state.pair.key}: could not mirror attachment ${attachment.id} of Discord message ${dto.id}: ${describe(error)}`,
@@ -1674,6 +1688,7 @@ export class MirrorService implements OnModuleDestroy {
       }
       results.push({ name: attachment.name, spoiler: attachment.spoiler, url });
     }
+    deadline.done();
     return results;
   }
 

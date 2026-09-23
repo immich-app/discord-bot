@@ -30,13 +30,15 @@ export const readAtMost = async (body: ReadableStream<Uint8Array> | null, maxByt
 export const downloadDiscordAttachment = async (
   attachment: { url: string; name: string; contentType: string | null },
   maxBytes: number,
+  deadline?: AbortSignal,
 ) => {
   const url = new URL(attachment.url);
   if (!DISCORD_ATTACHMENT_ORIGINS.has(url.origin)) {
     throw new Error('Not a Discord attachment URL');
   }
 
-  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+  const signal = AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), ...(deadline ? [deadline] : [])]);
+  const response = await fetch(url, { redirect: 'follow', signal });
   if (!response.ok) {
     await response.body?.cancel();
     throw new Error(`Discord answered the attachment download with status ${response.status}`);
