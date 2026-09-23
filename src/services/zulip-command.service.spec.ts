@@ -444,11 +444,15 @@ describe('ZulipCommandService', () => {
 
   describe('emote-sync', () => {
     const report: EmoteSyncReport = {
+      total: 3,
+      zulipUploaded: 3,
+      mattermostUploaded: 3,
       zulipSkipped: false,
       failed: [],
       renamed: ['nameless:3 → nameless_3'],
       alreadySynced: [],
     };
+    const DONE = `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 renamed: nameless:3 → nameless_3`;
 
     it('should acknowledge at once, naming the server, sync it in the background and post the report when done', async () => {
       let finish!: (report: EmoteSyncReport) => void;
@@ -467,12 +471,15 @@ describe('ZulipCommandService', () => {
 
       expect(replies().map(({ content }) => content)).toEqual([
         `Syncing the emotes of ${SERVER} to Zulip and Mattermost, this can take a few minutes…`,
-        `Done syncing the emotes of ${SERVER}, 1 renamed: nameless:3 → nameless_3`,
+        DONE,
       ]);
     });
 
     it('should report the same outcome as Discord does, naming the server', async () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
+        total: 3,
+        zulipUploaded: 0,
+        mattermostUploaded: 2,
         zulipSkipped: true,
         failed: ['pepeD'],
         renamed: [],
@@ -483,32 +490,31 @@ describe('ZulipCommandService', () => {
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, Zulip skipped: its emoji could not be listed, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2`,
       );
     });
 
     it('should mention nobody through an emote name', async () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
-        zulipSkipped: false,
+        ...report,
         failed: ['@**all**'],
         renamed: ['#**general** → general'],
-        alreadySynced: [],
       });
 
       await send('@**Immich** emote-sync');
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, 1 failed: @\u200B**all**, 1 renamed: #\u200B**general** → general`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 failed: @\u200B**all**, 1 renamed: #\u200B**general** → general`,
       );
     });
 
     it("should keep the report within Zulip's message limit", async () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
-        zulipSkipped: false,
+        ...report,
+        total: 1000,
         failed: Array.from({ length: 1000 }, (_, index) => `emote_number_${index}`),
         renamed: [],
-        alreadySynced: [],
       });
 
       await send('@**Immich** emote-sync');
@@ -516,7 +522,7 @@ describe('ZulipCommandService', () => {
 
       const outcome = replies().at(-1)!.content;
       expect(outcome).toMatch(
-        /^Done syncing the emotes of the Immich Discord server \(979116623879368755\), 1000 failed: emote_number_0, /,
+        /^Done syncing the emotes of the Immich Discord server \(979116623879368755\): 1000 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1000 failed: emote_number_0, /,
       );
       expect(outcome).toMatch(/\.\.\.$/);
       expect(outcome).toHaveLength(10_000);
@@ -554,8 +560,21 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** emote-sync', { id: 501 });
       await flush();
 
+      expect(replies().at(-1)?.content).toBe(DONE);
+    });
+
+    it('should say the sync failed when the bot cannot read the server, rather than report it done', async () => {
+      chatServiceMock.syncEmotes.mockRejectedValue(
+        new Error(
+          'Cannot read the emotes of Discord server 979116623879368755: the bot is not logged in to Discord, or not a member of that server',
+        ),
+      );
+
+      await send('@**Immich** emote-sync');
+      await flush();
+
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, 1 renamed: nameless:3 → nameless_3`,
+        '`emote-sync` failed: `Cannot read the emotes of Discord server 979116623879368755: the bot is not logged in to Discord, or not a member of that server`',
       );
     });
 
@@ -575,9 +594,7 @@ describe('ZulipCommandService', () => {
       await flush();
 
       expect(chatServiceMock.syncEmotes).toHaveBeenCalledTimes(2);
-      expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, 1 renamed: nameless:3 → nameless_3`,
-      );
+      expect(replies().at(-1)?.content).toBe(DONE);
     });
 
     it('should not start the sync when the acknowledgement cannot be posted, and not stay locked', async () => {

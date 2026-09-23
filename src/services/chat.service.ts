@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo } from 'src/constants';
-import { neutraliseZulipMentions, shorten } from 'src/format';
+import { neutraliseZulipMentions, plural, shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -109,6 +109,9 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
 };
 
 export type EmoteSyncReport = {
+  total: number;
+  zulipUploaded: number;
+  mattermostUploaded: number;
   zulipSkipped: boolean;
   failed: string[];
   renamed: string[];
@@ -116,18 +119,23 @@ export type EmoteSyncReport = {
 };
 
 export const formatEmoteSyncReport = (
-  { zulipSkipped, failed, renamed, alreadySynced }: EmoteSyncReport,
+  { total, zulipUploaded, mattermostUploaded, zulipSkipped, failed, renamed, alreadySynced }: EmoteSyncReport,
   subject?: string,
-) =>
-  [
-    subject ? `Done syncing ${subject}` : 'Done syncing',
-    zulipSkipped && 'Zulip skipped: its emoji could not be listed',
+) => {
+  const done = subject ? `Done syncing ${subject}` : 'Done syncing';
+  if (total === 0) {
+    return `${done}: the Discord server has no emotes, so nothing was uploaded`;
+  }
+  const outcome = [
+    plural(total, 'emote'),
+    `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ' (skipped: its emoji could not be listed)' : ''}`,
+    `${mattermostUploaded} uploaded to Mattermost`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
     alreadySynced.length > 0 && `${alreadySynced.length} already on Zulip: ${alreadySynced.join(', ')}`,
-  ]
-    .filter(Boolean)
-    .join(', ');
+  ];
+  return `${done}: ${outcome.filter(Boolean).join(', ')}`;
+};
 
 @Injectable()
 export class ChatService {
@@ -747,9 +755,16 @@ ${formattedCode}
 
   async syncEmotes(guildId: string): Promise<EmoteSyncReport> {
     const emotes = await this.discord.getEmotes(guildId);
+    if (!emotes) {
+      throw new Error(
+        `Cannot read the emotes of Discord server ${guildId}: the bot is not logged in to Discord, or not a member of that server`,
+      );
+    }
     const existing = await this.listZulipEmoji();
     const claimed = new Set<string>();
 
+    let zulipUploaded = 0;
+    let mattermostUploaded = 0;
     const failed: string[] = [];
     const renamed: string[] = [];
     const alreadySynced: string[] = [];
@@ -769,17 +784,27 @@ ${formattedCode}
             renamed.push(asZulip);
           }
           zulipFailed = !(await this.syncEmote('Zulip', name, url, () => this.zulip.createEmote(zulipName, url)));
+          zulipUploaded += zulipFailed ? 0 : 1;
         }
       }
       const mattermostFailed = !(await this.syncEmote('Mattermost', name, url, () =>
         this.mattermost.createEmote(name, url),
       ));
+      mattermostUploaded += mattermostFailed ? 0 : 1;
       if (zulipFailed || mattermostFailed) {
         failed.push(name);
       }
     }
 
-    return { zulipSkipped: !existing, failed, renamed, alreadySynced };
+    return {
+      total: emotes.length,
+      zulipUploaded,
+      mattermostUploaded,
+      zulipSkipped: !existing,
+      failed,
+      renamed,
+      alreadySynced,
+    };
   }
 
   private async listZulipEmoji() {
