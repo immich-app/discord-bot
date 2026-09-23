@@ -1301,12 +1301,12 @@ export class MirrorService implements OnModuleDestroy {
   private async conversationForZulip(state: PairState, message: ZulipReceivedMessage) {
     const { pair } = state;
     const key = topicKey(message.topic);
+    if (isMainTopic(pair, key)) {
+      return this.mainConversation(state);
+    }
     const known = await this.database.getMirrorConversationByZulipTopic(pair.zulipStreamId, key);
     if (known) {
       return known;
-    }
-    if (isMainTopic(pair, key)) {
-      return this.mainConversation(state);
     }
 
     const recent = await this.retryZulip(() =>
@@ -1357,6 +1357,13 @@ export class MirrorService implements OnModuleDestroy {
     const zulipTopic = pair.mainTopic!;
     const zulipTopicKey = topicKey(zulipTopic);
     const existing = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, null);
+    if (existing?.zulipStreamId === pair.zulipStreamId && existing.zulipTopic === zulipTopic) {
+      return existing;
+    }
+    const owner = await this.database.getMirrorConversationByZulipTopic(pair.zulipStreamId, zulipTopicKey);
+    if (owner && owner.id !== existing?.id) {
+      await this.detach(state, owner, 'its Zulip topic is now the main topic');
+    }
     if (!existing) {
       const created = await this.database.createMirrorConversation({
         pair: pair.key,
@@ -1369,9 +1376,6 @@ export class MirrorService implements OnModuleDestroy {
       });
       this.logger.log(`${pair.key}: created the main conversation of Discord channel ${pair.discordChannelId}`);
       return created;
-    }
-    if (existing.zulipStreamId === pair.zulipStreamId && existing.zulipTopic === zulipTopic) {
-      return existing;
     }
     const changes = { zulipStreamId: pair.zulipStreamId, zulipTopic, zulipTopicKey };
     await this.database.updateMirrorConversation(existing.id, changes);

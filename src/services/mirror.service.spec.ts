@@ -152,7 +152,20 @@ const newMirrorDatabase = () => {
       return { ...created };
     }),
     updateMirrorConversation: vitest.fn(async (id: string, changes: UpdateMirrorConversation) => {
-      Object.assign(conversation(id)!, changes);
+      const row = conversation(id)!;
+      const updated = { ...row, ...changes };
+      if (
+        conversations.some(
+          (other) =>
+            other !== row &&
+            ((other.zulipStreamId === updated.zulipStreamId && other.zulipTopicKey === updated.zulipTopicKey) ||
+              (other.discordChannelId === updated.discordChannelId &&
+                other.discordThreadId === updated.discordThreadId)),
+        )
+      ) {
+        throw new Error('duplicate key value violates unique constraint');
+      }
+      Object.assign(row, changes);
     }),
     removeMirrorConversation: vitest.fn(async (id: string) => {
       conversations.splice(conversations.indexOf(conversation(id)!), 1);
@@ -1437,6 +1450,32 @@ describe(MirrorService.name, () => {
 
       expect(sent(0).threadId).toBeUndefined();
       expect(db.conversations).toEqual([expect.objectContaining({ zulipTopic: '#dev', zulipTopicKey: '#dev' })]);
+    });
+
+    it('should let a thread go whose topic a changed main topic now names', async () => {
+      seedThread({ discordThreadId: null, zulipTopic: '#old', zulipTopicKey: '#old', zulipAnchorMessageId: null });
+      seedThread({ zulipTopic: '#Dev', zulipTopicKey: '#dev' });
+
+      await fromDiscord(discordMessage());
+      await fromZulip(zulipMessage());
+
+      expect(sentMessages()[0].topic).toBe('#dev');
+      expect(sent(0).threadId).toBeUndefined();
+      expect(db.conversations).toEqual([
+        expect.objectContaining({ discordThreadId: null, zulipTopic: '#dev', zulipTopicKey: '#dev' }),
+      ]);
+      expect(log()).toHaveBeenCalledWith(
+        'Dev: detached the conversation of Discord thread 200000000000000001: its Zulip topic is now the main topic',
+      );
+    });
+
+    it('should post in the channel from a main topic a thread still holds', async () => {
+      seedThread({ zulipTopic: '#Dev', zulipTopicKey: '#dev' });
+
+      await fromZulip(zulipMessage());
+
+      expect(sent(0).threadId).toBeUndefined();
+      expect(db.conversations).toEqual([expect.objectContaining({ discordThreadId: null, zulipTopicKey: '#dev' })]);
     });
 
     it('should log a notice that cannot be posted', async () => {
