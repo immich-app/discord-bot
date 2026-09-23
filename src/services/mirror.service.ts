@@ -182,6 +182,14 @@ const mayHaveBeenCarriedOut = (error: unknown) =>
 
 const noneTurnedAway = (): TurnedAway => ({ discord: new Map(), zulip: new Set() });
 
+const isEmpty = ({ discord, zulip }: TurnedAway) => discord.size === 0 && zulip.size === 0;
+
+/** Says nothing about the message: the side cannot be reached at all, or refuses every request for now. */
+const isOutage = (error: unknown) =>
+  isConnectFailure(error) ||
+  isMirrorError(error, 'unreachable') ||
+  (error instanceof ZulipApiError && error.status === 429);
+
 const snowflakeAt = (ms: number) => (BigInt(ms) - DISCORD_EPOCH) << 22n;
 
 const isMainTopic = (pair: EnabledPair, key: string) => pair.mainTopic !== null && key === topicKey(pair.mainTopic);
@@ -640,8 +648,14 @@ export class MirrorService implements OnModuleDestroy {
         this.turnAway(state, turnedAway);
         return;
       }
-      this.queueMissed(state, generation, discord, zulip, since);
-      if (!discord.complete || !zulip.complete) {
+      const read = discord.complete && zulip.complete;
+      if (!read) {
+        this.forgiveFailedCreates();
+      }
+      // Only an op the queue's watchdog gave up on can meet creates turned away while it read.
+      const complete = read && isEmpty(state.turnedAway);
+      this.queueMissed(state, generation, discord.messages, zulip.messages, since, complete);
+      if (!complete) {
         this.turnAway(state, turnedAway);
         this.retryCatchUp(state);
       }
@@ -655,14 +669,15 @@ export class MirrorService implements OnModuleDestroy {
   private queueMissed(
     state: PairState,
     generation: number,
-    discord: Missed<DiscordSourceMessage>,
-    zulip: Missed<ZulipReceivedMessage>,
+    discord: DiscordSourceMessage[],
+    zulip: ZulipReceivedMessage[],
     since: number,
+    complete: boolean,
   ) {
     const { pair } = state;
-    const recentDiscord = discord.messages.filter(({ createdTimestamp }) => createdTimestamp >= since);
-    const recentZulip = zulip.messages.filter(({ timestamp }) => timestamp * 1000 >= since);
-    const skipped = discord.messages.length - recentDiscord.length + zulip.messages.length - recentZulip.length;
+    const recentDiscord = discord.filter(({ createdTimestamp }) => createdTimestamp >= since);
+    const recentZulip = zulip.filter(({ timestamp }) => timestamp * 1000 >= since);
+    const skipped = discord.length - recentDiscord.length + zulip.length - recentZulip.length;
     if (skipped > 0) {
       this.logger.log(
         `${pair.key}: catch-up skipped ${plural(skipped, 'message')} older than ${Constants.Mirror.CatchUpMaxAgeHours} hours`,
@@ -673,7 +688,7 @@ export class MirrorService implements OnModuleDestroy {
         `${pair.key}: catching up ${plural(recentDiscord.length, 'Discord message')} and ${plural(recentZulip.length, 'Zulip message')}`,
       );
     }
-    state.caughtUp = discord.complete && zulip.complete && this.discordConnected;
+    state.caughtUp = complete && this.discordConnected;
     state.queue.pushNext([
       ...recentDiscord.map((dto) => ({
         label: `Discord message ${dto.id}`,
@@ -927,23 +942,38 @@ export class MirrorService implements OnModuleDestroy {
     this.failedCreates.delete(source);
   }
 
+  /**
+   * A refusal is final, and an outage is no reason to give up on a message. Anything else before the message went out,
+   * such as a database failure, is tried again, but only so often.
+   */
   private createFailed(state: PairState, source: string, error: unknown, attempt: CreateAttempt, turnAway: () => void) {
     if (attempt.posted || attempt.uncertain) {
       this.failedCreates.set(source, MAX_CREATE_ATTEMPTS);
       return;
     }
-    if (!isTransient(error)) {
+    if (isExpected(error) && !isTransient(error)) {
       return;
     }
-    const attempts = (this.failedCreates.get(source) ?? 0) + 1;
-    this.failedCreates.set(source, attempts);
-    if (attempts >= MAX_CREATE_ATTEMPTS) {
-      this.logger.error(`${state.pair.key}: gave up on ${source} after ${attempts} attempts`);
-      return;
+    if (!isOutage(error)) {
+      const attempts = (this.failedCreates.get(source) ?? 0) + 1;
+      this.failedCreates.set(source, attempts);
+      if (attempts >= MAX_CREATE_ATTEMPTS) {
+        this.logger.error(`${state.pair.key}: gave up on ${source} after ${attempts} attempts`);
+        return;
+      }
     }
     turnAway();
     this.lostTrack(state);
     this.retryCatchUp(state);
+  }
+
+  /** A catch-up that cannot read a side shows the failures so far were an outage, not the messages. */
+  private forgiveFailedCreates() {
+    for (const [source, attempts] of this.failedCreates) {
+      if (attempts < MAX_CREATE_ATTEMPTS) {
+        this.failedCreates.delete(source);
+      }
+    }
   }
 
   private throttle(key: string, ms: number) {
@@ -1217,13 +1247,13 @@ export class MirrorService implements OnModuleDestroy {
     if (!this.mayCreate(state, source, generation, turnAway)) {
       return;
     }
-    if ((await this.database.getMirrorMessagesByZulipIds([message.id], { withDeleted: true })).length > 0) {
-      return;
-    }
-    this.senderNames.set(message.senderId, message.senderFullName);
 
     const attempt: CreateAttempt = { posted: false, uncertain: false };
     try {
+      if ((await this.database.getMirrorMessagesByZulipIds([message.id], { withDeleted: true })).length > 0) {
+        return;
+      }
+      this.senderNames.set(message.senderId, message.senderFullName);
       const conversation = await this.conversationForZulip(state, message);
       const late = message.timestamp > 0 && Date.now() - message.timestamp * 1000 > LATE_MS;
       const rendered = await this.renderForDiscord(state, message.content, late ? message.timestamp : undefined);
@@ -1887,12 +1917,12 @@ export class MirrorService implements OnModuleDestroy {
     if (!this.mayCreate(state, source, generation, turnAway)) {
       return;
     }
-    if ((await this.database.getMirrorMessagesByDiscordIds([dto.id], { withDeleted: true })).length > 0) {
-      return;
-    }
 
     const attempt: CreateAttempt = { posted: false, uncertain: false };
     try {
+      if ((await this.database.getMirrorMessagesByDiscordIds([dto.id], { withDeleted: true })).length > 0) {
+        return;
+      }
       let conversation: MirrorConversation | undefined;
       if (dto.threadId === null) {
         if (pair.mainTopic === null) {
