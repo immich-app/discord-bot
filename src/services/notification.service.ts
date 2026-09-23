@@ -41,7 +41,7 @@ export class NotificationService {
       delivered.push(await this.toDiscord(destination, notification, discord));
     }
 
-    if (mattermost) {
+    if (mattermost && this.mattermost.isInitialised()) {
       delivered.push(await this.toMattermost(destination, notification, mattermost));
     }
 
@@ -60,7 +60,9 @@ export class NotificationService {
         return this.discord.isReady() && this.toDiscord(`channel ${target.channelId}`, notification, target);
       }
       case 'mattermost': {
-        return this.toMattermost(`channel ${target.channelId}`, notification, target);
+        return (
+          this.mattermost.isInitialised() && this.toMattermost(`channel ${target.channelId}`, notification, target)
+        );
       }
       case 'zulip': {
         const label = `stream ${target.stream}, topic "${target.topic}"`;

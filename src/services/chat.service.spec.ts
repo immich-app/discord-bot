@@ -137,6 +137,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
+  isInitialised: vitest.fn().mockReturnValue(true),
   init: vitest.fn(),
   registerEventListener: vitest.fn() as any,
   send: vitest.fn(),
@@ -1208,6 +1209,20 @@ describe('Bot test', () => {
         );
         expect(reply.edit).toHaveBeenCalledWith(
           'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 3 uploaded to Mattermost',
+        );
+      });
+
+      it('should skip Mattermost and say so when it is not configured, and still sync Zulip', async () => {
+        const { interaction, reply } = newInteraction();
+        mattermostMock.isInitialised.mockReturnValue(false);
+
+        await syncEmotes(interaction);
+
+        expect(mattermostMock.listEmoji).not.toHaveBeenCalled();
+        expect(mattermostMock.createEmote).not.toHaveBeenCalled();
+        expect(zulipMock.createEmote).toHaveBeenCalledTimes(3);
+        expect(reply.edit).toHaveBeenCalledWith(
+          'Done syncing: 3 emotes, 3 uploaded to Zulip, 0 uploaded to Mattermost (skipped: not configured), 1 renamed: nameless:3 → nameless_3',
         );
       });
 
