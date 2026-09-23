@@ -128,6 +128,7 @@ const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
 
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
+  isInitialised: vitest.fn().mockReturnValue(false),
   createEmote: vitest.fn(),
   sendMessage: vitest.fn(),
 });
@@ -360,7 +361,7 @@ describe(WebhookService.name, () => {
       outlineMock,
       mattermostMock,
       zulipMock,
-      new NotificationService(discordMock, mattermostMock),
+      new NotificationService(discordMock, mattermostMock, zulipMock),
     );
   });
 

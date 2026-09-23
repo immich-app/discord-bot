@@ -118,6 +118,7 @@ const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
 
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
+  isInitialised: vitest.fn(),
   createEmote: vitest.fn(),
   sendMessage: vitest.fn(),
 });

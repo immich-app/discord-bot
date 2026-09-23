@@ -4,6 +4,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
+import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { NotificationService } from 'src/services/notification.service';
 import { ScheduleService } from 'src/services/schedule.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
@@ -45,6 +46,13 @@ const newMattermostMock = (): Mocked<IMattermostInterface> => ({
   submitDialog: vitest.fn(),
 });
 
+const newZulipMock = (): Mocked<IZulipInterface> => ({
+  init: vitest.fn(),
+  isInitialised: vitest.fn().mockReturnValue(false),
+  sendMessage: vitest.fn(),
+  createEmote: vitest.fn(),
+});
+
 /** Freeze luxon's clock at the given UTC instant. */
 const setNow = (iso: string) => {
   const millis = DateTime.fromISO(iso, { zone: 'utc' }).toMillis();
@@ -75,7 +83,7 @@ describe('ScheduleService', () => {
       databaseMock as unknown as IDatabaseRepository,
       discordMock,
       outlineMock,
-      new NotificationService(discordMock, mattermostMock),
+      new NotificationService(discordMock, mattermostMock, newZulipMock()),
     );
   });
 

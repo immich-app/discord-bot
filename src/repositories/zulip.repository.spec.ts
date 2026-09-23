@@ -39,6 +39,10 @@ describe('ZulipRepository', () => {
   });
 
   describe('before init', () => {
+    it('should report itself as not initialised', () => {
+      expect(sut.isInitialised()).toBe(false);
+    });
+
     it('should throw a clear error from sendMessage', async () => {
       await expect(sut.sendMessage({ stream: 54, topic: 'release', content: 'hi' })).rejects.toThrow(
         'Zulip client not initialised',
@@ -57,6 +61,10 @@ describe('ZulipRepository', () => {
   describe('sendMessage', () => {
     beforeEach(async () => {
       await sut.init(config);
+    });
+
+    it('should report itself as initialised', () => {
+      expect(sut.isInitialised()).toBe(true);
     });
 
     it('should post a channel message as the bot and return the message ID', async () => {
