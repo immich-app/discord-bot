@@ -81,6 +81,32 @@ const defaultGithubRepo = {
   [Constants.Mattermost.Teams.FHS]: GithubRepo.FHSCore,
 };
 
+/**
+ * Zulip allows only letters, digits, `-` and `_` (read as a space), ignores case, and refuses a name that
+ * ends in `_` or `-`, a rule its spec leaves out.
+ */
+const toZulipEmojiName = (name: string) => {
+  const legal = name
+    .toLowerCase()
+    .replaceAll(/[^0-9a-z_-]/g, '_')
+    .replace(/[_-]+$/, '');
+  return legal || 'emote';
+};
+
+/**
+ * The suffix is decided from the run alone so it is stable across syncs: an emote uploaded as `catjam2` is
+ * found again rather than re-uploaded as `catjam3`.
+ */
+const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
+  const base = toZulipEmojiName(name);
+  let candidate = base;
+  for (let suffix = 2; claimed.has(candidate); suffix++) {
+    candidate = `${base}${suffix}`;
+  }
+  claimed.add(candidate);
+  return candidate;
+};
+
 @Injectable()
 export class ChatService {
   private logger = new Logger(ChatService.name);
@@ -680,26 +706,61 @@ ${formattedCode}
 
     const deferredInteraction = await interaction.deferReply();
 
+    const emotes = await this.discord.getEmotes(interaction.guildId);
+    const existing = await this.listZulipEmoji();
+    const claimed = new Set<string>();
+
     const failed: string[] = [];
-    for (const emote of await this.discord.getEmotes(interaction.guildId)) {
+    const renamed: string[] = [];
+    const alreadySynced: string[] = [];
+    for (const emote of emotes) {
       const name = emote.name ?? emote.identifier;
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
+
       // One bad emote, or one platform being down, must not abort the rest of the sync.
-      const zulipSynced = await this.syncEmote('Zulip', name, url, () => this.zulip.createEmote(name, url));
-      const mattermostSynced = await this.syncEmote('Mattermost', name, url, () =>
+      let zulipFailed = false;
+      if (existing) {
+        const zulipName = claimZulipEmojiName(name, claimed);
+        const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
+        if (existing.has(zulipName)) {
+          alreadySynced.push(asZulip);
+        } else {
+          if (asZulip !== name) {
+            renamed.push(asZulip);
+          }
+          zulipFailed = !(await this.syncEmote('Zulip', name, url, () => this.zulip.createEmote(zulipName, url)));
+        }
+      }
+      const mattermostFailed = !(await this.syncEmote('Mattermost', name, url, () =>
         this.mattermost.createEmote(name, url),
-      );
-      if (!zulipSynced || !mattermostSynced) {
+      ));
+      if (zulipFailed || mattermostFailed) {
         failed.push(name);
       }
     }
 
     // A systemic failure (a bot account cannot upload emoji) lists every emote; Discord caps a message at 2000.
-    await deferredInteraction.edit(
-      failed.length === 0
-        ? 'Done syncing'
-        : shorten(`Done syncing, ${failed.length} failed: ${failed.join(', ')}`, 2000),
-    );
+    const report = [
+      'Done syncing',
+      !existing && 'Zulip skipped: its emoji could not be listed',
+      failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
+      renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
+      alreadySynced.length > 0 && `${alreadySynced.length} already on Zulip: ${alreadySynced.join(', ')}`,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    await deferredInteraction.edit(shorten(report, 2000));
+  }
+
+  private async listZulipEmoji() {
+    try {
+      const emoji = await this.zulip.listEmoji();
+      // A deactivated emoji frees its name: Zulip lets a new upload take it.
+      return new Set(emoji.filter(({ deactivated }) => !deactivated).map(({ name }) => name));
+    } catch (error) {
+      this.logger.error('Could not list the Zulip emoji, skipping the Zulip side of the sync', error);
+      return undefined;
+    }
   }
 
   private async syncEmote(platform: string, name: string, url: string, upload: () => Promise<void>) {

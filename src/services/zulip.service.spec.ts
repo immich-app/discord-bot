@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { DateTime, Settings } from 'luxon';
 import { Constants } from 'src/constants';
 import { HolidayDto, IHolidaysInterface } from 'src/interfaces/holidays.interface';
@@ -32,6 +33,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   isInitialised: vitest.fn(),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
+  getMessage: vitest.fn(),
+  updateMessage: vitest.fn(),
+  listEmoji: vitest.fn(),
+  getSubscriptions: vitest.fn(),
 });
 
 /** A relevant holiday on the day after the frozen clock, unless overridden. */
@@ -255,9 +260,18 @@ describe('ZulipService', () => {
   });
 
   describe('init', () => {
+    const subscriptions = [{ streamId: 111 }, { streamId: 112 }, { streamId: 113 }];
+
     beforeEach(() => {
       config.zulip.bot.apiKey = 'bot-key';
       config.zulip.user.apiKey = 'user-key';
+      zulipMock.getSubscriptions.mockResolvedValue(subscriptions);
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vitest.restoreAllMocks();
     });
 
     it('should initialise the Zulip clients exactly once, with both identities', async () => {
@@ -277,6 +291,7 @@ describe('ZulipService', () => {
       await sut.init();
 
       expect(zulipMock.init).not.toHaveBeenCalled();
+      expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
     });
 
     it('should skip initialisation when the user key is the dev sentinel', async () => {
@@ -285,6 +300,62 @@ describe('ZulipService', () => {
       await sut.init();
 
       expect(zulipMock.init).not.toHaveBeenCalled();
+      expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
+    });
+
+    describe('subscription check', () => {
+      it('should check the subscriptions after the clients exist and stay quiet when every required stream is there', async () => {
+        await sut.init();
+
+        expect(zulipMock.getSubscriptions).toHaveBeenCalledOnce();
+        expect(zulipMock.init.mock.invocationCallOrder[0]).toBeLessThan(
+          zulipMock.getSubscriptions.mock.invocationCallOrder[0],
+        );
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
+
+      it('should require exactly the three private notification streams, not FUTOStaff, where the holiday notice has always posted', () => {
+        expect(Constants.Zulip.RequiredSubscriptions).toEqual([111, 112, 113]);
+        expect(Constants.Zulip.RequiredSubscriptions).not.toContain(Constants.Zulip.Streams.FUTOStaff);
+      });
+
+      it('should warn, naming the stream, for each required stream the bot is not subscribed to', async () => {
+        zulipMock.getSubscriptions.mockResolvedValue([subscriptions[0], { streamId: 54 }]);
+
+        await expect(sut.init()).resolves.toBeUndefined();
+
+        expect(Logger.prototype.warn).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          'The Zulip bot is not subscribed to stream 112 (ImmichPullRequests): posts to it will fail until an admin subscribes it',
+        );
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          'The Zulip bot is not subscribed to stream 113 (ImmichAlerts): posts to it will fail until an admin subscribes it',
+        );
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
+
+      it('should warn for every required stream when the bot is subscribed to nothing', async () => {
+        zulipMock.getSubscriptions.mockResolvedValue([]);
+
+        await expect(sut.init()).resolves.toBeUndefined();
+
+        expect(Logger.prototype.warn).toHaveBeenCalledTimes(3);
+      });
+
+      it('should log and carry on when the subscriptions cannot be read', async () => {
+        zulipMock.getSubscriptions.mockRejectedValue(new Error('boom'));
+
+        await expect(sut.init()).resolves.toBeUndefined();
+
+        expect(zulipMock.init).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledOnce();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Could not check the Zulip subscriptions of the bot',
+          expect.any(Error),
+        );
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+      });
     });
   });
 });

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DateTime } from 'luxon';
 import { getConfig } from 'src/config';
@@ -8,6 +8,8 @@ import { IZulipInterface } from 'src/interfaces/zulip.interface';
 
 @Injectable()
 export class ZulipService {
+  private logger = new Logger(ZulipService.name);
+
   constructor(
     @Inject(IHolidaysInterface) private holidays: IHolidaysInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
@@ -17,6 +19,24 @@ export class ZulipService {
     const { zulip } = getConfig();
     if (zulip.bot.apiKey !== 'dev' && zulip.user.apiKey !== 'dev') {
       await this.zulip.init(zulip);
+      await this.checkSubscriptions();
+    }
+  }
+
+  private async checkSubscriptions() {
+    try {
+      const subscriptions = await this.zulip.getSubscriptions();
+      const subscribed = new Set(subscriptions.map(({ streamId }) => streamId));
+      for (const streamId of Constants.Zulip.RequiredSubscriptions) {
+        if (!subscribed.has(streamId)) {
+          const name = Object.entries(Constants.Zulip.Streams).find(([, id]) => id === streamId)?.[0];
+          this.logger.warn(
+            `The Zulip bot is not subscribed to stream ${streamId} (${name}): posts to it will fail until an admin subscribes it`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error('Could not check the Zulip subscriptions of the bot', error);
     }
   }
 

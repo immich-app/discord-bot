@@ -138,6 +138,7 @@ const zulipStreams = {
   Immich: 54,
   FUTOStaff: 2,
   ImmichThirdParties: 111,
+  ImmichPullRequests: 112,
   ImmichAlerts: 113,
 };
 
@@ -233,6 +234,12 @@ export const Constants = {
   Zulip: {
     Streams: zulipStreams,
     Topics: { ImmichRelease: 'release' },
+    /** Zulip lets an unsubscribed bot post to public streams only; `FUTOStaff` is left out on purpose. */
+    RequiredSubscriptions: [
+      zulipStreams.ImmichThirdParties,
+      zulipStreams.ImmichPullRequests,
+      zulipStreams.ImmichAlerts,
+    ],
   },
 };
 

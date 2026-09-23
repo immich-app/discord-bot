@@ -1,4 +1,4 @@
-import { shorten } from 'src/format';
+import { neutraliseZulipMentions, shorten, toZulipQuote } from 'src/format';
 import {
   Notification,
   NotificationAccent,
@@ -51,8 +51,7 @@ export const Emoji: Record<NotificationAccent, string> = {
   'release.failed': '🚨',
 };
 
-/** Zulip has no backslash escaping, so a zero-width space after the sigil is the only way to stop a mention. */
-export const neutraliseMentions = (text: string) => text.replaceAll(/([@#])(?=_?\*)/g, '$1\u200B');
+export const neutraliseMentions = neutraliseZulipMentions;
 
 /**
  * Python-Markdown only closes a link label when `(` or `[` directly follows `]`, so breaking just those
@@ -73,12 +72,7 @@ const toHeading = ({ accent, author, title, url }: Notification, titleLink: Zuli
     .join(' ');
 };
 
-/** Zulip closes a fence on a line equal to its opening fence, so the fence must outrun any tilde run in the text. */
-const toQuote = (text: string) => {
-  const longestRun = Math.max(0, ...[...text.matchAll(/~+/g)].map(([run]) => run.length));
-  const fence = '~'.repeat(Math.max(3, longestRun + 1));
-  return `${fence} quote\n${text}\n${fence}`;
-};
+const toQuote = toZulipQuote;
 
 const toBody = (body: string, { bodyMaxLength, bodyStyle }: ZulipLayout) => {
   const text = neutraliseMentions(bodyMaxLength ? shorten(body, bodyMaxLength) : body);

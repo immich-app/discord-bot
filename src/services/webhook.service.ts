@@ -10,7 +10,7 @@ import semver from 'semver';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
-import { shorten } from 'src/format';
+import { neutraliseZulipMentions, shorten, shortenCodePoints, toZulipQuote } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import {
@@ -24,6 +24,7 @@ import { Notification, NotificationAccent, NotificationAuthor } from 'src/interf
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
+import { ZulipApiError } from 'src/repositories/zulip.client';
 import { NotificationService } from 'src/services/notification.service';
 import { makeLicenseFields, makeOrderFields, withErrorLogging } from 'src/util';
 
@@ -48,6 +49,12 @@ const getActionName = (action: string, pullRequest: { merged: boolean | null }) 
 type PullRequestEvent = EmitterWebhookEvent<
   'pull_request' | 'pull_request_review' | 'pull_request_review_comment' | 'pull_request_review_thread'
 >['payload'];
+
+type PullRequestEditedEvent = EmitterWebhookEvent<'pull_request.edited'>['payload'];
+
+/** Review and review-comment events are also `edited`, with `changes` about the review or the comment, not the PR. */
+const isPullRequestEdited = (dto: PullRequestEvent): dto is PullRequestEditedEvent =>
+  dto.action === 'edited' && !('review' in dto) && !('comment' in dto);
 
 type BaseEvent = {
   number: number;
@@ -139,6 +146,66 @@ const IssueAccents: Record<'opened' | 'reopened' | 'closed', NotificationAccent>
   closed: 'issue.closed',
 };
 
+const ZULIP_MAX_TOPIC_LENGTH = 60;
+
+const ZULIP_RESOLVED_PREFIX = '✔ ';
+
+const ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH = ZULIP_MAX_TOPIC_LENGTH - [...ZULIP_RESOLVED_PREFIX].length;
+
+const isResolvedTopic = (topic: string) => topic.startsWith(ZULIP_RESOLVED_PREFIX);
+
+const unresolveTopic = (topic: string) => (isResolvedTopic(topic) ? topic.slice(ZULIP_RESOLVED_PREFIX.length) : topic);
+
+/**
+ * Never truncated: Zulip only treats a move as a resolve when the name sent is exactly `✔ ` plus the current
+ * name, and the empty "general chat" topic cannot be resolved at all.
+ */
+const resolveTopic = (topic: string) =>
+  isResolvedTopic(topic) || topic === '' ? topic : `${ZULIP_RESOLVED_PREFIX}${topic}`;
+
+const toZulipTopicName = ({ number, title }: { number: number; title: string }) =>
+  shortenCodePoints(`#${number}: ${title}`, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH).trim();
+
+const toZulipPullRequestMessage = ({ html_url, body }: { html_url: string; body: string | null }) => {
+  const text = body?.trim();
+  return text ? `${html_url}\n\n${toZulipQuote(neutraliseZulipMentions(shortenCodePoints(text, 2000)))}` : html_url;
+};
+
+const ZULIP_TOPIC_NOTICE_ACTIONS = new Set(['closed', 'converted_to_draft', 'reopened']);
+
+const touchesZulipTopic = (dto: PullRequestEvent) =>
+  dto.action === 'edited'
+    ? isPullRequestEdited(dto) && !!(dto.changes.title || dto.changes.body)
+    : ZULIP_TOPIC_NOTICE_ACTIONS.has(dto.action);
+
+/**
+ * Zulip has no distinct code for a missing message, so the documented `msg` is the only way to tell it from
+ * other `BAD_REQUEST`s; if it is ever reworded the read counts as an outage, which is the safe direction.
+ */
+const ZULIP_MESSAGE_GONE_MESSAGE = 'Invalid message(s)';
+
+const isZulipMessageGone = (error: unknown): error is ZulipApiError =>
+  error instanceof ZulipApiError &&
+  error.status === 400 &&
+  error.code === 'BAD_REQUEST' &&
+  error.msg === ZULIP_MESSAGE_GONE_MESSAGE;
+
+/**
+ * Inverted on purpose: the spec lists none of the move refusals the server raises, so a `400 BAD_REQUEST`
+ * is a refusal unless its `msg` is one of these documented non-refusals.
+ */
+const ZULIP_UPDATE_OUTAGE_MESSAGES = new Set(['Nothing to change', "Topic can't be empty", ZULIP_MESSAGE_GONE_MESSAGE]);
+
+const isZulipRefusal = (error: unknown): error is ZulipApiError =>
+  error instanceof ZulipApiError &&
+  (error.code === 'MOVE_MESSAGES_TIME_LIMIT_EXCEEDED' ||
+    (error.status === 400 && error.code === 'BAD_REQUEST' && !ZULIP_UPDATE_OUTAGE_MESSAGES.has(error.msg)));
+
+const isZulipFailure = (error: unknown) =>
+  error instanceof ZulipApiError ||
+  (error instanceof TypeError && error.message === 'fetch failed') ||
+  (error instanceof DOMException && error.name === 'TimeoutError');
+
 const DiscussionAccents: Record<'created' | 'reopened' | 'deleted' | 'answered', NotificationAccent> = {
   created: 'discussion.created',
   reopened: 'discussion.reopened',
@@ -177,7 +244,7 @@ export class WebhookService {
         await this.handlePullRequestNotification(payload);
 
         if (!payload.repository.private) {
-          await this.handlePullRequestTeamUpdate(payload);
+          await this.handlePullRequestTeamPlatforms(payload);
         }
         break;
       }
@@ -715,6 +782,14 @@ Read only for Nicholas: ${share.url}
     });
   }
 
+  private async handlePullRequestTeamPlatforms(payload: PullRequestEvent) {
+    const [discord] = await Promise.allSettled([this.handlePullRequestTeamUpdate(payload)]);
+    await this.handlePullRequestZulipTopic(payload);
+    if (discord.status === 'rejected') {
+      throw discord.reason;
+    }
+  }
+
   async handlePullRequestTeamUpdate(dto: PullRequestEvent) {
     const { pull_request } = dto;
 
@@ -814,6 +889,160 @@ Read only for Nicholas: ${share.url}
       { channelId: Constants.Discord.Channels.TeamPullRequests, threadId: pullRequest.discordThreadId },
       { name, message },
     );
+  }
+
+  async handlePullRequestZulipTopic(dto: PullRequestEvent) {
+    if (dto.repository.full_name !== 'immich-app/immich' || !this.zulip.isInitialised()) {
+      return;
+    }
+
+    try {
+      await this.updatePullRequestZulipTopic(dto);
+    } catch (error) {
+      const { number } = dto.pull_request;
+      if (isZulipFailure(error)) {
+        this.logger.error(`Zulip failed while updating the topic of pull request #${number}`, error);
+      } else {
+        this.logger.error(`Unexpected error while updating the Zulip topic of pull request #${number}`, error);
+      }
+    }
+  }
+
+  private async updatePullRequestZulipTopic(dto: PullRequestEvent) {
+    const { pull_request } = dto;
+    const stream = Constants.Zulip.Streams.ImmichPullRequests;
+
+    const pullRequest = await this.database.getPullRequestById(pull_request.node_id);
+    if (!pullRequest) {
+      return;
+    }
+
+    if (!pullRequest.zulipMessageId) {
+      if (dto.action === 'opened' && dto.sender.type !== 'Bot') {
+        const { id } = await this.zulip.sendMessage({
+          stream,
+          topic: toZulipTopicName(pull_request),
+          content: toZulipPullRequestMessage(pull_request),
+        });
+        await this.database.updatePullRequest({ nodeId: pull_request.node_id, zulipMessageId: id });
+      }
+      return;
+    }
+
+    if (!touchesZulipTopic(dto)) {
+      return;
+    }
+
+    // A human may have renamed or resolved the topic, and a post to a stale name would open a new, empty topic.
+    const { id: messageId, topic } = await this.readOrRebuildZulipTopic(dto, pullRequest.zulipMessageId);
+    const post = (content: string) => this.zulip.sendMessage({ stream, topic, content });
+    const rename = (to: string, fallback: (error: ZulipApiError) => string) =>
+      this.renameZulipTopic({ messageId, from: topic, to, fallback }, post);
+
+    switch (dto.action) {
+      case 'closed': {
+        await post(
+          `Pull request has been ${pull_request.merged_at ? 'merged' : 'closed'} by [@${dto.sender.login}](${dto.sender.html_url})`,
+        );
+        await rename(resolveTopic(topic), ({ msg }) => `The topic could not be resolved automatically: ${msg}`);
+        return;
+      }
+
+      case 'converted_to_draft': {
+        await post('Pull request has been converted to draft');
+        return;
+      }
+
+      case 'reopened': {
+        await post(`Pull request has been reopened by [@${dto.sender.login}](${dto.sender.html_url})`);
+        await rename(unresolveTopic(topic), ({ msg }) => `The topic could not be unresolved automatically: ${msg}`);
+        return;
+      }
+
+      case 'edited': {
+        if (!isPullRequestEdited(dto)) {
+          return;
+        }
+        if (dto.changes.title) {
+          const name = toZulipTopicName(pull_request);
+          // Unlike a topic name, message content can mention, so the title is neutralised here.
+          await rename(
+            isResolvedTopic(topic) ? resolveTopic(name) : name,
+            () => `Pull request has been renamed to: ${neutraliseZulipMentions(name)}`,
+          );
+        }
+        if (dto.changes.body) {
+          await this.editZulipMessage(messageId, toZulipPullRequestMessage(pull_request));
+        }
+        return;
+      }
+    }
+  }
+
+  private async readOrRebuildZulipTopic(dto: PullRequestEvent, messageId: number) {
+    try {
+      return await this.zulip.getMessage(messageId);
+    } catch (error) {
+      if (!isZulipMessageGone(error)) {
+        throw error;
+      }
+      const { pull_request } = dto;
+      this.logger.warn(
+        `Zulip message ${messageId} of pull request #${pull_request.number} is gone (${error.msg}), recreating the topic`,
+      );
+      const topic = toZulipTopicName(pull_request);
+      const { id } = await this.zulip.sendMessage({
+        stream: Constants.Zulip.Streams.ImmichPullRequests,
+        topic,
+        content: toZulipPullRequestMessage(pull_request),
+      });
+      await this.database.updatePullRequest({ nodeId: pull_request.node_id, zulipMessageId: id });
+      return { id, topic };
+    }
+  }
+
+  private async renameZulipTopic(
+    {
+      messageId,
+      from,
+      to,
+      fallback,
+    }: { messageId: number; from: string; to: string; fallback: (error: ZulipApiError) => string },
+    post: (content: string) => Promise<unknown>,
+  ) {
+    if (from === to) {
+      return;
+    }
+
+    try {
+      await this.zulip.updateMessage(messageId, { topic: to, propagateMode: 'change_all' });
+    } catch (error) {
+      if (!isZulipRefusal(error)) {
+        this.logger.error(`Could not rename Zulip topic "${from}" to "${to}"`, error);
+        return;
+      }
+      this.logger.warn(`Zulip refused to rename topic "${from}" to "${to}": ${error.message}`);
+      try {
+        await post(fallback(error));
+      } catch (postError) {
+        this.logger.error(
+          `Could not post the fallback message in Zulip topic "${from}" after the refused rename`,
+          postError,
+        );
+      }
+    }
+  }
+
+  private async editZulipMessage(messageId: number, content: string) {
+    try {
+      await this.zulip.updateMessage(messageId, { content });
+    } catch (error) {
+      if (!isZulipRefusal(error)) {
+        this.logger.error(`Could not edit Zulip message ${messageId}`, error);
+        return;
+      }
+      this.logger.warn(`Zulip refused to edit message ${messageId}: ${error.message}`);
+    }
   }
 
   async upsertPullRequest({ pull_request, repository }: PullRequestEvent) {

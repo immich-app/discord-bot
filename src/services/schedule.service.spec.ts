@@ -51,6 +51,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   isInitialised: vitest.fn().mockReturnValue(false),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
+  getMessage: vitest.fn(),
+  updateMessage: vitest.fn(),
+  listEmoji: vitest.fn(),
+  getSubscriptions: vitest.fn(),
 });
 
 /** Freeze luxon's clock at the given UTC instant. */
