@@ -1,6 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Constants } from 'src/constants';
-import { neutraliseZulipLabel, neutraliseZulipMentions, shorten, shortenCodePoints } from 'src/format';
+import {
+  ZULIP_MAX_MESSAGE_LENGTH,
+  neutraliseZulipLabel,
+  neutraliseZulipMentions,
+  shorten,
+  shortenCodePoints,
+} from 'src/format';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
@@ -9,8 +15,6 @@ import { ScheduledMessageService } from 'src/services/scheduled-message.service'
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
 
-/** Zulip's default `max_message_length`, in code points: the server refuses a longer message. */
-const MAX_MESSAGE_LENGTH = 10_000;
 const SIMILAR_LOOKBACK = 10;
 const ECHO_LENGTH = 80;
 const ERROR_LENGTH = 300;
@@ -126,11 +130,11 @@ const countBackticks = (text: string) => (text.match(/`/g) ?? []).length;
 
 /** The bot's own code spans hold no backtick, so a cut leaving an odd number of them was cut inside one and must close it. */
 const fit = (content: string) => {
-  const cut = shortenCodePoints(content, MAX_MESSAGE_LENGTH);
+  const cut = shortenCodePoints(content, ZULIP_MAX_MESSAGE_LENGTH);
   if (cut === content || countBackticks(cut) % 2 === 0) {
     return cut;
   }
-  const shorter = shortenCodePoints(content, MAX_MESSAGE_LENGTH - 1);
+  const shorter = shortenCodePoints(content, ZULIP_MAX_MESSAGE_LENGTH - 1);
   return countBackticks(shorter) % 2 === 0 ? shorter : `${shorter}\``;
 };
 
