@@ -71,6 +71,9 @@ describe('ZulipRepository', () => {
       { method: 'listEmoji', call: () => sut.listEmoji() },
       { method: 'getSubscriptions', call: () => sut.getSubscriptions() },
       { method: 'getOwnUser', call: () => sut.getOwnUser() },
+      { method: 'getUser', call: () => sut.getUser(12) },
+      { method: 'getStream', call: () => sut.getStream(120) },
+      { method: 'sendDirectMessage', call: () => sut.sendDirectMessage([12], 'hi') },
       { method: 'getMessages', call: () => sut.getMessages({ stream: 107, topic: 'deploy', numBefore: 10 }) },
       { method: 'registerQueue', call: () => sut.registerQueue() },
       { method: 'getEvents', call: () => sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live()) },
@@ -365,6 +368,66 @@ describe('ZulipRepository', () => {
       fetchMock.mockResolvedValue(json({ result: 'success', msg: '', user_id: 7, email: 'bot@example.com' }));
 
       await expect(sut.getOwnUser()).resolves.toEqual({ userId: 7, fullName: '' });
+    });
+  });
+
+  describe('getUser', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it("should return the user's name and role", async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'success', msg: '', user: { user_id: 12, full_name: 'Alex', role: 200, is_admin: true } }),
+      );
+
+      await expect(sut.getUser(12)).resolves.toEqual({ userId: 12, fullName: 'Alex', role: 200 });
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/users/12');
+    });
+
+    it('should throw when the answer has no role, rather than resolve with one that grants nothing or everything', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', user: { user_id: 12, full_name: 'Alex' } }));
+
+      await expect(sut.getUser(12)).rejects.toThrow('Zulip returned no role for user 12');
+    });
+  });
+
+  describe('getStream', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it("should return the stream's name and whether it is private", async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'success', msg: '', stream: { stream_id: 120, name: 'immich-dev', invite_only: true } }),
+      );
+
+      await expect(sut.getStream(120)).resolves.toEqual({ streamId: 120, name: 'immich-dev', inviteOnly: true });
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/streams/120');
+    });
+
+    it('should reject a stream the bot cannot see', async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'error', msg: 'Invalid channel ID', code: 'BAD_REQUEST' }, { status: 400 }),
+      );
+
+      await expect(sut.getStream(120)).rejects.toBeInstanceOf(ZulipApiError);
+    });
+  });
+
+  describe('sendDirectMessage', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should send a direct message to the users, as the bot', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', id: 42 }));
+
+      await expect(sut.sendDirectMessage([12], 'hi')).resolves.toEqual({ id: 42 });
+      expect(request(0).method).toBe('POST');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      expect(await request(0).text()).toBe('type=direct&to=%5B12%5D&content=hi');
     });
   });
 

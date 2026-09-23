@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { Constants } from 'src/constants';
 import { neutraliseZulipLabel } from 'src/format';
-import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IDatabaseRepository, MirrorIdentityOwner } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
@@ -10,12 +10,20 @@ import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces
 import { NewRSSFeed, NewScheduledMessage, RSSFeed, ScheduledMessage, UpdateRSSFeed } from 'src/schema';
 import { ChatService, EmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
+import {
+  MirrorLinkReply,
+  MirrorLinkRequest,
+  MirrorLinkService,
+  MirrorPlatform,
+  MirrorUnlinkRequest,
+} from 'src/services/mirror-link.service';
 import { NotificationService } from 'src/services/notification.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, BackfillReport, WebhookService } from 'src/services/webhook.service';
-import { ZulipCommandService, parseCommand, splitArguments, tokenize } from 'src/services/zulip-command.service';
+import { ZulipCommandService } from 'src/services/zulip-command.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
+import { parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const BOT: ZulipUser = { userId: 7, fullName: 'Immich' };
@@ -24,12 +32,15 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
   isInitialised: vitest.fn(),
   sendMessage: vitest.fn().mockResolvedValue({ id: 1000 }),
+  sendDirectMessage: vitest.fn(),
   getMessage: vitest.fn(),
   updateMessage: vitest.fn(),
   createEmote: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
+  getUser: vitest.fn(),
+  getStream: vitest.fn(),
   getMessages: vitest.fn().mockResolvedValue([]),
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
@@ -75,6 +86,18 @@ const newWebhookServiceMock = () => ({
 });
 
 const BOTH_PLATFORMS: BackfillPlatforms = { discord: true, zulip: true };
+
+const newMirrorLinkServiceMock = () => ({
+  requestLink: vitest.fn<(request: MirrorLinkRequest) => Promise<string>>(),
+  unlink: vitest.fn<(request: MirrorUnlinkRequest) => Promise<MirrorLinkReply>>(),
+  list: vitest.fn<(platform: MirrorPlatform) => Promise<string>>().mockResolvedValue('No channel is mirrored.'),
+  redeemIdentityCode: vitest
+    .fn<(sender: { id: number; fullName: string }, code: string) => Promise<string>>()
+    .mockResolvedValue('Linked.'),
+  unlinkIdentity: vitest
+    .fn<(owner: MirrorIdentityOwner, platform: MirrorPlatform) => Promise<string>>()
+    .mockResolvedValue('Unlinked.'),
+});
 
 const definedOnly = <T extends object>(values: T) =>
   Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
@@ -189,9 +212,14 @@ const HELP = [
   '- `rss-subscribe <url> [topic=<topic>]`: post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
   '- `rss-unsubscribe <url>`: stop posting that RSS feed in this stream',
   '- `rss-list`: list the RSS feeds this stream is subscribed to, with their topics',
+  "- `mirror-link [topic=<main topic>]`: start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, `#channel-name` by default) holds the channel's own messages",
+  '- `mirror-unlink`: stop mirroring this stream with its Discord channel, and announce it on both sides',
+  '- `mirror-list`: list the mirrored channels and streams, and the linked accounts',
+  '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
   'Arguments are positional or `key=value`; quote a value with spaces (`text="two words"`). Every reply is posted here, in the topic.',
+  'The `mirror-*` commands are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
 ].join('\n');
 
 describe('tokenize', () => {
@@ -326,6 +354,7 @@ describe('ZulipCommandService', () => {
   let database: ReturnType<typeof newFakeDatabase>;
   let discordMock: Mocked<Pick<IDiscordInterface, 'sendMessage'>>;
   let rssMock: Mocked<IRSSInterface>;
+  let mirrorLinksMock: ReturnType<typeof newMirrorLinkServiceMock>;
 
   const replies = () => zulipMock.sendMessage.mock.calls.map(([payload]) => payload);
   const send = (content: string, overrides: Partial<ZulipReceivedMessage> = {}) =>
@@ -342,6 +371,7 @@ describe('ZulipCommandService', () => {
     database = newFakeDatabase();
     discordMock = { sendMessage: vitest.fn() };
     rssMock = { getFeed: vitest.fn() };
+    mirrorLinksMock = newMirrorLinkServiceMock();
     const discord = discordMock as unknown as IDiscordInterface;
     const mattermost = {} as IMattermostInterface;
     const db = database as unknown as IDatabaseRepository;
@@ -353,6 +383,7 @@ describe('ZulipCommandService', () => {
       webhookServiceMock as unknown as WebhookService,
       new ScheduledMessageService(db, discord, mattermost, zulipMock),
       new RSSService(db, new NotificationService(discord, mattermost, zulipMock), rssMock),
+      mirrorLinksMock as unknown as MirrorLinkService,
     );
   });
 
@@ -1481,6 +1512,167 @@ describe('ZulipCommandService', () => {
 
       expect(contents()).toEqual([`Usage: \`${usage}\``]);
       expect(rssMock.getFeed).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mirror', () => {
+    const ADMIN = { userId: 12, fullName: 'Alice', role: 200 };
+    const NOT_AN_ADMINISTRATOR =
+      'Only Zulip organization administrators and owners can change or list the Discord-Zulip mirror.';
+    const REQUESTED = 'To mirror this stream with a Discord channel, run `/mirror-link id:K7Q2XM` in that channel.';
+    const unlinked: MirrorLinkReply = {
+      summary: 'Unlinked Discord channel **#dev** from Zulip stream **#immich-dev**.',
+      details: ['⚠ Could not unpin the link announcement on Discord: unknown-message (10008).'],
+      zulipAnnouncement: { streamId: 120, topic: '#dev' },
+    };
+
+    beforeEach(() => {
+      zulipMock.getUser.mockResolvedValue(ADMIN);
+      mirrorLinksMock.requestLink.mockResolvedValue(REQUESTED);
+      mirrorLinksMock.unlink.mockResolvedValue(unlinked);
+    });
+
+    it('should take the mirror commands in any stream, where the other commands stay ignored', async () => {
+      await send('@**Immich** mirror-link', { streamId: 120, topic: 'setup' });
+      await send('@**Immich** mirror-list', { streamId: Constants.Zulip.Streams.Immich });
+      await send('@**Immich** help', { streamId: 120 });
+      await send('@**Immich** discord-unlink', { streamId: 120 });
+
+      expect(zulipMock.getUser).toHaveBeenCalledWith(12);
+      expect(mirrorLinksMock.requestLink).toHaveBeenCalledExactlyOnceWith({
+        zulipStreamId: 120,
+        mainTopic: undefined,
+        actor: { platform: 'zulip', id: '12', name: 'Alice' },
+      });
+      expect(mirrorLinksMock.unlinkIdentity).not.toHaveBeenCalled();
+      expect(replies()).toEqual([
+        { stream: 120, topic: 'setup', content: REQUESTED },
+        { stream: 54, topic: 'deploy', content: 'No channel is mirrored.' },
+      ]);
+    });
+
+    it.each([
+      ['an owner', 100, true],
+      ['an administrator', 200, true],
+      ['a moderator', 300, false],
+      ['a member', 400, false],
+      ['a guest', 600, false],
+    ])('should take the mirror commands from %s: %s', async (_, role, allowed) => {
+      zulipMock.getUser.mockResolvedValue({ ...ADMIN, role });
+
+      await send('@**Immich** mirror-link topic="#dev"', { streamId: 120 });
+      await send('@**Immich** mirror-unlink', { streamId: 120 });
+      await send('@**Immich** mirror-list', { streamId: 120 });
+
+      const calls = [mirrorLinksMock.requestLink, mirrorLinksMock.unlink, mirrorLinksMock.list].map(
+        (method) => method.mock.calls.length,
+      );
+      expect(calls).toEqual(allowed ? [1, 1, 1] : [0, 0, 0]);
+      if (!allowed) {
+        expect(replies().map(({ content }) => content)).toEqual(Array(3).fill(NOT_AN_ADMINISTRATOR));
+      }
+    });
+
+    it('should answer when the role cannot be read, and run nothing', async () => {
+      zulipMock.getUser.mockRejectedValue(new Error('Zulip is down'));
+
+      await send('@**Immich** mirror-list', { streamId: 120 });
+
+      expect(mirrorLinksMock.list).not.toHaveBeenCalled();
+      expect(replies().map(({ content }) => content)).toEqual(['`mirror-list` failed: `Zulip is down`']);
+    });
+
+    it('should pass the main topic on, and unlink this stream', async () => {
+      await send('@**Immich** mirror-link topic="dev chat"', { streamId: 120 });
+      await send('@**Immich** mirror-unlink', { streamId: 120, topic: 'setup' });
+
+      expect(mirrorLinksMock.requestLink.mock.calls[0][0].mainTopic).toBe('dev chat');
+      expect(mirrorLinksMock.unlink).toHaveBeenCalledExactlyOnceWith({
+        zulipStreamId: 120,
+        actor: { platform: 'zulip', id: '12', name: 'Alice' },
+      });
+      expect(replies()[1].content).toBe(`${unlinked.summary}\n${unlinked.details[0]}`);
+    });
+
+    it.each([
+      ['@**Immich** mirror-link 100000000000000001', 'mirror-link [topic=<main topic>]'],
+      ['@**Immich** mirror-link discord=100000000000000001', 'mirror-link [topic=<main topic>]'],
+      ['@**Immich** mirror-unlink discord=100000000000000001', 'mirror-unlink'],
+      ['@**Immich** mirror-list all', 'mirror-list'],
+    ])('should answer %j with its usage', async (content, usage) => {
+      await send(content, { streamId: 120 });
+
+      expect(mirrorLinksMock.requestLink).not.toHaveBeenCalled();
+      expect(mirrorLinksMock.unlink).not.toHaveBeenCalled();
+      expect(replies().map(({ content: reply }) => reply)).toEqual([`Usage: \`${usage}\``]);
+    });
+
+    it('should leave out what the unlink announcement in the same topic already says', async () => {
+      await send('@**Immich** mirror-unlink', { streamId: 120, topic: '#dev' });
+      mirrorLinksMock.unlink.mockResolvedValue({ ...unlinked, details: [] });
+      await send('@**Immich** mirror-unlink', { streamId: 120, topic: '#dev' });
+
+      expect(replies()).toEqual([{ stream: 120, topic: '#dev', content: unlinked.details[0] }]);
+    });
+
+    it("should unlink the sender's own account in a team stream", async () => {
+      await send('@**Immich** discord-unlink');
+
+      expect(zulipMock.getUser).not.toHaveBeenCalled();
+      expect(mirrorLinksMock.unlinkIdentity).toHaveBeenCalledExactlyOnceWith({ zulipUserId: 12 }, 'zulip');
+      expect(replies().map(({ content }) => content)).toEqual(['Unlinked.']);
+    });
+
+    describe('direct messages', () => {
+      const direct = (content: string, overrides: Partial<ZulipReceivedMessage> = {}) =>
+        send(content, { type: 'private', streamId: undefined, topic: '', ...overrides });
+      const answers = () => zulipMock.sendDirectMessage.mock.calls;
+
+      it.each(['link ABCD2345', 'Link abcd-2345', 'discord-link ABCD2345', '@**Immich** link ABCD2345'])(
+        'should redeem a code sent as %j, answering the sender alone',
+        async (content) => {
+          await direct(content);
+
+          expect(mirrorLinksMock.redeemIdentityCode).toHaveBeenCalledExactlyOnceWith(
+            { id: 12, fullName: 'Alice' },
+            content.split(' ').at(-1),
+          );
+          expect(answers()).toEqual([[[12], 'Linked.']]);
+          expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        },
+      );
+
+      it.each(['unlink', 'discord-unlink', '@**Immich** unlink'])('should unlink the sender on %j', async (content) => {
+        await direct(content);
+
+        expect(mirrorLinksMock.unlinkIdentity).toHaveBeenCalledExactlyOnceWith({ zulipUserId: 12 }, 'zulip');
+        expect(answers()).toEqual([[[12], 'Unlinked.']]);
+      });
+
+      it.each(['hello', 'link', 'link me the doc', 'unlink it please', '@**Immich** help', 'link "ABCD', ''])(
+        'should say nothing to %j',
+        async (content) => {
+          await direct(content);
+
+          expect(mirrorLinksMock.redeemIdentityCode).not.toHaveBeenCalled();
+          expect(mirrorLinksMock.unlinkIdentity).not.toHaveBeenCalled();
+          expect(answers()).toEqual([]);
+          expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        },
+      );
+
+      it('should answer a failure, and log one it cannot answer', async () => {
+        mirrorLinksMock.redeemIdentityCode.mockRejectedValue(new Error('database is down'));
+        await direct('link ABCD2345');
+        expect(answers()).toEqual([[[12], '`link` failed: `database is down`']]);
+
+        zulipMock.sendDirectMessage.mockRejectedValue(new Error('Zulip is down'));
+        await expect(direct('unlink')).resolves.toBeUndefined();
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Could not answer the Zulip direct message 500',
+          expect.any(Error),
+        );
+      });
     });
   });
 });

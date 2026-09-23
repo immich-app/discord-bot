@@ -11,10 +11,12 @@ import {
   ZulipMessageUpdate,
   ZulipQueueRegistration,
   ZulipReceivedMessage,
+  ZulipStream,
   ZulipStreamPageQuery,
   ZulipSubscription,
   ZulipUploadRefused,
   ZulipUser,
+  ZulipUserDetails,
 } from 'src/interfaces/zulip.interface';
 import { readAtMost } from 'src/mirror/download';
 import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
@@ -135,6 +137,11 @@ export class ZulipRepository implements IZulipInterface {
 
   async sendMessage({ stream, topic, content }: MessagePayload) {
     const { data } = await this.bot.POST('/messages', { body: { type: 'channel', to: stream, topic, content } });
+    return { id: data!.id };
+  }
+
+  async sendDirectMessage(userIds: number[], content: string) {
+    const { data } = await this.bot.POST('/messages', { body: { type: 'direct', to: userIds, content } });
     return { id: data!.id };
   }
 
@@ -284,6 +291,24 @@ export class ZulipRepository implements IZulipInterface {
       throw new Error('Zulip returned no user ID for the bot');
     }
     return { userId: data.user_id, fullName: data.full_name ?? '' };
+  }
+
+  async getUser(userId: number): Promise<ZulipUserDetails> {
+    const { data } = await this.bot.GET('/users/{user_id}', { params: { path: { user_id: userId } } });
+    const user = data?.user;
+    if (user?.role === undefined) {
+      throw new Error(`Zulip returned no role for user ${userId}`);
+    }
+    return { userId: user.user_id ?? userId, fullName: user.full_name ?? '', role: user.role };
+  }
+
+  async getStream(streamId: number): Promise<ZulipStream> {
+    const { data } = await this.bot.GET('/streams/{stream_id}', { params: { path: { stream_id: streamId } } });
+    const stream = data?.stream;
+    if (!stream) {
+      throw new Error(`Zulip returned no stream ${streamId}`);
+    }
+    return { streamId: stream.stream_id ?? streamId, name: stream.name ?? '', inviteOnly: stream.invite_only ?? false };
   }
 
   async getMessages({ stream, topic, numBefore }: ZulipMessagesQuery): Promise<ZulipReceivedMessage[]> {

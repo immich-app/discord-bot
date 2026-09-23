@@ -25,6 +25,11 @@ export type ZulipSubscription = { streamId: number };
 
 export type ZulipUser = { userId: number; fullName: string };
 
+/** Zulip's roles: 100 owner, 200 administrator, 300 moderator, 400 member, 600 guest. */
+export type ZulipUserDetails = ZulipUser & { role: number };
+
+export type ZulipStream = { streamId: number; name: string; inviteOnly: boolean };
+
 export type ZulipMessagesQuery = { stream: number; topic: string; numBefore: number };
 
 export type ZulipStreamPageQuery = { stream: number; before?: number; count: number; excludeSenderId?: number };
@@ -106,12 +111,16 @@ export interface IZulipInterface {
   isInitialised(): boolean;
   /** Resolves to the new message's ID; rejects on any Zulip error. */
   sendMessage(payload: MessagePayload): Promise<{ id: number }>;
+  sendDirectMessage(userIds: number[], content: string): Promise<{ id: number }>;
   getMessage(id: number): Promise<ZulipMessage>;
   updateMessage(id: number, update: ZulipMessageUpdate): Promise<void>;
   createEmote(name: string, emoteUrl: string): Promise<void>;
   listEmoji(): Promise<ZulipEmoji[]>;
   getSubscriptions(): Promise<ZulipSubscription[]>;
   getOwnUser(): Promise<ZulipUser>;
+  getUser(userId: number): Promise<ZulipUserDetails>;
+  /** Rejects when the stream does not exist or the bot cannot see it. */
+  getStream(streamId: number): Promise<ZulipStream>;
   getMessages(query: ZulipMessagesQuery): Promise<ZulipReceivedMessage[]>;
   registerQueue(): Promise<ZulipQueueRegistration>;
   getEvents(queue: ZulipEventQueue, signal: AbortSignal): Promise<ZulipEvent[]>;

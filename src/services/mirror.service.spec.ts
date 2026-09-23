@@ -296,6 +296,8 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     unarchiveMirrorThread: vitest.fn().mockResolvedValue(undefined),
     getTeamMember: vitest.fn().mockResolvedValue(TEAM_MEMBER),
     fetchMirrorMessagesBefore: vitest.fn().mockResolvedValue({ messages: [], oldestId: null, full: false }),
+    sendMirrorNotice: vitest.fn(),
+    unpinMirrorNotice: vitest.fn(),
   };
 };
 
@@ -305,12 +307,15 @@ const newZulipMock = (): Mocked<IZulipInterface> => {
     init: vitest.fn(),
     isInitialised: vitest.fn().mockReturnValue(true),
     sendMessage: vitest.fn(async () => ({ id: ++id })),
+    sendDirectMessage: vitest.fn(),
     getMessage: vitest.fn(),
     updateMessage: vitest.fn().mockResolvedValue(undefined),
     createEmote: vitest.fn(),
     listEmoji: vitest.fn(),
     getSubscriptions: vitest.fn(),
     getOwnUser: vitest.fn(),
+    getUser: vitest.fn(),
+    getStream: vitest.fn(),
     getMessages: vitest.fn().mockResolvedValue([]),
     registerQueue: vitest.fn(),
     getEvents: vitest.fn(),

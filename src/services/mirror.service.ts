@@ -56,8 +56,8 @@ import {
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
 import { MirrorConversation, MirrorIdentity, MirrorLink, MirrorMessage, NewMirrorMessage } from 'src/schema';
 import { hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
-import { parseCommand } from 'src/services/zulip-command.service';
 import { isBotSender, ZulipService } from 'src/services/zulip.service';
+import { parseCommand } from 'src/zulip-command-parser';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;

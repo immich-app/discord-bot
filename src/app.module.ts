@@ -7,6 +7,7 @@ import { DiscordContextMenus } from 'src/discord/context-menus';
 import { DiscordEvents } from 'src/discord/events';
 import { DiscordHelpDesk } from 'src/discord/help-desk';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
+import { DiscordMirrorCommands } from 'src/discord/mirror-commands';
 import { providers } from 'src/repositories';
 import { services } from 'src/services';
 import { ChatService } from 'src/services/chat.service';
@@ -18,7 +19,14 @@ import { ZulipCommandService } from 'src/services/zulip-command.service';
 import { ZulipService } from 'src/services/zulip.service';
 
 const middleware = [{ provide: APP_PIPE, useValue: new ValidationPipe({ transform: true, whitelist: true }) }];
-const discord = [DiscordCommands, DiscordEvents, DiscordHelpDesk, DiscordContextMenus, DiscordMirrorEvents];
+const discord = [
+  DiscordCommands,
+  DiscordEvents,
+  DiscordHelpDesk,
+  DiscordContextMenus,
+  DiscordMirrorEvents,
+  DiscordMirrorCommands,
+];
 
 @Module({
   imports: [ScheduleModule.forRoot()],

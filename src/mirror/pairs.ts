@@ -12,8 +12,6 @@ export type EnabledPair = {
   linkedAt: number;
 };
 
-export const SNOWFLAKE = /^\d{17,20}$/;
-
 export const toEnabledPair = (link: MirrorLink): EnabledPair => ({
   key: link.discordChannelId,
   kind: link.kind,
