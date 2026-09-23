@@ -1,5 +1,5 @@
 import { ZulipConfig, ZulipUploadRefused } from 'src/interfaces/zulip.interface';
-import { ZulipApiError, createZulipClient } from 'src/repositories/zulip.client';
+import { ZulipApiError, ZulipRateLimit, createZulipClient } from 'src/repositories/zulip.client';
 import { ZulipRepository, longpollTimeoutMs } from 'src/repositories/zulip.repository';
 import { Mock, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -962,7 +962,19 @@ describe('ZulipRepository', () => {
           realm: config.realm,
           ...config.bot,
           timeoutMs: 120_000,
+          rateLimit: expect.any(ZulipRateLimit),
         });
+      });
+
+      it('should give the clients of one identity one rate-limit budget, since Zulip counts requests per user', () => {
+        const [bot, user, uploads, events] = vitest
+          .mocked(createZulipClient)
+          .mock.calls.map(([{ rateLimit }]) => rateLimit);
+        expect(bot).toBeInstanceOf(ZulipRateLimit);
+        expect(uploads).toBe(bot);
+        expect(events).toBe(bot);
+        expect(user).toBeInstanceOf(ZulipRateLimit);
+        expect(user).not.toBe(bot);
       });
 
       it("should allow a margin over the server's long-poll timeout, so a quiet poll is answered by its heartbeat", () => {

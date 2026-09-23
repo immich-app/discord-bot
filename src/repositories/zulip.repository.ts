@@ -22,7 +22,13 @@ import {
   ZulipUserDetails,
 } from 'src/interfaces/zulip.interface';
 import { readAtMost } from 'src/mirror/download';
-import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
+import {
+  createZulipClient,
+  multipart,
+  type ZulipClient,
+  type ZulipClientOptions,
+  ZulipRateLimit,
+} from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
 const EMOJI_CODES_TIMEOUT_MS = 30_000;
@@ -89,10 +95,10 @@ export class ZulipRepository implements IZulipInterface {
   private botIdentity?: Omit<ZulipClientOptions, 'timeoutMs'>;
 
   async init({ realm, bot, user }: ZulipConfig) {
-    this.botIdentity = { realm, ...bot };
+    this.botIdentity = { realm, ...bot, rateLimit: new ZulipRateLimit() };
     this.clients = {
       bot: createZulipClient(this.botIdentity),
-      user: createZulipClient({ realm, ...user }),
+      user: createZulipClient({ realm, ...user, rateLimit: new ZulipRateLimit() }),
       uploads: createZulipClient({ ...this.botIdentity, timeoutMs: UPLOAD_TIMEOUT_MS }),
       events: createZulipClient({
         ...this.botIdentity,
