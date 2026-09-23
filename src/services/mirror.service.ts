@@ -2150,7 +2150,12 @@ export class MirrorService implements OnModuleDestroy {
   private isOwnRename(threadId: string, name: string) {
     const names = (this.ownThreadNames.get(threadId) ?? []).filter(({ at }) => Date.now() - at < THROTTLE_MS);
     const index = names.findIndex((entry) => entry.name === name);
-    this.ownThreadNames.set(threadId, index < 0 ? names : names.slice(index + 1));
+    const left = names.slice(index + 1);
+    if (left.length > 0) {
+      this.ownThreadNames.set(threadId, left);
+    } else {
+      this.ownThreadNames.delete(threadId);
+    }
     return index >= 0;
   }
 
