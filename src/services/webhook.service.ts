@@ -43,7 +43,7 @@ const getActionName = (action: string, pullRequest: { merged: boolean | null }) 
   if (action === 'closed' && pullRequest.merged) {
     return 'merged';
   }
-  return action;
+  return action.replaceAll('_', ' ');
 };
 
 type PullRequestEvent = EmitterWebhookEvent<

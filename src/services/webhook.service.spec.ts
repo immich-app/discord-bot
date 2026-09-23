@@ -26,9 +26,8 @@ import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vit
 /**
  * Characterization tests: these pin the CURRENT payloads sent to Discord, Mattermost and Zulip
  * for every notification path in WebhookService. They intentionally pin quirks of the current
- * implementation (trailing `undefined` entries in Mattermost `content` arrays, raw GitHub action
- * names such as `converted_to_draft` in titles, etc). If a snapshot changes during a refactor,
- * the refactor drifted - fix the code, never the snapshot.
+ * implementation (trailing `undefined` entries in Mattermost `content` arrays, etc). If a snapshot
+ * changes during a refactor, the refactor drifted - fix the code, never the snapshot.
  */
 
 vitest.mock('src/config', () => ({
@@ -1646,7 +1645,7 @@ describe(WebhookService.name, () => {
                     },
                     "color": 9807270,
                     "description": undefined,
-                    "title": "[immich-app/immich] Pull request converted_to_draft: #1234 feat: add thing",
+                    "title": "[immich-app/immich] Pull request converted to draft: #1234 feat: add thing",
                     "url": "https://github.com/immich-app/immich/pull/1234",
                   },
                 ],
@@ -1686,7 +1685,7 @@ describe(WebhookService.name, () => {
                       },
                       {
                         "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request converted_to_draft: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
+                        "text": "##### [[immich-app/immich] Pull request converted to draft: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
                         "type": "text",
                       },
                       undefined,
@@ -1721,7 +1720,7 @@ describe(WebhookService.name, () => {
                     },
                     "color": 5763719,
                     "description": undefined,
-                    "title": "[immich-app/immich] Pull request ready_for_review: #1234 feat: add thing",
+                    "title": "[immich-app/immich] Pull request ready for review: #1234 feat: add thing",
                     "url": "https://github.com/immich-app/immich/pull/1234",
                   },
                 ],
@@ -1761,7 +1760,7 @@ describe(WebhookService.name, () => {
                       },
                       {
                         "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request ready_for_review: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
+                        "text": "##### [[immich-app/immich] Pull request ready for review: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
                         "type": "text",
                       },
                       undefined,
@@ -1777,6 +1776,20 @@ describe(WebhookService.name, () => {
           "zulip": [],
         }
       `);
+    });
+
+    it.each([
+      { action: 'converted_to_draft', words: 'converted to draft' },
+      { action: 'ready_for_review', words: 'ready for review' },
+    ])('should write $action as words on Zulip too', async ({ action, words }) => {
+      zulipMock.isInitialised.mockReturnValue(true);
+      databaseMock.getPullRequestById.mockResolvedValue(undefined);
+
+      await sut.onGithub(pullRequestEvent(action, makePullRequest()), 'github-slug');
+
+      expect(sent().zulip.map(({ content }) => content)).toEqual([
+        expect.stringContaining(`Pull request ${words}: #1234 feat: add thing`),
+      ]);
     });
 
     it('should truncate a long body to 500 characters', async () => {
