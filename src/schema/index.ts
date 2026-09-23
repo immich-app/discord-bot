@@ -3,6 +3,8 @@ import { Insertable, Selectable, Updateable } from 'kysely';
 import { DiscordLinkTable } from 'src/schema/tables/discord-links.table';
 import { DiscordMessageTable } from 'src/schema/tables/discord-messages.table';
 import { FourthwallOrderTable } from 'src/schema/tables/fourthwall-orders.table';
+import { MirrorConversationTable } from 'src/schema/tables/mirror-conversation.table';
+import { MirrorMessageTable } from 'src/schema/tables/mirror-message.table';
 import { PaymentTable } from 'src/schema/tables/payment.table';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 import { RSSFeedTable } from 'src/schema/tables/rss-feeds.table';
@@ -21,6 +23,8 @@ export class DiscordBotDatabase {
     RSSFeedTable,
     ScheduledMessageTable,
     PullRequestTable,
+    MirrorConversationTable,
+    MirrorMessageTable,
   ];
 }
 
@@ -53,6 +57,14 @@ export type UpdateScheduledMessage = Updateable<ScheduledMessageTable>;
 export type PullRequest = Selectable<PullRequestTable>;
 export type NewPullRequest = Insertable<PullRequestTable>;
 
+export type MirrorConversation = Selectable<MirrorConversationTable>;
+export type NewMirrorConversation = Insertable<MirrorConversationTable>;
+export type UpdateMirrorConversation = Updateable<MirrorConversationTable>;
+
+export type MirrorMessage = Selectable<MirrorMessageTable>;
+export type NewMirrorMessage = Insertable<MirrorMessageTable>;
+export type UpdateMirrorMessage = Updateable<MirrorMessageTable>;
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
@@ -62,4 +74,6 @@ export interface Database {
   rss_feed: RSSFeedTable;
   scheduled_message: ScheduledMessageTable;
   pull_request: PullRequestTable;
+  mirror_conversation: MirrorConversationTable;
+  mirror_message: MirrorMessageTable;
 }

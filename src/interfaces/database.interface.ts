@@ -4,9 +4,13 @@ import {
   DiscordLink,
   DiscordLinkUpdate,
   DiscordMessage,
+  MirrorConversation,
+  MirrorMessage,
   NewDiscordLink,
   NewDiscordMessage,
   NewFourthwallOrder,
+  NewMirrorConversation,
+  NewMirrorMessage,
   NewPayment,
   NewPullRequest,
   NewRSSFeed,
@@ -16,6 +20,8 @@ import {
   ScheduledMessage,
   UpdateDiscordMessage,
   UpdateFourthwallOrder,
+  UpdateMirrorConversation,
+  UpdateMirrorMessage,
   UpdateRSSFeed,
   UpdateScheduledMessage,
 } from 'src/schema';
@@ -61,4 +67,30 @@ export interface IDatabaseRepository {
   updatePullRequest(entity: Updateable<PullRequestTable> & { nodeId: string }): Promise<void>;
   upsertPullRequest({ nodeId, ...entity }: NewPullRequest): Promise<void>;
   getLatestPullRequestByNumber(number: number): Promise<PullRequest | undefined>;
+  getMirrorConversation(id: string): Promise<MirrorConversation | undefined>;
+  getMirrorConversationByDiscord(
+    discordChannelId: string,
+    discordThreadId: string | null,
+  ): Promise<MirrorConversation | undefined>;
+  getMirrorConversationByZulipTopic(
+    zulipStreamId: number,
+    zulipTopicKey: string,
+  ): Promise<MirrorConversation | undefined>;
+  getMirrorConversationsByAnchors(zulipMessageIds: number[]): Promise<MirrorConversation[]>;
+  /** Thread and post conversations with a row created since `since`, newest activity first. */
+  getActiveMirrorThreads(discordChannelId: string, since: Date, limit: number): Promise<MirrorConversation[]>;
+  createMirrorConversation(entity: NewMirrorConversation): Promise<MirrorConversation>;
+  updateMirrorConversation(id: string, changes: UpdateMirrorConversation): Promise<void>;
+  removeMirrorConversation(id: string): Promise<void>;
+  createMirrorMessages(rows: NewMirrorMessage[]): Promise<void>;
+  getMirrorMessagesByDiscordIds(ids: string[]): Promise<MirrorMessage[]>;
+  /** Ordered by zulipMessageId, then part. */
+  getMirrorMessagesByZulipIds(ids: number[]): Promise<MirrorMessage[]>;
+  getNewestMirrorZulipMessageId(conversationId: string): Promise<number | undefined>;
+  updateMirrorMessages(discordMessageIds: string[], changes: UpdateMirrorMessage): Promise<void>;
+  removeMirrorMessages(discordMessageIds: string[]): Promise<void>;
+  /** max("zulipMessageId") of origin 'zulip' rows in the stream. */
+  getMirrorZulipHighWater(zulipStreamId: number): Promise<number | undefined>;
+  /** Newest origin 'discord' row in the channel or thread, ordered by (length("discordMessageId"), "discordMessageId"). */
+  getMirrorDiscordHighWater(discordChannelId: string, discordThreadId: string | null): Promise<string | undefined>;
 }

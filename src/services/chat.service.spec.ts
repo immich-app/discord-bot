@@ -109,6 +109,22 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  getMirrorConversation: vitest.fn(),
+  getMirrorConversationByDiscord: vitest.fn(),
+  getMirrorConversationByZulipTopic: vitest.fn(),
+  getMirrorConversationsByAnchors: vitest.fn(),
+  getActiveMirrorThreads: vitest.fn(),
+  createMirrorConversation: vitest.fn(),
+  updateMirrorConversation: vitest.fn(),
+  removeMirrorConversation: vitest.fn(),
+  createMirrorMessages: vitest.fn(),
+  getMirrorMessagesByDiscordIds: vitest.fn(),
+  getMirrorMessagesByZulipIds: vitest.fn(),
+  getNewestMirrorZulipMessageId: vitest.fn(),
+  updateMirrorMessages: vitest.fn(),
+  removeMirrorMessages: vitest.fn(),
+  getMirrorZulipHighWater: vitest.fn(),
+  getMirrorDiscordHighWater: vitest.fn(),
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
