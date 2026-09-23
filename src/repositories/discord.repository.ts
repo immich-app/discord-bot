@@ -9,6 +9,7 @@ import {
   Partials,
   PermissionsString,
   RESTJSONErrorCodes,
+  Routes,
   ThreadAutoArchiveDuration,
   Webhook,
   WebhookClient,
@@ -22,9 +23,12 @@ import {
   DiscordMirrorErrorKind,
   DiscordMirrorNotice,
   DiscordMirrorPage,
+  DiscordMirrorReaction,
   DiscordMirrorSend,
   DiscordMirrorSent,
   DiscordMirrorTarget,
+  DiscordMirrorThread,
+  DiscordReactionEmoji,
   DiscordTeamMember,
   IDiscordMirrorInterface,
 } from 'src/interfaces/discord-mirror.interface';
@@ -78,7 +82,8 @@ const bot = new Client({
     prefix: '/',
   },
 
-  partials: [Partials.Message, Partials.Reaction],
+  // A reaction removed by a user who is not cached arrives with a partial user, or not at all without it.
+  partials: [Partials.Message, Partials.Reaction, Partials.User],
 
   guards: [reportErrors((error) => reportHandlerError(error))],
 });
@@ -87,6 +92,7 @@ const mirrorErrorKinds: Partial<Record<number, DiscordMirrorErrorKind>> = {
   [RESTJSONErrorCodes.UnknownChannel]: 'unknown-channel',
   [RESTJSONErrorCodes.UnknownMessage]: 'unknown-message',
   [RESTJSONErrorCodes.UnknownWebhook]: 'unknown-webhook',
+  [RESTJSONErrorCodes.UnknownEmoji]: 'unknown-emoji',
   [RESTJSONErrorCodes.MaximumNumberOfWebhooksReached]: 'max-webhooks',
   [RESTJSONErrorCodes.RequestEntityTooLarge]: 'too-large',
   [RESTJSONErrorCodes.TagRequiredToCreateAForumPostInThisChannel]: 'forum',
@@ -100,6 +106,8 @@ const mirrorErrorKinds: Partial<Record<number, DiscordMirrorErrorKind>> = {
 };
 
 const WEBHOOK_FAILURE_MS = 10 * 60 * 1000;
+const ARCHIVED_THREADS = 50;
+const DISCORD_EPOCH = 1_420_070_400_000;
 const AVATAR_TIMEOUT_MS = 10_000;
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
 
@@ -174,6 +182,12 @@ const fetchAvatar = async (url: string) => {
 const hasCode = (error: unknown, ...codes: number[]) =>
   error instanceof DiscordAPIError && typeof error.code === 'number' && codes.includes(error.code);
 
+/** `Routes` percent-encodes it. */
+const emojiRoute = ({ id, name }: DiscordReactionEmoji) => (id === null ? (name ?? '') : `${name ?? '_'}:${id}`);
+
+const toAttachments = (files: File[]) =>
+  Promise.all(files.map(async (file) => ({ attachment: Buffer.from(await file.arrayBuffer()), name: file.name })));
+
 const bySnowflake = (a: { id: string }, b: { id: string }) => {
   const [x, y] = [BigInt(a.id), BigInt(b.id)];
   return x < y ? -1 : x > y ? 1 : 0;
@@ -185,6 +199,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
    */
   private mirrorWebhooks = new Map<string, WebhookClient>();
   private mirrorWebhookFailures = new Map<string, { error: DiscordMirrorError; until: number }>();
+  private ownMirrorWebhooks = new Set<string>();
 
   constructor() {
     bot
@@ -212,6 +227,10 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
   isReady() {
     return bot.isReady();
+  }
+
+  isOwnMirrorWebhook(webhookId: string) {
+    return this.ownMirrorWebhooks.has(webhookId);
   }
 
   onHandlerError(handler: DiscordErrorHandler) {
@@ -262,6 +281,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
     const emotes = await guild.emojis.fetch();
     return emotes.map((emote) => ({
+      id: emote.id,
       identifier: emote.identifier,
       name: emote.name,
       url: emote.imageURL(),
@@ -372,12 +392,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
   async sendMirrorMessage(message: DiscordMirrorSend): Promise<DiscordMirrorSent> {
     const webhook = this.getMirrorWebhook(message.channelId);
-    const files = await Promise.all(
-      (message.files ?? []).map(async (file) => ({
-        attachment: Buffer.from(await file.arrayBuffer()),
-        name: file.name,
-      })),
-    );
+    const files = await toAttachments(message.files ?? []);
 
     try {
       const sent = await webhook.send({
@@ -396,19 +411,43 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
-  async editMirrorMessage(target: DiscordMirrorTarget, edit: { content: string; suppressEmbeds: boolean }) {
+  async editMirrorMessage(
+    target: DiscordMirrorTarget,
+    edit: { content: string; suppressEmbeds: boolean; files?: File[] },
+  ) {
     const webhook = this.getMirrorWebhook(target.channelId);
     if (target.webhookId !== webhook.id) {
       throw new DiscordMirrorError('replaced-webhook');
     }
 
+    const thread = target.threadId === null ? {} : { threadId: target.threadId };
     try {
+      const files = await toAttachments(edit.files ?? []);
+      // An edit that sends files keeps only the attachments it names.
+      const attachments =
+        files.length > 0
+          ? (await webhook.fetchMessage(target.messageId, thread)).attachments.map(({ id }) => ({ id }))
+          : undefined;
       await webhook.editMessage(target.messageId, {
         content: edit.content,
         allowedMentions: { parse: [], users: [] },
         flags: edit.suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [],
-        ...(target.threadId === null ? {} : { threadId: target.threadId }),
+        ...thread,
+        ...(attachments ? { files, attachments } : {}),
       });
+    } catch (error) {
+      throw this.toWebhookError(target.channelId, webhook, error);
+    }
+  }
+
+  async countMirrorAttachments(target: DiscordMirrorTarget) {
+    const webhook = this.getMirrorWebhook(target.channelId);
+    if (target.webhookId !== webhook.id) {
+      throw new DiscordMirrorError('replaced-webhook');
+    }
+    try {
+      const thread = target.threadId === null ? {} : { threadId: target.threadId };
+      return (await webhook.fetchMessage(target.messageId, thread)).attachments.length;
     } catch (error) {
       throw this.toWebhookError(target.channelId, webhook, error);
     }
@@ -473,6 +512,15 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
         throw new DiscordMirrorError('locked');
       }
       await thread.setArchived(false);
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async archiveMirrorThread(threadId: string) {
+    try {
+      const thread = await this.fetchThread(threadId);
+      await thread.setArchived(true);
     } catch (error) {
       throw toMirrorError(error);
     }
@@ -547,6 +595,81 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
+  async getMirrorReactions(target: DiscordMirrorTarget): Promise<DiscordMirrorReaction[]> {
+    try {
+      const channel = await bot.channels.fetch(target.threadId ?? target.channelId);
+      if (!channel?.isTextBased() || channel.isDMBased()) {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+      const message = await channel.messages.fetch({ message: target.messageId, force: true });
+      return message.reactions.cache.map(({ emoji, count, me }) => ({
+        emoji: { id: emoji.id, name: emoji.name, animated: emoji.animated ?? false },
+        count,
+        me,
+      }));
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async addMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji) {
+    try {
+      await bot.rest.put(
+        Routes.channelMessageOwnReaction(target.threadId ?? target.channelId, target.messageId, emojiRoute(emoji)),
+      );
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async removeMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji) {
+    try {
+      await bot.rest.delete(
+        Routes.channelMessageOwnReaction(target.threadId ?? target.channelId, target.messageId, emojiRoute(emoji)),
+      );
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async listMirrorThreads(channelId: string): Promise<DiscordMirrorThread[]> {
+    try {
+      const channel = await bot.channels.fetch(channelId);
+      if (channel?.type !== ChannelType.GuildText && channel?.type !== ChannelType.GuildForum) {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+      const [active, archived] = await Promise.all([
+        channel.threads.fetchActive(),
+        channel.threads.fetchArchived({ type: 'public', limit: ARCHIVED_THREADS }),
+      ]);
+      const threads = new Map([...active.threads, ...archived.threads]);
+      return [...threads.values()]
+        .filter(({ type }) => type !== ChannelType.PrivateThread)
+        .map(({ id, createdTimestamp }) => ({
+          id,
+          createdTimestamp: createdTimestamp ?? Number(BigInt(id) >> 22n) + DISCORD_EPOCH,
+        }));
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async fetchMirrorMessage(channelId: string, messageId: string) {
+    try {
+      const channel = await bot.channels.fetch(channelId);
+      if (!channel?.isTextBased() || channel.isDMBased()) {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+      const message = await channel.messages.fetch(messageId);
+      return message.inGuild() ? toDiscordSourceMessage(message) : undefined;
+    } catch (error) {
+      if (hasCode(error, RESTJSONErrorCodes.UnknownMessage)) {
+        return undefined;
+      }
+      throw toMirrorError(error);
+    }
+  }
+
   async fetchMirrorMessagesBefore(
     channelId: string,
     beforeId: string | undefined,
@@ -561,7 +684,9 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       const page = await channel.messages.fetch(beforeId === undefined ? { limit } : { before: beforeId, limit });
       const messages = [...page.values()].sort(bySnowflake);
       return {
-        messages: messages.filter(isMirrorCandidate).map(toDiscordSourceMessage),
+        messages: messages
+          .filter((message) => isMirrorCandidate(message, (id) => this.isOwnMirrorWebhook(id)))
+          .map(toDiscordSourceMessage),
         oldestId: messages[0]?.id ?? null,
         full: messages.length === limit,
       };
@@ -581,18 +706,20 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       throw new DiscordMirrorError('other', undefined, 'Discord is not ready');
     }
 
-    const [existing] = [...(await channel.fetchWebhooks()).values()]
-      .filter((webhook) => webhook.owner?.id === user.id && webhook.token)
-      .sort(bySnowflake);
-
-    return (
+    const owned = [...(await channel.fetchWebhooks()).values()].filter((webhook) => webhook.owner?.id === user.id);
+    for (const { id } of owned) {
+      this.ownMirrorWebhooks.add(id);
+    }
+    const [existing] = owned.filter(({ token }) => token).sort(bySnowflake);
+    const webhook =
       existing ??
       (await channel.createWebhook({
         name: 'Zulip mirror',
         avatar: await fetchAvatar(user.displayAvatarURL({ extension: 'png', size: 256 })),
         reason: 'Discord-Zulip mirror',
-      }))
-    );
+      }));
+    this.ownMirrorWebhooks.add(webhook.id);
+    return webhook;
   }
 
   private getMirrorWebhook(channelId: string): WebhookClient {

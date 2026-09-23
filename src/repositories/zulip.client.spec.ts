@@ -5,6 +5,7 @@ import {
   ZulipApiError,
   ZulipClientOptions,
   ZulipFetch,
+  ZulipRateLimit,
   createZulipClient,
   encodeForm,
   multipart,
@@ -330,6 +331,117 @@ describe('ZulipClient', () => {
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('rate-limit budget', () => {
+    const NOW = new Date('2026-09-23T12:00:00Z');
+    const budget = (remaining: number, resetInSeconds: number, serverNow = NOW) =>
+      json(
+        { result: 'success', msg: '', id: 7 },
+        {
+          headers: {
+            'content-type': 'application/json',
+            date: serverNow.toUTCString(),
+            'x-ratelimit-limit': '200',
+            'x-ratelimit-remaining': String(remaining),
+            'x-ratelimit-reset': String(Math.floor(serverNow.getTime() / 1000) + resetInSeconds),
+          },
+        },
+      );
+    const post = (client: ReturnType<typeof newClient>, signal?: AbortSignal) =>
+      client.POST('/messages', { body: message, signal });
+
+    beforeEach(() => {
+      vitest.useFakeTimers({ now: NOW });
+    });
+
+    afterEach(() => {
+      vitest.useRealTimers();
+    });
+
+    it('should hold every request until the reset once a response says the budget is spent', async () => {
+      fetchMock.mockResolvedValueOnce(budget(0, 60)).mockImplementation(async () => budget(199, 60));
+      const client = newClient({ sleep: undefined });
+
+      await post(client);
+      const next = post(client);
+      const after = post(client);
+      await vitest.advanceTimersByTimeAsync(59_999);
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      await vitest.advanceTimersByTimeAsync(1);
+      await expect(next).resolves.toMatchObject({ data: { id: 7 } });
+      await after;
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
+        'The Zulip rate limit is used up after POST /api/v1/messages; requests wait 60000ms for it to reset',
+      );
+    });
+
+    it('should not wait while some budget remains, or without the headers', async () => {
+      fetchMock.mockResolvedValueOnce(budget(1, 60)).mockImplementation(async () => success());
+      const client = newClient({ sleep: undefined });
+
+      await post(client);
+      await post(client);
+      await post(client);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('should share the budget of one identity between its clients', async () => {
+      const rateLimit = new ZulipRateLimit();
+      fetchMock.mockResolvedValueOnce(budget(0, 30)).mockImplementation(async () => success());
+
+      await post(newClient({ sleep: undefined, rateLimit }));
+      const other = post(newClient({ sleep: undefined, rateLimit }));
+      await vitest.advanceTimersByTimeAsync(29_000);
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      await vitest.advanceTimersByTimeAsync(1000);
+      await other;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("should read the reset against the server's clock, and wait at most a minute", async () => {
+      const rateLimit = new ZulipRateLimit();
+      rateLimit.note(budget(0, 20, new Date(NOW.getTime() - 60 * 60 * 1000)));
+      expect(rateLimit.wait()).toBe(20_000);
+
+      rateLimit.note(budget(0, 3600));
+      expect(rateLimit.wait()).toBe(60_000);
+    });
+
+    it('should stop waiting when the caller gives up on the request', async () => {
+      fetchMock.mockImplementation(async () => budget(0, 60));
+      const client = newClient({ sleep: undefined });
+      await post(client);
+      const controller = new AbortController();
+
+      const waiting = post(client, controller.signal);
+      const rejected = expect(waiting).rejects.toThrow('shutting down');
+      await vitest.advanceTimersByTimeAsync(1000);
+      controller.abort(new Error('shutting down'));
+
+      await rejected;
+      expect(fetchMock).toHaveBeenCalledOnce();
+      await expect(post(client, controller.signal)).rejects.toThrow('shutting down');
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('should still retry a 429 after its retry-after', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          rateLimited(0.25, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(NOW.getTime() / 1000) }),
+        )
+        .mockImplementation(async () => success({ id: 7 }));
+
+      const request = post(newClient({ sleep: undefined }));
+      await vitest.advanceTimersByTimeAsync(250);
+
+      await expect(request).resolves.toMatchObject({ data: { id: 7 } });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 

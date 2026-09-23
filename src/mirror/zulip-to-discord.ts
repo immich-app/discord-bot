@@ -1,9 +1,15 @@
 import { escapeMarkdown } from 'discord.js';
 import { scanZulipFences, splitOutsideCode, ZulipFence } from 'src/format';
 
+/** A stream by name, as `#**…**` names it, or by ID, as a narrow link does; `topic` is as Zulip wrote it. */
+export type ZulipChannelRef = { stream: string | number; topic?: string };
+
+export const channelRefKey = ({ stream, topic }: ZulipChannelRef) => JSON.stringify([stream, topic ?? null]);
+
 export type ZulipRefs = {
   quoteReply?: { messageId: number; senderId?: number; senderName: string };
   messageIds: number[];
+  channels: ZulipChannelRef[];
   userIds: number[];
   uploads: string[];
   emojiNames: string[];
@@ -21,6 +27,8 @@ export type ZulipRenderContext = {
   messages: Map<number, ZulipMessageRef>;
   /** Mirrored messages deleted on either side, which a reply must not quote back. */
   deletedMessageIds: Set<number>;
+  /** The Discord channel or thread of a linked stream or mirrored topic, by `channelRefKey`. */
+  channels?: Map<string, string>;
   /** Verified team members only. */
   discordUserByZulipId: Map<number, string>;
   emoji: (name: string) => string | undefined;
@@ -33,6 +41,7 @@ export type DiscordRendered = { text: string; uploads: string[]; spoilerUploads:
 
 type Lookups = {
   message: (id: number) => ZulipMessageRef | undefined;
+  channel: (ref: ZulipChannelRef) => string | undefined;
   deleted: (id: number) => boolean;
   discordUser: (zulipId: number) => string | undefined;
   emoji: (name: string) => string | undefined;
@@ -63,7 +72,7 @@ const INLINE = new RegExp(
     String.raw`\[(?<label>(?:[^[\]\n]|\[[^[\]\n]*\])*)\]\(\s*(?:<(?<angled>[^<>\n]*)>|(?<target>(?:[^\s()<>]|\([^\s()<>]*\))*))(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)`,
     String.raw`(?<mention>@(?<silent>_?)\*\*(?<name>[^*\n]+)\*\*)`,
     String.raw`(?<group>@_?\*(?<groupName>[^*\n]+)\*)`,
-    String.raw`(?<stream>#\*\*[^*\n]+\*\*)`,
+    String.raw`#\*\*(?<stream>[^*\n]+)\*\*`,
     String.raw`<time:(?<time>[^>\n]*)>`,
     String.raw`<(?<angledUrl>https?:\/\/[^\s<>]+)>`,
     String.raw`(?<url>https?:\/\/[^\s<>]+)`,
@@ -72,6 +81,41 @@ const INLINE = new RegExp(
   ].join('|'),
   'gi',
 );
+
+const NARROW = '#narrow/';
+
+/** Zulip writes a narrow operand percent-encoded with `.` for `%`. */
+const decodeOperand = (operand: string) => {
+  try {
+    return decodeURIComponent(operand.replaceAll('.', '%'));
+  } catch {
+    return operand;
+  }
+};
+
+/** The channel, topic and message a narrow link names, as far as it names them. */
+const parseNarrow = (target: string) => {
+  const at = target.indexOf(NARROW);
+  const parts = at < 0 ? [] : target.slice(at + NARROW.length).split(/[/?]/);
+  let stream: number | undefined;
+  let topic: string | undefined;
+  let messageId: number | undefined;
+  for (let index = 0; index + 1 < parts.length; index += 2) {
+    const [operator, operand] = [parts[index], parts[index + 1]];
+    if (operator === 'channel' || operator === 'stream') {
+      const id = /^\d+/.exec(operand)?.[0];
+      stream = id === undefined ? undefined : Number(id);
+    } else if (operator === 'topic' || operator === 'subject') {
+      topic = decodeOperand(operand);
+    } else if ((operator === 'near' || operator === 'with') && /^\d+$/.test(operand)) {
+      messageId = Number(operand);
+    }
+  }
+  return { channel: stream === undefined ? undefined : { stream, topic }, messageId };
+};
+
+/** Zulip's `#**channel>topic@message**`: a channel name holds no `>`, a topic ends at the last `@` and digits. */
+const STREAM_LINK = /^(?<name>[^>]+)(?:>(?<topic>.*?)(?:@(?<messageId>\d+))?)?$/s;
 
 /** Zulip's autolinker leaves trailing punctuation, and an unbalanced closing parenthesis, out of the URL. */
 const splitUrlTail = (url: string) => {
@@ -211,6 +255,17 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
     );
   };
 
+  /** A realm link goes to the Discord copy of the message it names, or else to the Discord channel or thread it names. */
+  const internalTarget = (target: string, fallbackMessageId?: number) => {
+    const { channel, messageId = fallbackMessageId } = parseNarrow(target);
+    const message = messageId === undefined ? undefined : lookups.message(messageId);
+    if (message) {
+      return { jumpUrl: message.jumpUrl };
+    }
+    const channelId = channel && lookups.channel(channel);
+    return channelId === undefined ? undefined : { mention: `<#${channelId}>` };
+  };
+
   /** `start` is the offset of `part` in `text`, or `undefined` for a link label, which queues nothing. */
   const translate = (part: string, start: number | undefined): string =>
     part
@@ -227,13 +282,14 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
             return queueUpload(upload, at) && aloneOnLine(at!, at! + match.length) ? DROP : label;
           }
           const hidden = isChannelLabel(groups.label);
-          if (target.startsWith('#narrow/') || realmUrl(target)) {
+          if (target.startsWith(NARROW) || target.startsWith(`/${NARROW}`) || realmUrl(target)) {
             const messageId = /\/(?:near|with)\/(\d+)/.exec(target)?.[1];
-            const message = messageId === undefined ? undefined : lookups.message(Number(messageId));
-            if (message) {
-              return `[${label}](${message.jumpUrl})`;
+            const found = internalTarget(target, messageId === undefined ? undefined : Number(messageId));
+            if (found?.jumpUrl) {
+              return `[${label}](${found.jumpUrl})`;
             }
-            return hidden ? ZULIP_LINK : `${label} ${ZULIP_LINK}`;
+            const shown = found?.mention ?? ZULIP_LINK;
+            return hidden ? shown : `${label} ${shown}`;
           }
           if (/^https?:\/\//i.test(target)) {
             return `[${label}](${target.replaceAll(' ', '%20')})`;
@@ -260,7 +316,13 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
         }
 
         if (groups.stream !== undefined) {
-          return ZULIP_LINK;
+          const { name, topic, messageId } = STREAM_LINK.exec(groups.stream)?.groups ?? {};
+          const message = messageId === undefined ? undefined : lookups.message(Number(messageId));
+          if (message) {
+            return message.jumpUrl;
+          }
+          const channelId = name === undefined ? undefined : lookups.channel({ stream: name, topic });
+          return channelId === undefined ? ZULIP_LINK : `<#${channelId}>`;
         }
 
         if (groups.time !== undefined) {
@@ -278,11 +340,13 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
           if (upload && queueUpload(upload, at)) {
             return (aloneOnLine(at!, at! + match.length) ? DROP : '') + tail;
           }
-          return ZULIP_LINK + tail;
+          const found = internalTarget(url);
+          return (found?.jumpUrl ?? found?.mention ?? ZULIP_LINK) + tail;
         }
 
         if (groups.narrow !== undefined) {
-          return ZULIP_LINK;
+          const found = internalTarget(groups.narrow);
+          return found?.jumpUrl ?? found?.mention ?? ZULIP_LINK;
         }
 
         return lookups.emoji(groups.emoji!) ?? match;
@@ -384,10 +448,12 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
 
 export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
   const messageIds = new Set<number>();
+  const channels = new Map<string, ZulipChannelRef>();
   const userIds = new Set<number>();
   const emojiNames = new Set<string>();
   const { uploads, reply } = render(raw, realmOrigin, {
     message: (id) => void messageIds.add(id),
+    channel: (ref) => void channels.set(channelRefKey(ref), ref),
     deleted: () => false,
     discordUser: (id) => void userIds.add(id),
     emoji: (name) => void emojiNames.add(name),
@@ -395,6 +461,7 @@ export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
   return {
     quoteReply: reply && { messageId: reply.messageId, senderId: reply.senderId, senderName: reply.name },
     messageIds: [...messageIds],
+    channels: [...channels.values()],
     userIds: [...userIds],
     uploads,
     emojiNames: [...emojiNames],
@@ -407,6 +474,7 @@ export const toDiscordMirrorContent = (raw: string, ctx: ZulipRenderContext): Di
     ctx.realmOrigin,
     {
       message: (id) => ctx.messages.get(id),
+      channel: (ref) => ctx.channels?.get(channelRefKey(ref)),
       deleted: (id) => ctx.deletedMessageIds.has(id),
       discordUser: (id) => ctx.discordUserByZulipId.get(id),
       emoji: ctx.emoji,

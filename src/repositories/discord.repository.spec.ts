@@ -24,6 +24,7 @@ const bot = vitest.hoisted(() => ({
   user: null as { id: string; displayAvatarURL: (options: unknown) => string } | null,
   channels: { fetch: vitest.fn() },
   guilds: { cache: new Map<string, unknown>() },
+  rest: { put: vitest.fn(), delete: vitest.fn() },
 }));
 
 const webhookClients = vitest.hoisted(() => new Map<string, object>());
@@ -100,10 +101,11 @@ const makeWebhook = (id: string, overrides: Record<string, unknown> = {}) => {
     send: vitest.fn(),
     editMessage: vitest.fn(),
     deleteMessage: vitest.fn(),
+    fetchMessage: vitest.fn(),
     ...overrides,
   };
-  const { send, editMessage, deleteMessage } = webhook;
-  webhookClients.set(id, { id, send, editMessage, deleteMessage, destroy: vitest.fn() });
+  const { send, editMessage, deleteMessage, fetchMessage } = webhook;
+  webhookClients.set(id, { id, send, editMessage, deleteMessage, fetchMessage, destroy: vitest.fn() });
   return webhook;
 };
 
@@ -238,6 +240,22 @@ describe(DiscordRepository.name, () => {
   });
 
   describe('ensureMirrorWebhook', () => {
+    it('should know every webhook the bot owns in the channel, and the one it creates, as its own', async () => {
+      channel.fetchWebhooks.mockResolvedValue(
+        webhooks(
+          makeWebhook('700000000000000005', { token: null }),
+          makeWebhook('700000000000000006', { owner: { id: '1' } }),
+        ),
+      );
+      channel.createWebhook.mockResolvedValue(makeWebhook('700000000000000007'));
+
+      await sut.ensureMirrorWebhook(channelId);
+
+      expect(sut.isOwnMirrorWebhook('700000000000000005')).toBe(true);
+      expect(sut.isOwnMirrorWebhook('700000000000000007')).toBe(true);
+      expect(sut.isOwnMirrorWebhook('700000000000000006')).toBe(false);
+    });
+
     it('should reuse the oldest webhook the bot owns, whatever its name', async () => {
       const newer = makeWebhook('700000000000000009');
       const older = makeWebhook('70000000000000002', { name: 'Renamed by an admin' });
@@ -494,6 +512,23 @@ describe(DiscordRepository.name, () => {
     });
   });
 
+  describe('countMirrorAttachments', () => {
+    beforeEach(resolveWebhook);
+
+    it('should count the attachments the copy has, in its thread', async () => {
+      webhook.fetchMessage.mockResolvedValue({ attachments: [{ id: '1' }, { id: '2' }] });
+
+      await expect(sut.countMirrorAttachments(target())).resolves.toBe(2);
+      expect(webhook.fetchMessage).toHaveBeenCalledWith('300000000000000001', { threadId });
+    });
+
+    it('should refuse a copy another webhook sent', async () => {
+      await expect(sut.countMirrorAttachments(target({ webhookId: '999' }))).rejects.toMatchObject({
+        kind: 'replaced-webhook',
+      });
+    });
+  });
+
   describe('editMirrorMessage', () => {
     beforeEach(resolveWebhook);
 
@@ -515,6 +550,26 @@ describe(DiscordRepository.name, () => {
         content: 'edited',
         allowedMentions: { parse: [], users: [] },
         flags: [],
+      });
+    });
+
+    it('should add files to the attachments the message keeps', async () => {
+      webhook.fetchMessage.mockResolvedValue({ attachments: [{ id: '900000000000000001', filename: 'shot.png' }] });
+
+      await sut.editMirrorMessage(target(), {
+        content: 'edited',
+        suppressEmbeds: false,
+        files: [new File(['bytes'], 'log.txt')],
+      });
+
+      expect(webhook.fetchMessage).toHaveBeenCalledWith('300000000000000001', { threadId });
+      expect(webhook.editMessage).toHaveBeenCalledWith('300000000000000001', {
+        content: 'edited',
+        allowedMentions: { parse: [], users: [] },
+        flags: [],
+        threadId,
+        files: [{ attachment: Buffer.from('bytes'), name: 'log.txt' }],
+        attachments: [{ id: '900000000000000001' }],
       });
     });
 
@@ -606,6 +661,56 @@ describe(DiscordRepository.name, () => {
     });
   });
 
+  describe('reactions', () => {
+    it('should read the reactions of the message afresh, with whether the bot gave one', async () => {
+      const fetch = vitest.fn().mockResolvedValue({
+        reactions: {
+          cache: new Collection([
+            ['👍', { emoji: { id: null, name: '👍' }, count: 2, me: true }],
+            ['5', { emoji: { id: '5', name: 'catJAM', animated: true }, count: 1, me: false }],
+          ]),
+        },
+      });
+      bot.channels.fetch.mockResolvedValue(makeThread({ isDMBased: () => false, messages: { fetch } }));
+
+      await expect(sut.getMirrorReactions(target())).resolves.toEqual([
+        { emoji: { id: null, name: '👍', animated: false }, count: 2, me: true },
+        { emoji: { id: '5', name: 'catJAM', animated: true }, count: 1, me: false },
+      ]);
+      expect(bot.channels.fetch).toHaveBeenCalledWith(threadId);
+      expect(fetch).toHaveBeenCalledWith({ message: '300000000000000001', force: true });
+    });
+
+    it('should map a message that is gone', async () => {
+      channel.messages.fetch.mockRejectedValue(apiError(10_008, 404));
+
+      await expect(sut.getMirrorReactions(target({ threadId: null }))).rejects.toMatchObject({
+        kind: 'unknown-message',
+      });
+    });
+
+    it('should react and take the reaction back as the bot, a Unicode emoji encoded and an emote by name and ID', async () => {
+      await sut.addMirrorReaction(target(), { id: null, name: '❤️', animated: false });
+      await sut.removeMirrorReaction(target({ threadId: null }), { id: '5', name: 'catJAM', animated: true });
+
+      expect(bot.rest.put).toHaveBeenCalledWith(
+        `/channels/${threadId}/messages/300000000000000001/reactions/${encodeURIComponent('❤️')}/@me`,
+      );
+      expect(bot.rest.delete).toHaveBeenCalledWith(
+        `/channels/${channelId}/messages/300000000000000001/reactions/catJAM%3A5/@me`,
+      );
+    });
+
+    it('should map an emoji Discord does not know', async () => {
+      bot.rest.put.mockRejectedValue(apiError(10_014));
+
+      await expect(sut.addMirrorReaction(target(), { id: null, name: '❤', animated: false })).rejects.toMatchObject({
+        kind: 'unknown-emoji',
+        code: 10_014,
+      });
+    });
+  });
+
   describe('startMirrorThread', () => {
     it('should start a public thread from the message', async () => {
       channel.threads.create.mockResolvedValue({ id: '300000000000000001' });
@@ -651,6 +756,14 @@ describe(DiscordRepository.name, () => {
     it('should unarchive the thread', async () => {
       await sut.unarchiveMirrorThread(threadId);
       expect(thread.setArchived).toHaveBeenCalledWith(false);
+    });
+
+    it('should archive the thread, locked or not', async () => {
+      await sut.archiveMirrorThread(threadId);
+      expect(thread.setArchived).toHaveBeenCalledWith(true);
+
+      bot.channels.fetch.mockResolvedValue(channel);
+      await expect(sut.archiveMirrorThread(threadId)).rejects.toMatchObject({ kind: 'unknown-channel' });
     });
 
     it('should leave a locked thread archived', async () => {
@@ -719,6 +832,8 @@ describe(DiscordRepository.name, () => {
     const makeMessage = (id: string, overrides: Record<string, unknown> = {}) => ({
       id,
       guildId,
+      client: bot,
+      embeds: [],
       inGuild: () => true,
       channel,
       author: { id: '400000000000000001', username: 'contrib123', displayName: 'Contrib', bot: false },
@@ -745,20 +860,24 @@ describe(DiscordRepository.name, () => {
     });
 
     it('should return the candidates before the anchor, oldest first, and the oldest message of any kind', async () => {
+      await resolveWebhook();
+      const hook = { id: '700000000000000009', username: 'GitHub', displayName: 'GitHub', bot: true };
       channel.messages.fetch.mockResolvedValue(
         new Collection([
+          ['1000000000000000004', makeMessage('1000000000000000004', { webhookId: hook.id, author: hook })],
           ['1000000000000000003', makeMessage('1000000000000000003')],
           ['1000000000000000002', makeMessage('1000000000000000002')],
           ['999999999999999999', makeMessage('999999999999999999', { webhookId: '700000000000000001' })],
         ]),
       );
 
-      const page = await sut.fetchMirrorMessagesBefore(channelId, '1000000000000000009', 3);
+      const page = await sut.fetchMirrorMessagesBefore(channelId, '1000000000000000009', 4);
 
-      expect(channel.messages.fetch).toHaveBeenCalledWith({ before: '1000000000000000009', limit: 3 });
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ before: '1000000000000000009', limit: 4 });
       expect(page.messages.map(({ id, content }) => [id, content])).toEqual([
         ['1000000000000000002', 'message 1000000000000000002'],
         ['1000000000000000003', 'message 1000000000000000003'],
+        ['1000000000000000004', 'message 1000000000000000004'],
       ]);
       expect(page).toMatchObject({ oldestId: '999999999999999999', full: true });
     });
@@ -784,6 +903,56 @@ describe(DiscordRepository.name, () => {
     it('should map errors', async () => {
       channel.messages.fetch.mockRejectedValue(apiError(50_001, 403));
       await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
+    });
+
+    it('should read one message, whoever sent it', async () => {
+      channel.messages.fetch.mockResolvedValue(makeMessage('1000000000000000003', { webhookId: '700000000000000001' }));
+
+      await expect(sut.fetchMirrorMessage(channelId, '1000000000000000003')).resolves.toMatchObject({
+        id: '1000000000000000003',
+        content: 'message 1000000000000000003',
+      });
+      expect(channel.messages.fetch).toHaveBeenCalledWith('1000000000000000003');
+    });
+
+    it('should find no message that is gone, and map other errors', async () => {
+      channel.messages.fetch.mockRejectedValueOnce(apiError(10_008, 404));
+      await expect(sut.fetchMirrorMessage(channelId, '1')).resolves.toBeUndefined();
+
+      channel.messages.fetch.mockRejectedValueOnce(apiError(50_001, 403));
+      await expect(sut.fetchMirrorMessage(channelId, '1')).rejects.toMatchObject({ kind: 'forbidden' });
+    });
+  });
+
+  describe('listMirrorThreads', () => {
+    it('should list the active and recently archived public threads, with when they were made', async () => {
+      const fetchActive = vitest.fn().mockResolvedValue({
+        threads: new Collection([
+          ['1', { id: '1', type: ChannelType.PublicThread, createdTimestamp: 1_700_000_000_000 }],
+          ['2', { id: '2', type: ChannelType.PrivateThread, createdTimestamp: 1_700_000_000_000 }],
+        ]),
+      });
+      const fetchArchived = vitest.fn().mockResolvedValue({
+        threads: new Collection([
+          ['1', { id: '1', type: ChannelType.PublicThread, createdTimestamp: 1_700_000_000_000 }],
+          ['4194304', { id: '4194304', type: ChannelType.PublicThread, createdTimestamp: null }],
+        ]),
+      });
+      bot.channels.fetch.mockResolvedValue(
+        makeChannel({ type: ChannelType.GuildForum, threads: { fetchActive, fetchArchived } }),
+      );
+
+      await expect(sut.listMirrorThreads(channelId)).resolves.toEqual([
+        { id: '1', createdTimestamp: 1_700_000_000_000 },
+        { id: '4194304', createdTimestamp: 1_420_070_400_001 },
+      ]);
+      expect(fetchArchived).toHaveBeenCalledWith({ type: 'public', limit: 50 });
+    });
+
+    it('should refuse a channel that holds no threads', async () => {
+      bot.channels.fetch.mockResolvedValue(makeChannel({ type: ChannelType.GuildVoice }));
+
+      await expect(sut.listMirrorThreads(channelId)).rejects.toMatchObject({ kind: 'unknown-channel' });
     });
   });
 

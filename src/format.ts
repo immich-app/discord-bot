@@ -61,12 +61,16 @@ export const resolveTopic = (topic: string) =>
  * Zulip's hash encoding (`encode_hash_component`), with `(` and `)` encoded too so the link survives as a Markdown
  * link target. `/with/` follows the message through later moves.
  */
-export const zulipNarrowLink = (streamId: number, topic: string, messageId: number) => {
-  const hash = encodeURIComponent(topic)
+const narrowOperand = (topic: string) =>
+  encodeURIComponent(topic)
     .replaceAll(/[.()!'*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
     .replaceAll('%', '.');
-  return `#narrow/channel/${streamId}/topic/${hash}/with/${messageId}`;
-};
+
+export const zulipNarrowLink = (streamId: number, topic: string, messageId: number) =>
+  `#narrow/channel/${streamId}/topic/${narrowOperand(topic)}/with/${messageId}`;
+
+export const zulipChannelNarrowLink = (streamId: number, topic?: string) =>
+  `#narrow/channel/${streamId}${topic === undefined ? '' : `/topic/${narrowOperand(topic)}`}`;
 
 /** Zulip's `FENCE_RE`, applied to a line after Python-Markdown has expanded its tabs. */
 const ZULIP_FENCE = /^(`{3,}|~{3,}) *(?:\{?\.?([\w+,\-./#]+) *([^ ~`][^~`]*)?\}?)?$/;

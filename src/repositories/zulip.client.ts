@@ -10,6 +10,7 @@ import type { paths } from 'src/generated/zulip';
  * - non-string fields, in bodies and in query strings, are JSON-encoded, never exploded;
  * - any non-2xx response or `result: "error"` body rejects with a `ZulipApiError`;
  * - a 429 is retried after the server's `retry-after`, within bounds; nothing else is retried;
+ * - once a response says the rate-limit budget is spent, requests wait for its reset instead of meeting a 429;
  * - every request times out.
  */
 export type ZulipClient = Client<paths>;
@@ -37,6 +38,8 @@ export type ZulipClientOptions = ZulipIdentity & {
   fetch?: ZulipFetch;
   /** Pause between attempts; defaults to a timer and is injected by tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Zulip counts requests per user, so the clients of one identity share one. */
+  rateLimit?: ZulipRateLimit;
 };
 
 type ZulipBody = { result?: string; msg?: string; code?: string; 'retry-after'?: number };
@@ -45,6 +48,38 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_MAX_RETRY_AFTER_MS = 30_000;
 const DEFAULT_RETRY_AFTER_MS = 1_000;
+/** Zulip's default rule allows 200 requests a minute, so a reset further off than that is a clock gone wrong. */
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+
+/**
+ * The rate-limit budget of one identity, from the `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers of every
+ * response. The reset is read against the response's own `Date`, so the bot's clock does not matter.
+ */
+export class ZulipRateLimit {
+  private resumeAt = 0;
+
+  /** Milliseconds until requests may go out again, if the budget is spent. */
+  wait() {
+    return Math.max(0, this.resumeAt - Date.now());
+  }
+
+  /** Resolves to the wait it started, if this response spent the budget. */
+  note(response: Response) {
+    const remaining = response.headers.get('x-ratelimit-remaining');
+    const reset = Number(response.headers.get('x-ratelimit-reset'));
+    if (remaining === null || Number(remaining) > 0 || !Number.isFinite(reset) || reset <= 0) {
+      return 0;
+    }
+    const serverNow = Date.parse(response.headers.get('date') ?? '');
+    const wait = Math.min(
+      Math.max(0, reset * 1000 - (Number.isNaN(serverNow) ? Date.now() : serverNow)),
+      MAX_RATE_LIMIT_WAIT_MS,
+    );
+    const started = this.wait() === 0 && wait > 0;
+    this.resumeAt = Math.max(this.resumeAt, Date.now() + wait);
+    return started ? wait : 0;
+  }
+}
 
 export class ZulipApiError extends Error {
   constructor(
@@ -173,6 +208,7 @@ export const createZulipClient = ({
   maxRetryAfterMs = DEFAULT_MAX_RETRY_AFTER_MS,
   fetch = defaultFetch,
   sleep = defaultSleep,
+  rateLimit = new ZulipRateLimit(),
 }: ZulipClientOptions): ZulipClient => {
   const logger = new Logger('ZulipClient');
 
@@ -183,9 +219,30 @@ export const createZulipClient = ({
    * Retries 429 only: a rate-limited request was not processed, whereas retrying a 5xx on `POST /messages` could
    * double-post. `Request` bodies are single-use streams, so each attempt sends a clone of the original.
    */
+  /** The wait ends early, with the request, when the caller gives up on it. */
+  const awaitBudget = async (request: Request) => {
+    const wait = rateLimit.wait();
+    if (wait > 0) {
+      request.signal.throwIfAborted();
+      let abandon!: () => void;
+      const abandoned = new Promise<void>((resolve) => (abandon = resolve));
+      request.signal.addEventListener('abort', abandon, { once: true });
+      await Promise.race([sleep(wait), abandoned]);
+      request.signal.removeEventListener('abort', abandon);
+      request.signal.throwIfAborted();
+    }
+  };
+
   const fetchWithRetry = async (request: Request) => {
     for (let attempt = 1; ; attempt++) {
+      await awaitBudget(request);
       const response = await fetch(request.clone(), { signal: attemptSignal(request) });
+      const spent = rateLimit.note(response);
+      if (spent > 0) {
+        logger.warn(
+          `The Zulip rate limit is used up after ${describe(request)}; requests wait ${spent}ms for it to reset`,
+        );
+      }
       if (response.status !== 429) {
         return response;
       }

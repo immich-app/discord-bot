@@ -1,5 +1,5 @@
 import { Constants } from 'src/constants';
-import { defaultMainTopic, holdsIdentityRole, mainTopicProblem, toEnabledPair } from 'src/mirror/pairs';
+import { holdsIdentityRole, mainTopicProblem, toEnabledPair } from 'src/mirror/pairs';
 import { MirrorLink } from 'src/schema';
 import { describe, expect, it } from 'vitest';
 
@@ -26,16 +26,12 @@ describe('toEnabledPair', () => {
     });
   });
 
+  it('should keep the empty main topic of a text channel', () => {
+    expect(toEnabledPair(link({ mainTopic: '' })).mainTopic).toBe('');
+  });
+
   it('should give a forum no main topic', () => {
     expect(toEnabledPair(link({ kind: 'forum', mainTopic: 'stray' })).mainTopic).toBeNull();
-  });
-});
-
-describe('defaultMainTopic', () => {
-  it('should name the topic after the channel, within the topic length', () => {
-    expect(defaultMainTopic('dev')).toBe('#dev');
-    expect([...defaultMainTopic('x'.repeat(100))]).toHaveLength(58);
-    expect(mainTopicProblem(defaultMainTopic('x'.repeat(100)))).toBeUndefined();
   });
 });
 

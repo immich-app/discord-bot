@@ -275,6 +275,7 @@ export const Constants = {
     MaxUploadBytes: 25 * 1024 * 1024,
     DeleteSyncMaxAgeDays: 7,
     CatchUpMaxAgeHours: 6,
+    RecheckMaxAgeHours: 24,
   },
 };
 

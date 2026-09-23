@@ -10,6 +10,7 @@ import {
   ZulipEventQueue,
   ZulipMessagesDeleted,
   ZulipMessageUpdated,
+  ZulipReactionChanged,
   ZulipReceivedMessage,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
@@ -18,6 +19,7 @@ import { ZulipApiError } from 'src/repositories/zulip.client';
 export type ZulipMessageHandler = (message: ZulipReceivedMessage) => Promise<void> | void;
 export type ZulipUpdateHandler = (update: ZulipMessageUpdated) => Promise<void> | void;
 export type ZulipDeletionHandler = (deletion: ZulipMessagesDeleted) => Promise<void> | void;
+export type ZulipReactionHandler = (reaction: ZulipReactionChanged) => Promise<void> | void;
 export type ZulipRegistrationHandler = (registration: { subscribedStreamIds: number[] }) => void;
 
 const INITIAL_BACKOFF_MS = 1_000;
@@ -65,13 +67,15 @@ const listeningStreams = () =>
 @Injectable()
 export class ZulipService implements OnModuleDestroy {
   private logger = new Logger(ZulipService.name);
-  private handlers: ZulipMessageHandler[] = [];
+  private handlers: { handler: ZulipMessageHandler; withBots: boolean }[] = [];
   private updateHandlers: ZulipUpdateHandler[] = [];
   private deletionHandlers: ZulipDeletionHandler[] = [];
+  private reactionHandlers: ZulipReactionHandler[] = [];
   private registrationHandlers: ZulipRegistrationHandler[] = [];
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
   private self?: ZulipUser;
+  private emptyTopic?: string;
   private loop?: { promise: Promise<void>; controller: AbortController };
 
   constructor(
@@ -88,8 +92,9 @@ export class ZulipService implements OnModuleDestroy {
     }
   }
 
-  onMessage(handler: ZulipMessageHandler) {
-    this.handlers.push(handler);
+  /** `withBots` hands the handler other bots' messages too; the bot's own never reach a handler. */
+  onMessage(handler: ZulipMessageHandler, { withBots = false }: { withBots?: boolean } = {}) {
+    this.handlers.push({ handler, withBots });
   }
 
   onMessageUpdate(handler: ZulipUpdateHandler) {
@@ -100,12 +105,21 @@ export class ZulipService implements OnModuleDestroy {
     this.deletionHandlers.push(handler);
   }
 
+  onReaction(handler: ZulipReactionHandler) {
+    this.reactionHandlers.push(handler);
+  }
+
   onQueueRegistered(handler: ZulipRegistrationHandler) {
     this.registrationHandlers.push(handler);
   }
 
   get ownUser(): ZulipUser | undefined {
     return this.self;
+  }
+
+  /** The realm's name for the empty topic in the messages handlers receive, known once a queue is registered. */
+  get emptyTopicName(): string | undefined {
+    return this.emptyTopic;
   }
 
   /** An in-flight registration is awaited: the server creates its queue even if the client never reads the answer. */
@@ -212,9 +226,10 @@ export class ZulipService implements OnModuleDestroy {
   }
 
   private async registerQueueNow() {
-    const { queue, subscribedStreamIds } = await this.zulip.registerQueue();
+    const { queue, subscribedStreamIds, emptyTopicName } = await this.zulip.registerQueue();
     // Set here, not only by the loop's own assignment, so that a shutdown waiting on this registration finds it.
     this.queue = queue;
+    this.emptyTopic = emptyTopicName ?? this.emptyTopic;
     this.logger.log(`Registered Zulip event queue ${queue.queueId}`);
     const subscribed = new Set(subscribedStreamIds);
     for (const streamId of listeningStreams()) {
@@ -254,11 +269,14 @@ export class ZulipService implements OnModuleDestroy {
   private async dispatch(event: ZulipEvent) {
     if (event.message) {
       const { message } = event;
-      if (message.senderId === this.self?.userId || isBotSender(message)) {
+      if (message.senderId === this.self?.userId) {
         return;
       }
-      for (const handler of this.handlers) {
-        await this.runHandler(`message ${message.id}`, () => handler(message));
+      const bot = isBotSender(message);
+      for (const { handler, withBots } of this.handlers) {
+        if (withBots || !bot) {
+          await this.runHandler(`message ${message.id}`, () => handler(message));
+        }
       }
     } else if (event.update) {
       const { update } = event;
@@ -272,6 +290,14 @@ export class ZulipService implements OnModuleDestroy {
       const { deletion } = event;
       for (const handler of this.deletionHandlers) {
         await this.runHandler(`the deletion of messages ${deletion.messageIds.join(', ')}`, () => handler(deletion));
+      }
+    } else if (event.reaction) {
+      const { reaction } = event;
+      if (reaction.userId === this.self?.userId) {
+        return;
+      }
+      for (const handler of this.reactionHandlers) {
+        await this.runHandler(`a reaction to message ${reaction.messageId}`, () => handler(reaction));
       }
     }
   }

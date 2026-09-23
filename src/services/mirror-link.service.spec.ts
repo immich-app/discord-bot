@@ -143,7 +143,7 @@ describe(MirrorLinkService.name, () => {
       discord as unknown as IDiscordMirrorInterface,
       zulip as unknown as IZulipInterface,
       mirror as unknown as MirrorService,
-      { ownUser: { userId: 7, fullName: 'Immich Bot' } } as unknown as ZulipService,
+      { ownUser: { userId: 7, fullName: 'Immich Bot' }, emptyTopicName: 'general chat' } as unknown as ZulipService,
     );
   });
 
@@ -168,7 +168,7 @@ describe(MirrorLinkService.name, () => {
       expect(reply).toBe(
         [
           `To mirror this stream with a Discord channel, run \`/mirror-link id:${id}\` in that channel on the Immich Discord server (for a forum, in any of its posts); it takes a member with the Administrator permission there. The ID expires in 1 hour and works once. Nothing is mirrored until then.`,
-          "A text channel's own messages will go to the topic named after it (`#channel-name`); a forum has no main topic, each post gets a topic of its own.",
+          "A text channel's own messages will go to the general chat topic (`mirror-link topic=<name>` names another); a forum has no main topic, each post gets a topic of its own.",
         ].join('\n'),
       );
       expect(db.repository.createMirrorLink).not.toHaveBeenCalled();
@@ -181,6 +181,15 @@ describe(MirrorLinkService.name, () => {
       expect(await request(STREAM, 'dev chat')).toContain(
         "A text channel's own messages will go to the topic `dev chat`;",
       );
+    });
+
+    it('should take the empty topic by its display name', async () => {
+      expect(await request(STREAM, 'general chat')).toContain(
+        "A text channel's own messages will go to the general chat topic;",
+      );
+      await linkVia(CHANNEL, STREAM, 'general chat');
+
+      expect(db.links.at(-1)!.mainTopic).toBe('');
     });
 
     it.each([
@@ -233,7 +242,7 @@ describe(MirrorLinkService.name, () => {
           discordChannelId: CHANNEL,
           zulipStreamId: STREAM,
           kind: 'text',
-          mainTopic: '#dev',
+          mainTopic: '',
           createdBy: 'Bea on Zulip (user 20) and Alex on Discord (user 400000000000000012)',
           discordAnnouncementId: '300000000000000001',
         }),
@@ -242,8 +251,8 @@ describe(MirrorLinkService.name, () => {
       expect(zulipPosts()).toEqual([
         {
           stream: STREAM,
-          topic: '#dev',
-          content: `🔗 This stream is now mirrored with the Discord channel **#dev** (${CHANNEL}), requested by Bea on Zulip and completed by Alex on Discord. Everything posted here is copied to Discord, and everything posted there is copied here. Messages in the topic \`#dev\` go to the Discord channel itself; every other topic becomes a thread there, and every thread there a topic here.`,
+          topic: '',
+          content: `🔗 This stream is now mirrored with the Discord channel **#dev** (${CHANNEL}), requested by Bea on Zulip and completed by Alex on Discord. Everything posted here is copied to Discord, and everything posted there is copied here. Messages in the general chat topic go to the Discord channel itself; every other topic becomes a thread there, and every thread there a topic here.`,
         },
       ]);
       expect(discordPosts()).toEqual([
@@ -251,13 +260,13 @@ describe(MirrorLinkService.name, () => {
           CHANNEL,
           {
             title: 'Mirrored with Zulip #immich-dev',
-            content: `🔗 This channel is now mirrored with the Zulip stream **#immich-dev** (${STREAM}), requested by Bea on Zulip and completed by Alex on Discord. Everything posted here is copied to Zulip, and everything posted there is copied here. Messages in this channel go to the Zulip topic \`#dev\`; each thread gets a topic of its own.`,
+            content: `🔗 This channel is now mirrored with the Zulip stream **#immich-dev** (${STREAM}), requested by Bea on Zulip and completed by Alex on Discord. Everything posted here is copied to Zulip, and everything posted there is copied here. Messages in this channel go to the Zulip general chat topic; each thread gets a topic of its own.`,
           },
           true,
         ],
       ]);
       expect(reply).toEqual({
-        summary: `Linked Discord channel **#dev** (${CHANNEL}) with Zulip stream **#immich-dev** (${STREAM}): everything posted on either side is now copied to the other. The channel's own messages go to the topic \`#dev\`, and each thread gets a topic of its own.`,
+        summary: `Linked Discord channel **#dev** (${CHANNEL}) with Zulip stream **#immich-dev** (${STREAM}): everything posted on either side is now copied to the other. The channel's own messages go to the general chat topic, and each thread gets a topic of its own.`,
         details: ['Who can read it: the Discord channel is visible to @​everyone; the Zulip stream is private.'],
       });
     });
@@ -290,7 +299,13 @@ describe(MirrorLinkService.name, () => {
       await linkVia(CHANNEL, STREAM, 'dev chat');
 
       expect(db.links[0].mainTopic).toBe('dev chat');
-      expect(zulipPosts()[0].topic).toBe('dev chat');
+      expect(zulipPosts()[0]).toEqual(
+        expect.objectContaining({
+          topic: 'dev chat',
+          content: expect.stringContaining('Messages in the topic `dev chat` go to the Discord channel itself;'),
+        }),
+      );
+      expect(discordPosts()[0][1].content).toContain('Messages in this channel go to the Zulip topic `dev chat`;');
     });
 
     it('should take the ID in any case and with separators', async () => {
@@ -461,7 +476,7 @@ describe(MirrorLinkService.name, () => {
       expect(zulipPosts()).toEqual([
         {
           stream: STREAM,
-          topic: '#dev',
+          topic: '',
           content: `✂️ This stream is no longer mirrored with the Discord channel **#dev** (${CHANNEL}), unlinked by Bea on Zulip. Nothing posted here is copied to Discord any more, and nothing posted there is copied here.`,
         },
       ]);
@@ -479,7 +494,7 @@ describe(MirrorLinkService.name, () => {
       expect(reply).toEqual({
         summary: `Unlinked Discord channel **#dev** (${CHANNEL}) from Zulip stream **#immich-dev** (${STREAM}): nothing is copied between them any more. What was mirrored stays on both sides, and linking the two again carries on the same conversations.`,
         details: [],
-        zulipAnnouncement: { streamId: STREAM, topic: '#dev' },
+        zulipAnnouncement: { streamId: STREAM, topic: '' },
       });
     });
 
@@ -542,7 +557,7 @@ describe(MirrorLinkService.name, () => {
       expect(await sut.list('zulip')).toBe(
         [
           'Mirrored channels:',
-          `- Discord channel **#dev** (${CHANNEL}) ↔ Zulip stream **#immich-dev** (${STREAM}): text channel, main topic \`#dev\`; linked by Bea on Zulip (user 20) and Alex on Discord (user 400000000000000012) on ${today}`,
+          `- Discord channel **#dev** (${CHANNEL}) ↔ Zulip stream **#immich-dev** (${STREAM}): text channel, main topic general chat; linked by Bea on Zulip (user 20) and Alex on Discord (user 400000000000000012) on ${today}`,
           `- Discord channel **#dev-focus-topic** (${FORUM}) ↔ Zulip stream **#immich-dev-focus-topic** (${FORUM_STREAM}) (off: see the log): forum, one topic per post; linked by Bea on Zulip (user 20) and Alex on Discord (user 400000000000000012) on ${today}`,
           'Linked accounts, whose Zulip messages appear on Discord under their Discord name:',
           '- Alex Tran (Zulip user 12) ↔ Alex (Discord user 400000000000000012)',

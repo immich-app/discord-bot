@@ -1,4 +1,5 @@
 import {
+  channelRefKey,
   escapeDiscordInline,
   parseZulipRefs,
   splitDiscordContent,
@@ -78,7 +79,7 @@ describe('toDiscordMirrorContent', () => {
 
   describe('links', () => {
     it.each(['#**immich-alerts**', '#**immich-alerts>deploy**', '#**immich-alerts>deploy@55**'])(
-      'should hide the internal names in %s',
+      'should hide the internal names in %s of a stream or topic that is not mirrored',
       (link) => {
         expect(text(`see ${link} now`)).toBe('see *(Zulip link)* now');
       },
@@ -146,6 +147,53 @@ describe('toDiscordMirrorContent', () => {
       expect(text('[#immich-dev > x @ 💬](#narrow/channel/9-immich-dev/topic/x/near/101)')).toBe(
         `[#immich-dev > x @ 💬](${JUMP_DISCORD})`,
       );
+    });
+
+    describe('to mirrored streams and topics', () => {
+      const CHANNEL = '444444444444444444';
+      const THREAD = '555555555555555555';
+      const mirrored: ZulipRenderContext = {
+        ...ctx,
+        channels: new Map([
+          [channelRefKey({ stream: 'immich-dev' }), CHANNEL],
+          [channelRefKey({ stream: 'immich-dev', topic: '' }), CHANNEL],
+          [channelRefKey({ stream: 'immich-dev', topic: 'Crash' }), THREAD],
+          [channelRefKey({ stream: 9 }), CHANNEL],
+          [channelRefKey({ stream: 9, topic: 'Crash on upload' }), THREAD],
+          [channelRefKey({ stream: 9, topic: '' }), CHANNEL],
+        ]),
+      };
+      const mirroredText = (raw: string) => text(raw, mirrored);
+
+      it.each([
+        ['#**immich-dev**', `<#${CHANNEL}>`],
+        ['#**immich-dev>**', `<#${CHANNEL}>`],
+        ['#**immich-dev>Crash**', `<#${THREAD}>`],
+        ['#**immich-dev>Crash@101**', JUMP_DISCORD],
+        ['#**immich-dev>Crash@999**', `<#${THREAD}>`],
+        ['#**immich-dev>other**', '*(Zulip link)*'],
+      ])('should turn %s into a Discord mention or jump link', (link, expected) => {
+        expect(mirroredText(`see ${link} now`)).toBe(`see ${expected} now`);
+      });
+
+      it.each([
+        [`${REALM}/#narrow/channel/9-immich-dev`, `<#${CHANNEL}>`],
+        [`${REALM}/#narrow/stream/9-immich-dev/topic/Crash.20on.20upload`, `<#${THREAD}>`],
+        ['#narrow/channel/9-immich-dev/topic/Crash.20on.20upload/near/999', `<#${THREAD}>`],
+        ['#narrow/channel/9-immich-dev/topic//with/999', `<#${CHANNEL}>`],
+        ['#narrow/channel/9-immich-dev/topic/x/near/101', JUMP_DISCORD],
+        ['#narrow/channel/10-other', '*(Zulip link)*'],
+      ])('should turn the narrow link %s into a Discord mention or jump link', (link, expected) => {
+        expect(mirroredText(`see ${link} now`)).toBe(`see ${expected} now`);
+      });
+
+      it('should show a labelled link to a mirrored channel as its mention, after the label unless Zulip wrote it', () => {
+        expect(
+          mirroredText(
+            '[#immich-dev > Crash on upload](#narrow/channel/9-immich-dev/topic/Crash.20on.20upload) [here](/#narrow/channel/9-immich-dev)',
+          ),
+        ).toBe(`<#${THREAD}> here <#${CHANNEL}>`);
+      });
     });
 
     it('should keep only the label of a link to anything else', () => {
@@ -412,10 +460,12 @@ describe('parseZulipRefs', () => {
       'hi @**Zack|8** @**Alex|9** @**all** :smile: :catjam:',
       `[m](#narrow/channel/9-dev/topic/x/with/102) [n](${REALM}/#narrow/channel/9-dev/topic/x/near/103)`,
       '[a](/user_uploads/2/ab/xyz/a.png)',
+      '#**dev** #**dev>y** #**dev>y@104** #narrow/channel/10-other',
     ].join('\n');
     expect(parseZulipRefs(raw, REALM)).toEqual({
       quoteReply: { messageId: 101, senderId: 5, senderName: 'Someone' },
-      messageIds: [101, 102, 103],
+      messageIds: [101, 102, 103, 104],
+      channels: [{ stream: 9, topic: 'x' }, { stream: 'dev' }, { stream: 'dev', topic: 'y' }, { stream: 10 }],
       userIds: [5, 3, 8, 9],
       uploads: ['/user_uploads/2/ab/xyz/a.png'],
       emojiNames: ['smile', 'catjam'],
@@ -426,6 +476,7 @@ describe('parseZulipRefs', () => {
     expect(parseZulipRefs('hello', REALM)).toEqual({
       quoteReply: undefined,
       messageIds: [],
+      channels: [],
       userIds: [],
       uploads: [],
       emojiNames: [],

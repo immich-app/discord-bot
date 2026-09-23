@@ -49,7 +49,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   uploadFile: vitest.fn(),
   downloadUpload: vitest.fn(),
   getStreamMessagesBefore: vitest.fn(),
+  getMessagesByIds: vitest.fn(),
   getEmojiCodes: vitest.fn(),
+  addReaction: vitest.fn(),
+  removeReaction: vitest.fn(),
 });
 
 const newZulipServiceMock = () => ({
@@ -212,7 +215,7 @@ const HELP = [
   '- `rss-subscribe <url> [topic=<topic>]`: post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
   '- `rss-unsubscribe <url>`: stop posting that RSS feed in this stream',
   '- `rss-list`: list the RSS feeds this stream is subscribed to, with their topics',
-  "- `mirror-link [topic=<main topic>]`: start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, `#channel-name` by default) holds the channel's own messages",
+  "- `mirror-link [topic=<main topic>]`: start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
   '- `mirror-unlink`: stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-list`: list the mirrored channels and streams, and the linked accounts',
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
@@ -1613,6 +1616,14 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** mirror-unlink', { streamId: 120, topic: '#dev' });
 
       expect(replies()).toEqual([{ stream: 120, topic: '#dev', content: unlinked.details[0] }]);
+    });
+
+    it('should know the general chat topic of an event as the empty topic of the announcement', async () => {
+      mirrorLinksMock.unlink.mockResolvedValue({ ...unlinked, zulipAnnouncement: { streamId: 120, topic: '' } });
+
+      await send('@**Immich** mirror-unlink', { streamId: 120, topic: 'general chat' });
+
+      expect(replies()).toEqual([{ stream: 120, topic: 'general chat', content: unlinked.details[0] }]);
     });
 
     it("should unlink the sender's own account in a team stream", async () => {

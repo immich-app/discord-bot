@@ -7,7 +7,22 @@ export type ZulipConfig = {
 };
 export type MessagePayload = { stream: string | number; topic?: string; content: string };
 
-export type ZulipMessage = { id: number; topic: string; streamId?: number; senderFullName?: string };
+/** `code` is the Unicode code points in hex joined by `-` (`1f1e9-1f1ea`) for a Unicode emoji, the ID of a realm emoji. */
+export type ZulipReactionEmoji = {
+  name: string;
+  code: string;
+  type: 'unicode_emoji' | 'realm_emoji' | 'zulip_extra_emoji';
+};
+
+export type ZulipReaction = ZulipReactionEmoji & { userId: number };
+
+export type ZulipMessage = {
+  id: number;
+  topic: string;
+  streamId?: number;
+  senderFullName?: string;
+  reactions?: ZulipReaction[];
+};
 
 /** Zulip cannot change content and topic in one request, so a caller sends one or the other. */
 export type ZulipMessageUpdate = {
@@ -19,7 +34,10 @@ export type ZulipMessageUpdate = {
   sendNotificationToNewThread?: boolean;
 };
 
-export type ZulipEmoji = { name: string; deactivated: boolean };
+export type ZulipEmoji = { id: string; name: string; deactivated: boolean };
+
+/** `unicode` is a built-in emoji name to its Unicode string, `names` a code point sequence (`1f44d`) to its name. */
+export type ZulipEmojiCodes = { unicode: Record<string, string>; names: Record<string, string> };
 
 export type ZulipSubscription = { streamId: number };
 
@@ -36,7 +54,8 @@ export type ZulipStreamPageQuery = { stream: number; before?: number; count: num
 
 export type ZulipEventQueue = { queueId: string; lastEventId: number };
 
-export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[] };
+/** `emptyTopicName` is how events and `GET /messages` name the empty topic, since the bot does not ask for `''`. */
+export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[]; emptyTopicName?: string };
 
 export type ZulipReceivedMessage = {
   id: number;
@@ -64,32 +83,44 @@ export type ZulipMessageUpdated = {
   topic?: string;
   propagateMode?: 'change_one' | 'change_later' | 'change_all';
   content?: string;
+  /** The content the edit replaced. */
+  origContent?: string;
 };
 
 export type ZulipMessagesDeleted = { messageIds: number[]; streamId?: number; topic?: string };
 
-export type ZulipMessageEvent = {
+/** Carries no stream: only the message ID says where it is. */
+export type ZulipReactionChanged = {
+  op: 'add' | 'remove';
+  userId: number;
+  messageId: number;
+  emoji: ZulipReactionEmoji;
+};
+
+type NoPayload = { message?: undefined; update?: undefined; deletion?: undefined; reaction?: undefined };
+
+export type ZulipMessageEvent = Omit<NoPayload, 'message'> & {
   id: number;
   type: 'message';
   message: ZulipReceivedMessage;
-  update?: undefined;
-  deletion?: undefined;
 };
 
-export type ZulipUpdateEvent = {
+export type ZulipUpdateEvent = Omit<NoPayload, 'update'> & {
   id: number;
   type: 'update_message';
   update: ZulipMessageUpdated;
-  message?: undefined;
-  deletion?: undefined;
 };
 
-export type ZulipDeleteEvent = {
+export type ZulipDeleteEvent = Omit<NoPayload, 'deletion'> & {
   id: number;
   type: 'delete_message';
   deletion: ZulipMessagesDeleted;
-  message?: undefined;
-  update?: undefined;
+};
+
+export type ZulipReactionEvent = Omit<NoPayload, 'reaction'> & {
+  id: number;
+  type: 'reaction';
+  reaction: ZulipReactionChanged;
 };
 
 /** Zulip also sends `heartbeat` events; the loop must acknowledge every event's ID, whatever its type. */
@@ -97,7 +128,8 @@ export type ZulipEvent =
   | ZulipMessageEvent
   | ZulipUpdateEvent
   | ZulipDeleteEvent
-  | { id: number; type: string; message?: undefined; update?: undefined; deletion?: undefined };
+  | ZulipReactionEvent
+  | (NoPayload & { id: number; type: string });
 
 export class ZulipUploadRefused extends Error {
   constructor(message: string) {
@@ -134,6 +166,12 @@ export interface IZulipInterface {
   downloadUpload(path: string, maxBytes: number, signal?: AbortSignal): Promise<File | undefined>;
   /** Oldest first, as raw markdown. */
   getStreamMessagesBefore(query: ZulipStreamPageQuery): Promise<ZulipReceivedMessage[]>;
-  /** Emoji name to its Unicode string, from the realm's static emoji table. */
-  getEmojiCodes(): Promise<Record<string, string>>;
+  /** As raw markdown; a message that is gone, or that the bot cannot read, is left out. */
+  getMessagesByIds(ids: number[]): Promise<ZulipReceivedMessage[]>;
+  /** From the realm's static emoji table. */
+  getEmojiCodes(): Promise<ZulipEmojiCodes>;
+  /** Rejects with `REACTION_ALREADY_EXISTS` when the bot has that reaction already. */
+  addReaction(messageId: number, emoji: ZulipReactionEmoji): Promise<void>;
+  /** Rejects with `REACTION_DOES_NOT_EXIST` when the bot has no such reaction. */
+  removeReaction(messageId: number, emoji: ZulipReactionEmoji): Promise<void>;
 }

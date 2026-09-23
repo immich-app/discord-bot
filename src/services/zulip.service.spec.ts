@@ -58,7 +58,10 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   uploadFile: vitest.fn(),
   downloadUpload: vitest.fn(),
   getStreamMessagesBefore: vitest.fn(),
+  getMessagesByIds: vitest.fn(),
   getEmojiCodes: vitest.fn(),
+  addReaction: vitest.fn(),
+  removeReaction: vitest.fn(),
 });
 
 /** A relevant holiday on the day after the frozen clock, unless overridden. */
@@ -899,6 +902,44 @@ describe('ZulipService', () => {
         expect(onUpdate).not.toHaveBeenCalled();
       });
 
+      it("should hand other bots' messages only to the handlers that take them, and the bot's own to none", async () => {
+        const withBots = vitest.fn();
+        sut.onMessage(withBots, { withBots: true });
+
+        polls[0].resolve([
+          messageEvent(9, { id: 9, senderId: 30, senderEmail: 'ci-bot@zulip.example.com' }),
+          messageEvent(10, { id: 10, senderId: OWN_USER_ID, senderEmail: 'immich-bot@zulip.example.com' }),
+          messageEvent(11, { id: 11 }),
+        ]);
+        await nextPoll();
+
+        expect(withBots.mock.calls.map(([message]) => message.id)).toEqual([9, 11]);
+        expect(handler.mock.calls.map(([message]) => message.id)).toEqual([11]);
+      });
+
+      it("should hand every reaction but the bot's own to the reaction handlers", async () => {
+        const onReaction = vitest.fn();
+        sut.onReaction(onReaction);
+        const reaction = (id: number, userId: number) => ({
+          id,
+          type: 'reaction' as const,
+          reaction: {
+            op: 'add' as const,
+            userId,
+            messageId: 500,
+            emoji: { name: '+1', code: '1f44d', type: 'unicode_emoji' as const },
+          },
+        });
+
+        polls[0].resolve([reaction(9, 20), reaction(10, OWN_USER_ID)]);
+        await nextPoll();
+
+        expect(onReaction).toHaveBeenCalledExactlyOnceWith(reaction(9, 20).reaction);
+        expect(handler).not.toHaveBeenCalled();
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(polls[1].queue.lastEventId).toBe(10);
+      });
+
       it('should run messages, updates and deletions in the order they arrived', async () => {
         polls[0].resolve([messageEvent(9), updateEvent(10), deletionEvent(11, [500])]);
         await flush();
@@ -965,6 +1006,26 @@ describe('ZulipService', () => {
         expect(warnings.at(-1)).toBeLessThan(first.mock.invocationCallOrder[0]);
         expect(first.mock.invocationCallOrder[0]).toBeLessThan(second.mock.invocationCallOrder[0]);
         expect(second.mock.invocationCallOrder[0]).toBeLessThan(zulipMock.getEvents.mock.invocationCallOrder[0]);
+      });
+
+      it('should keep the name the realm gives the empty topic, known once a queue is registered', async () => {
+        const seen: (string | undefined)[] = [];
+        sut.onQueueRegistered(() => seen.push(sut.emptyTopicName));
+        zulipMock.registerQueue
+          .mockResolvedValueOnce({
+            queue: { queueId: 'q1', lastEventId: -1 },
+            subscribedStreamIds: [],
+            emptyTopicName: 'allgemein',
+          })
+          .mockResolvedValueOnce({ queue: { queueId: 'q2', lastEventId: -1 }, subscribedStreamIds: [] });
+        expect(sut.emptyTopicName).toBeUndefined();
+
+        await sut.init();
+        await flush();
+        polls[0].reject(badQueue());
+        await nextPoll();
+
+        expect(seen).toEqual(['allgemein', 'allgemein']);
       });
 
       it('should tell them again at every registration, a dead queue included', async () => {

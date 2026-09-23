@@ -4,12 +4,15 @@ import {
   MessagePayload,
   type ZulipConfig,
   ZulipEmoji,
+  ZulipEmojiCodes,
   ZulipEvent,
   ZulipEventQueue,
   ZulipMessage,
   ZulipMessagesQuery,
   ZulipMessageUpdate,
   ZulipQueueRegistration,
+  ZulipReaction,
+  ZulipReactionEmoji,
   ZulipReceivedMessage,
   ZulipStream,
   ZulipStreamPageQuery,
@@ -19,7 +22,13 @@ import {
   ZulipUserDetails,
 } from 'src/interfaces/zulip.interface';
 import { readAtMost } from 'src/mirror/download';
-import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
+import {
+  createZulipClient,
+  multipart,
+  type ZulipClient,
+  type ZulipClientOptions,
+  ZulipRateLimit,
+} from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
 const EMOJI_CODES_TIMEOUT_MS = 30_000;
@@ -76,6 +85,9 @@ const toEmoji = (codepoints: unknown) => {
   return points.every((point) => point <= 0x10_ffff) ? String.fromCodePoint(...points) : undefined;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 const notInitialised = () => new Error('Zulip client not initialised: call init() first');
 
 export class ZulipRepository implements IZulipInterface {
@@ -83,10 +95,10 @@ export class ZulipRepository implements IZulipInterface {
   private botIdentity?: Omit<ZulipClientOptions, 'timeoutMs'>;
 
   async init({ realm, bot, user }: ZulipConfig) {
-    this.botIdentity = { realm, ...bot };
+    this.botIdentity = { realm, ...bot, rateLimit: new ZulipRateLimit() };
     this.clients = {
       bot: createZulipClient(this.botIdentity),
-      user: createZulipClient({ realm, ...user }),
+      user: createZulipClient({ realm, ...user, rateLimit: new ZulipRateLimit() }),
       uploads: createZulipClient({ ...this.botIdentity, timeoutMs: UPLOAD_TIMEOUT_MS }),
       events: createZulipClient({
         ...this.botIdentity,
@@ -156,6 +168,7 @@ export class ZulipRepository implements IZulipInterface {
       topic: message.subject ?? '',
       streamId: message.stream_id,
       senderFullName: message.sender_full_name,
+      reactions: (message.reactions ?? []).flatMap(toReaction),
     };
   }
 
@@ -177,6 +190,20 @@ export class ZulipRepository implements IZulipInterface {
 
   async deleteMessage(id: number) {
     await this.bot.DELETE('/messages/{message_id}', { params: { path: { message_id: id } } });
+  }
+
+  async addReaction(id: number, { name, code, type }: ZulipReactionEmoji) {
+    await this.bot.POST('/messages/{message_id}/reactions', {
+      params: { path: { message_id: id } },
+      body: { emoji_name: name, emoji_code: code, reaction_type: type },
+    });
+  }
+
+  async removeReaction(id: number, { name, code, type }: ZulipReactionEmoji) {
+    await this.bot.DELETE('/messages/{message_id}/reactions', {
+      params: { path: { message_id: id } },
+      body: { emoji_name: name, emoji_code: code, reaction_type: type },
+    });
   }
 
   async uploadFile(file: File, signal?: AbortSignal) {
@@ -250,8 +277,18 @@ export class ZulipRepository implements IZulipInterface {
     return (data!.messages ?? []).map(toReceivedMessage);
   }
 
+  async getMessagesByIds(ids: number[]): Promise<ZulipReceivedMessage[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const { data } = await this.bot.GET('/messages', {
+      params: { query: { message_ids: JSON.stringify(ids), apply_markdown: false } },
+    });
+    return (data!.messages ?? []).map(toReceivedMessage);
+  }
+
   /** An undocumented static file, served without authentication. */
-  async getEmojiCodes() {
+  async getEmojiCodes(): Promise<ZulipEmojiCodes> {
     const { origin } = this.site;
     const response = await fetch(`${origin}/static/generated/emoji/emoji_codes.json`, {
       signal: AbortSignal.timeout(EMOJI_CODES_TIMEOUT_MS),
@@ -260,21 +297,33 @@ export class ZulipRepository implements IZulipInterface {
       await response.body?.cancel();
       throw new Error(`Could not fetch the Zulip emoji codes: ${response.status}`);
     }
-    const codes = ((await response.json()) as { name_to_codepoint?: unknown } | null)?.name_to_codepoint;
-    if (typeof codes !== 'object' || codes === null || Array.isArray(codes)) {
+    const table = (await response.json()) as { name_to_codepoint?: unknown; codepoint_to_name?: unknown } | null;
+    const codes = table?.name_to_codepoint;
+    if (!isRecord(codes)) {
       throw new Error('The Zulip emoji codes have no name_to_codepoint table');
     }
-    return Object.fromEntries(
-      Object.entries(codes).flatMap(([name, codepoints]) => {
-        const emoji = toEmoji(codepoints);
-        return emoji === undefined ? [] : [[name, emoji] as const];
-      }),
-    );
+    const names = isRecord(table?.codepoint_to_name) ? table.codepoint_to_name : {};
+    return {
+      unicode: Object.fromEntries(
+        Object.entries(codes).flatMap(([name, codepoints]) => {
+          const emoji = toEmoji(codepoints);
+          return emoji === undefined ? [] : [[name, emoji] as const];
+        }),
+      ),
+      names: Object.fromEntries(
+        Object.entries(names).flatMap(([codepoints, name]) =>
+          typeof name === 'string' && toEmoji(codepoints) !== undefined
+            ? [[codepoints.toLowerCase(), name] as const]
+            : [],
+        ),
+      ),
+    };
   }
 
   async listEmoji(): Promise<ZulipEmoji[]> {
     const { data } = await this.bot.GET('/realm/emoji');
-    return Object.values(data!.emoji ?? {}).map(({ name, deactivated }) => ({
+    return Object.entries(data!.emoji ?? {}).map(([key, { id, name, deactivated }]) => ({
+      id: id ?? key,
       name: name ?? '',
       deactivated: deactivated ?? false,
     }));
@@ -326,10 +375,10 @@ export class ZulipRepository implements IZulipInterface {
   async registerQueue(): Promise<ZulipQueueRegistration> {
     const { data } = await this.bot.POST('/register', {
       body: {
-        event_types: ['message', 'update_message', 'delete_message'],
+        event_types: ['message', 'update_message', 'delete_message', 'reaction'],
         apply_markdown: false,
         client_capabilities: CLIENT_CAPABILITIES as Record<string, never>,
-        fetch_event_types: ['subscription'],
+        fetch_event_types: ['subscription', 'realm'],
       },
     });
     if (!data?.queue_id) {
@@ -346,6 +395,7 @@ export class ZulipRepository implements IZulipInterface {
       subscribedStreamIds: (data.subscriptions ?? []).flatMap(({ stream_id }) =>
         stream_id === undefined ? [] : [stream_id],
       ),
+      emptyTopicName: data.realm_empty_topic_display_name,
     };
   }
 
@@ -397,6 +447,27 @@ const toReceivedMessage = (message: components['schemas']['MessagesBase']): Zuli
   movedAt: message.last_moved_timestamp,
 });
 
+const REACTION_TYPES = new Set<string>(['unicode_emoji', 'realm_emoji', 'zulip_extra_emoji']);
+
+const toReaction = (reaction: {
+  emoji_name?: unknown;
+  emoji_code?: unknown;
+  reaction_type?: unknown;
+  user_id?: unknown;
+}): ZulipReaction[] => {
+  const { emoji_name, emoji_code, reaction_type, user_id } = reaction;
+  if (
+    typeof emoji_name !== 'string' ||
+    typeof emoji_code !== 'string' ||
+    typeof reaction_type !== 'string' ||
+    !REACTION_TYPES.has(reaction_type) ||
+    typeof user_id !== 'number'
+  ) {
+    return [];
+  }
+  return [{ name: emoji_name, code: emoji_code, type: reaction_type as ZulipReaction['type'], userId: user_id }];
+};
+
 const toEvent = (event: RawEvent): ZulipEvent => {
   const id = event.id ?? -1;
   if (event.type === 'message' && event.message) {
@@ -417,6 +488,7 @@ const toEvent = (event: RawEvent): ZulipEvent => {
         topic: event.subject,
         propagateMode: event.propagate_mode,
         content: event.content,
+        origContent: event.orig_content,
       },
     };
   }
@@ -431,6 +503,17 @@ const toEvent = (event: RawEvent): ZulipEvent => {
         topic: event.topic,
       },
     };
+  }
+  if (event.type === 'reaction' && event.message_id !== undefined) {
+    const [reaction] = toReaction(event);
+    if (reaction) {
+      const { userId, ...emoji } = reaction;
+      return {
+        id,
+        type: 'reaction',
+        reaction: { op: event.op === 'remove' ? 'remove' : 'add', userId, messageId: event.message_id, emoji },
+      };
+    }
   }
   return { id, type: event.type ?? 'unknown' };
 };

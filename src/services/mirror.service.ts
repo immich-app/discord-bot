@@ -11,15 +11,19 @@ import {
   DiscordMirrorSend,
   DiscordMirrorSent,
   DiscordMirrorTarget,
+  DiscordReactionEmoji,
   DiscordSourceMessage,
   DiscordTeamMember,
   IDiscordMirrorInterface,
 } from 'src/interfaces/discord-mirror.interface';
 import {
   IZulipInterface,
+  ZulipEmojiCodes,
   ZulipMessage,
   ZulipMessagesDeleted,
   ZulipMessageUpdated,
+  ZulipReactionChanged,
+  ZulipReactionEmoji,
   ZulipReceivedMessage,
 } from 'src/interfaces/zulip.interface';
 import {
@@ -28,11 +32,15 @@ import {
   toZulipAttachmentLines,
   toZulipMirrorBody,
   toZulipReplySnippet,
+  withZulipTags,
   ZulipAttachmentResult,
   zulipAuthorHeader,
+  ZulipChannel,
   zulipMirrorContent,
   zulipMirrorLead,
   ZulipReplyTarget,
+  zulipTagsNotice,
+  zulipThreadContext,
 } from 'src/mirror/discord-to-zulip';
 import { downloadDiscordAttachment } from 'src/mirror/download';
 import {
@@ -47,15 +55,26 @@ import { isConnectFailure } from 'src/mirror/network';
 import { EnabledPair, holdsIdentityRole, toEnabledPair } from 'src/mirror/pairs';
 import { SerialQueue } from 'src/mirror/queue';
 import {
+  discordReactionKey,
+  EmoteMaps,
+  toDiscordReactionEmoji,
+  toEmoteMaps,
+  toZulipReactionEmoji,
+  withVariationSelectors,
+  zulipReactionKey,
+} from 'src/mirror/reactions';
+import {
+  channelRefKey,
   escapeDiscordInline,
   parseZulipRefs,
   splitDiscordContent,
   toDiscordMirrorContent,
+  ZulipChannelRef,
   ZulipMessageRef,
 } from 'src/mirror/zulip-to-discord';
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
 import { MirrorConversation, MirrorIdentity, MirrorLink, MirrorMessage, NewMirrorMessage } from 'src/schema';
-import { hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
+import { hasBlacklistedUrl, zulipBuiltInEmoji } from 'src/services/chat.service';
 import { isBotSender, ZulipService } from 'src/services/zulip.service';
 import { parseCommand } from 'src/zulip-command-parser';
 
@@ -79,11 +98,16 @@ const CHANNEL_CHECK_MS = 10 * MINUTE;
 const DISCORD_EPOCH = 1_420_070_400_000n;
 const ACTIVE_THREAD_DAYS = 7;
 const ACTIVE_THREAD_LIMIT = 20;
+const NEW_THREAD_LIMIT = 20;
+const RECHECK_LIMIT = 200;
+const ZULIP_ID_BATCH = 100;
 const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const FILE_TRANSFER_BUDGET_MS = 120_000;
 const DISCORD_MESSAGE_LENGTH = 2000;
 const URLS = /https?:\/\/[^\s<>)]+/g;
+const CUSTOM_EMOTE_IDS = /<a?:\w+:(\d+)>/g;
+const CHANNEL_MENTION = /<#(\d+)>/g;
 const THREAD_DELETED_NOTICE = 'The Discord thread for this topic was deleted; the next message here starts a new one.';
 
 const NOTICE_REASONS: Partial<Record<DiscordMirrorErrorKind, string>> = {
@@ -119,6 +143,7 @@ type PairState = {
   retryDelayMs: number;
   /** Edits, deletions and renames held back, in order, until the side they go to is ready. */
   held: Record<Side, Op[]>;
+  unheard: Record<Side, boolean>;
   resumeTimer?: NodeJS.Timeout;
 };
 
@@ -150,8 +175,11 @@ type OutgoingZulipMessage = {
 /** Zulip's email gateway posts incoming email under its own name, without the `-bot@` every other bot address has. */
 const EMAIL_GATEWAY = 'emailgateway@zulip.com';
 
-const isHumanSender = (message: ZulipReceivedMessage) =>
-  !isBotSender(message) && message.senderEmail.toLowerCase() !== EMAIL_GATEWAY;
+const isZulipBot = (message: ZulipReceivedMessage) =>
+  isBotSender(message) || message.senderEmail.toLowerCase() === EMAIL_GATEWAY;
+
+/** Zulip's Notification Bot says what Zulip did, such as a move or a resolve, which the mirror carries over itself. */
+const isMirroredSender = (message: ZulipReceivedMessage) => !/^notification-bot@/i.test(message.senderEmail);
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -219,6 +247,11 @@ const transferDeadline = () => {
 };
 
 const SPOILER_FILE = 'SPOILER_';
+
+const toNote = ({ name }: File): Note => ({
+  name: name.startsWith(SPOILER_FILE) ? name.slice(SPOILER_FILE.length) : name,
+  spoiler: name.startsWith(SPOILER_FILE),
+});
 
 const noteLine = ({ name, spoiler }: Note) => {
   const line = `*(attachment not mirrored: ${escapeDiscordInline(name)})*`;
@@ -293,16 +326,23 @@ export class MirrorService implements OnModuleDestroy {
   private memberCheckedAt = new Map<string, number>();
   private identities = new Map<string, { identity: Identity; expiresAt: number }>();
   private senderNames = new Map<number, string>();
+  /** Learnt from their messages, like the names; a bot is never linked with a Discord account. */
+  private botSenders = new Set<number>();
+  /** Read once per queue registration, so that a renamed stream is named anew. */
+  private streamNames = new Map<number, string>();
   private verifiedConversations = new Set<string>();
   /** Names the mirror gave threads whose `threadUpdate` has not come back yet, oldest first. */
   private ownThreadNames = new Map<string, { name: string; at: number }[]>();
   private throttled = new Map<string, number>();
   private failedCreates = new Map<string, number>();
-  private emojiCodes?: Record<string, string>;
+  private emojiCodes?: ZulipEmojiCodes;
   private emojiRetryAt = 0;
-  private emotes = new Map<string, { byName: Map<string, string>; expiresAt: number }>();
+  private emotes = new Map<string, { maps: EmoteMaps; loadedAt: number; triedAt: number }>();
+  /** Reaction syncs queued and not started yet, which another change to the same message need not queue again. */
+  private pendingReactions = new Set<string>();
   private active = false;
   private zulipRegistered = false;
+  private subscribedStreams = new Set<number>();
   private discordConnected = false;
   private channelCheck?: NodeJS.Timeout;
 
@@ -325,9 +365,10 @@ export class MirrorService implements OnModuleDestroy {
     this.teamMembers = toTeamMembers(await this.database.getMirrorIdentities());
     this.pairs = (await this.database.getMirrorLinks()).map((link) => this.newPairState(toEnabledPair(link)));
     this.logger.log(`The Discord-Zulip mirror has ${plural(this.pairs.length, 'link')}`);
-    this.zulipService.onMessage((message) => this.onZulipMessage(message));
+    this.zulipService.onMessage((message) => this.onZulipMessage(message), { withBots: true });
     this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
     this.zulipService.onMessagesDeleted((deletion) => this.onZulipDeletion(deletion));
+    this.zulipService.onReaction((reaction) => this.onZulipReaction(reaction));
     this.zulipService.onQueueRegistered((registration) => this.onZulipQueueRegistered(registration));
     this.channelCheck = setInterval(() => void this.recheckChannels(), CHANNEL_CHECK_MS);
     this.channelCheck.unref();
@@ -352,7 +393,7 @@ export class MirrorService implements OnModuleDestroy {
     this.logger.log(`${state.pair.key}: linked with Zulip stream ${state.pair.zulipStreamId}`);
     if (this.discordConnected && this.discordMirror.isReady()) {
       await this.checkDiscordChannel(state);
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord', 'Zulip']);
       this.maybeCatchUp(state);
       this.resume(state);
     }
@@ -400,13 +441,14 @@ export class MirrorService implements OnModuleDestroy {
       turnedAway: noneTurnedAway(),
       retryDelayMs: CATCH_UP_RETRY_MS,
       held: { Discord: [], Zulip: [] },
+      unheard: { Discord: false, Zulip: false },
     };
   }
 
   async onDiscordReady() {
     this.discordConnected = true;
     for (const state of this.pairs) {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord']);
     }
     for (const state of this.pairs) {
       await this.checkDiscordChannel(state);
@@ -422,7 +464,7 @@ export class MirrorService implements OnModuleDestroy {
   onDiscordDisconnected() {
     this.discordConnected = false;
     for (const state of this.pairs) {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord']);
     }
   }
 
@@ -432,6 +474,10 @@ export class MirrorService implements OnModuleDestroy {
       this.maybeCatchUp(state);
       this.resume(state);
     }
+  }
+
+  isOwnWebhook(webhookId: string) {
+    return this.discordMirror.isOwnMirrorWebhook(webhookId);
   }
 
   handlesChannel(channelId: string) {
@@ -457,9 +503,24 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  /** Discord's reactions are read afresh, so any change to them is the same sync, and one queued covers the next. */
+  onDiscordReactionsChanged(channelId: string, messageId: string) {
+    const state = this.byChannel(channelId);
+    if (state) {
+      this.queueReactionSync(state, `reactions of Discord message ${messageId}`, () =>
+        this.reactionsToZulip(state, messageId),
+      );
+    }
+  }
+
   onDiscordThreadRenamed(thread: { channelId: string; threadId: string; name: string }) {
     const state = this.byChannel(thread.channelId);
     state?.queue.push(`rename of Discord thread ${thread.threadId}`, () => this.renameFromDiscord(state, thread));
+  }
+
+  onDiscordThreadTagsChanged(thread: { channelId: string; threadId: string; tags: string[] }) {
+    const state = this.byChannel(thread.channelId);
+    state?.queue.push(`tags of Discord thread ${thread.threadId}`, () => this.tagsFromDiscord(state, thread));
   }
 
   onDiscordThreadDeleted(thread: { channelId: string; threadId: string }) {
@@ -496,21 +557,31 @@ export class MirrorService implements OnModuleDestroy {
     return this.pairs.find(({ pair, status }) => pair.zulipStreamId === streamId && status !== 'disabled');
   }
 
-  private onZulipMessage(message: ZulipReceivedMessage) {
-    const state = message.type === 'stream' ? this.byStream(message.streamId) : undefined;
-    if (state && isHumanSender(message) && !this.isCommand(message.content)) {
+  /** Events and `GET /messages` name the empty topic by the realm's display name; the mirror keeps it as `''`. */
+  private fromZulipTopic(topic: string) {
+    return topic === (this.zulipService.emptyTopicName ?? EMPTY_TOPIC_NAME) ? '' : topic;
+  }
+
+  private onZulipMessage(received: ZulipReceivedMessage) {
+    const state = received.type === 'stream' ? this.byStream(received.streamId) : undefined;
+    if (state && isMirroredSender(received) && !this.isCommand(received.content)) {
+      const message = { ...received, topic: this.fromZulipTopic(received.topic) };
       state.queue.push(`Zulip message ${message.id}`, () => this.mirrorZulipMessage(state, message));
     }
   }
 
-  private onZulipUpdate(update: ZulipMessageUpdated) {
-    const state = this.byStream(update.streamId);
+  private onZulipUpdate(received: ZulipMessageUpdated) {
+    const state = this.byStream(received.streamId);
     if (!state) {
       return;
     }
+    const update =
+      received.topic === undefined ? received : { ...received, topic: this.fromZulipTopic(received.topic) };
     const { content, messageId } = update;
     if (content !== undefined) {
-      state.queue.push(`edit of Zulip message ${messageId}`, () => this.editFromZulip(state, messageId, content));
+      state.queue.push(`edit of Zulip message ${messageId}`, () =>
+        this.editFromZulip(state, messageId, content, 1, update.origContent),
+      );
     }
     if (update.topic !== undefined || update.newStreamId !== undefined) {
       state.queue.push(`move of Zulip message ${messageId}`, () => this.moveFromZulip(state, update));
@@ -532,8 +603,30 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  /** A reaction event names no stream, so each pair looks for the message among its own. */
+  private onZulipReaction({ messageId }: ZulipReactionChanged) {
+    for (const state of this.pairs.filter(({ status }) => status !== 'disabled')) {
+      this.queueReactionSync(state, `reactions of Zulip message ${messageId}`, () =>
+        this.reactionsToDiscord(state, messageId),
+      );
+    }
+  }
+
+  private queueReactionSync(state: PairState, label: string, run: () => Promise<void>) {
+    const key = `${state.pair.key}:${label}`;
+    if (this.pendingReactions.has(key)) {
+      return;
+    }
+    this.pendingReactions.add(key);
+    state.queue.push(label, () => {
+      this.pendingReactions.delete(key);
+      return run();
+    });
+  }
+
   private onZulipQueueRegistered({ subscribedStreamIds }: { subscribedStreamIds: number[] }) {
     const subscribed = new Set(subscribedStreamIds);
+    this.subscribedStreams = subscribed;
     for (const { pair, status } of this.pairs) {
       if (status !== 'disabled' && !subscribed.has(pair.zulipStreamId)) {
         this.logger.warn(
@@ -542,9 +635,10 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     this.verifiedConversations.clear();
+    this.streamNames.clear();
     this.zulipRegistered = true;
     for (const state of this.pairs) {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Zulip']);
       this.maybeCatchUp(state);
       this.resume(state);
     }
@@ -627,7 +721,7 @@ export class MirrorService implements OnModuleDestroy {
       this.logger[level](reason);
     }
     if (state.status !== 'disabled') {
-      this.lostTrack(state);
+      this.lostTrack(state, ['Discord', 'Zulip']);
     }
     state.status = 'disabled';
     state.offReason = reason;
@@ -645,7 +739,7 @@ export class MirrorService implements OnModuleDestroy {
       }
       await this.checkDiscordChannel(state);
       if (this.discordReady(state)) {
-        this.lostTrack(state);
+        this.lostTrack(state, ['Discord', 'Zulip']);
         this.maybeCatchUp(state);
         this.resume(state);
       }
@@ -660,9 +754,13 @@ export class MirrorService implements OnModuleDestroy {
     state.queue.push('catch-up', () => this.catchUp(state));
   }
 
-  private lostTrack(state: PairState) {
+  /** `unheard` are the sides whose edits and deletions may have gone without an event, which the next recheck reads. */
+  private lostTrack(state: PairState, unheard: Side[] = []) {
     state.caughtUp = false;
     state.generation++;
+    for (const side of unheard) {
+      state.unheard[side] = true;
+    }
   }
 
   private retryCatchUp(state: PairState) {
@@ -702,7 +800,9 @@ export class MirrorService implements OnModuleDestroy {
       // Only an op the queue's watchdog gave up on can meet creates turned away while it read.
       const complete = read && isEmpty(state.turnedAway);
       this.queueMissed(state, generation, discord.messages, zulip.messages, since, complete);
-      if (!complete) {
+      if (complete) {
+        state.queue.push('recheck of recent messages', () => this.recheck(state, generation));
+      } else {
         this.turnAway(state, turnedAway);
         this.retryCatchUp(state);
       }
@@ -789,9 +889,18 @@ export class MirrorService implements OnModuleDestroy {
       read(channelId, first - 1n, thread);
     }
 
+    let complete = true;
+    try {
+      for (const threadId of await this.newThreads(state, since, locations)) {
+        read(threadId, BigInt(threadId) - 1n);
+      }
+    } catch (error) {
+      complete = !isTransient(error);
+      this.fail(`${pair.key}: catch-up could not list the threads of Discord channel ${pair.discordChannelId}`, error);
+    }
+
     const windowStart = snowflakeAt(since);
     const missed: DiscordSourceMessage[] = [];
-    let complete = true;
     for (const [channelId, { after: highWater, thread }] of locations) {
       const stop = highWater > windowStart ? highWater : windowStart;
       try {
@@ -827,6 +936,26 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     return { messages: missed, complete };
+  }
+
+  /** Threads made within the window that have no conversation: the mirror never saw them start. */
+  private async newThreads(state: PairState, since: number, known: Map<string, unknown>) {
+    const { pair } = state;
+    const fresh = (await this.discordMirror.listMirrorThreads(pair.discordChannelId))
+      .filter(({ id, createdTimestamp }) => createdTimestamp >= since && !known.has(id))
+      .toSorted((a, b) => b.createdTimestamp - a.createdTimestamp);
+    const unseen: string[] = [];
+    for (const { id } of fresh) {
+      if (!(await this.database.getMirrorConversationByDiscord(pair.discordChannelId, id))) {
+        unseen.push(id);
+      }
+    }
+    if (unseen.length > NEW_THREAD_LIMIT) {
+      this.logger.warn(
+        `${pair.key}: catch-up found ${unseen.length} new Discord threads and reads the newest ${NEW_THREAD_LIMIT}; the messages of the others (${unseen.slice(NEW_THREAD_LIMIT).join(', ')}) are not mirrored`,
+      );
+    }
+    return unseen.slice(0, NEW_THREAD_LIMIT);
   }
 
   /**
@@ -875,16 +1004,165 @@ export class MirrorService implements OnModuleDestroy {
       this.fail(`${pair.key}: catch-up could not read Zulip stream ${pair.zulipStreamId}`, error);
       return { messages: [], complete: !isTransient(error) };
     }
-    const messages = found.filter(
-      (message) =>
-        message.type === 'stream' &&
-        message.streamId === pair.zulipStreamId &&
-        message.senderId !== self &&
-        isHumanSender(message) &&
-        !this.isCommand(message.content) &&
-        (message.movedAt === undefined || turnedAway.has(message.id)),
-    );
+    const messages = found
+      .map((message) => ({ ...message, topic: this.fromZulipTopic(message.topic) }))
+      .filter(
+        (message) =>
+          message.type === 'stream' &&
+          message.streamId === pair.zulipStreamId &&
+          message.senderId !== self &&
+          isMirroredSender(message) &&
+          !this.isCommand(message.content) &&
+          (message.movedAt === undefined || turnedAway.has(message.id)),
+      );
     return { messages, complete: true };
+  }
+
+  /**
+   * Edits and deletions made while the bot was away bring no event, so after a complete catch-up both sides of the
+   * newest recent rows are read again and whatever changed goes through the live edit and deletion paths.
+   */
+  private async recheck(state: PairState, generation: number) {
+    const { pair } = state;
+    if (generation !== state.generation) {
+      return;
+    }
+    const unheard = state.unheard;
+    state.unheard = { Discord: false, Zulip: false };
+    if (!unheard.Discord && !unheard.Zulip) {
+      return;
+    }
+    const since = Math.max(Date.now() - Constants.Mirror.RecheckMaxAgeHours * HOUR, pair.linkedAt);
+    const rows = await this.database.getRecentMirrorMessages(pair.discordChannelId, new Date(since), RECHECK_LIMIT);
+    if (rows.length === RECHECK_LIMIT) {
+      this.logger.log(
+        `${pair.key}: rechecking the newest ${RECHECK_LIMIT} mirrored messages; edits and deletions of older ones made while the bot was away are not mirrored`,
+      );
+    }
+    const ops = [
+      ...(unheard.Discord
+        ? await this.recheckOnDiscord(
+            state,
+            rows.filter(({ origin }) => origin === 'discord'),
+          )
+        : []),
+      ...(unheard.Zulip
+        ? await this.recheckOnZulip(
+            state,
+            rows.filter(({ origin }) => origin === 'zulip'),
+          )
+        : []),
+    ];
+    // What was read may be out of date by now; the catch-up that follows reads again.
+    if (generation !== state.generation) {
+      state.unheard.Discord ||= unheard.Discord;
+      state.unheard.Zulip ||= unheard.Zulip;
+      return;
+    }
+    if (ops.length > 0) {
+      this.logger.log(`${pair.key}: mirroring ${plural(ops.length, 'change')} made while the bot was away`);
+    }
+    state.queue.pushNext(ops);
+  }
+
+  /**
+   * Reads each location back to its oldest recent row; a row the pages do not reach is left alone, and so is every row
+   * of a location that shows no message at all, which is likelier lost access than everything deleted.
+   */
+  private async recheckOnDiscord(state: PairState, rows: MirrorMessage[]) {
+    const { pair } = state;
+    const byLocation = new Map<string, MirrorMessage[]>();
+    for (const row of rows) {
+      const location = row.discordThreadId ?? row.discordChannelId;
+      byLocation.set(location, [...(byLocation.get(location) ?? []), row]);
+    }
+    const ops: Op[] = [];
+    for (const [location, located] of byLocation) {
+      const oldest = located.reduce((min, { discordMessageId }) => {
+        const id = BigInt(discordMessageId);
+        return id < min ? id : min;
+      }, BigInt(located[0].discordMessageId));
+      const found = new Map<string, DiscordSourceMessage>();
+      let reached: bigint;
+      try {
+        for (let page = 1, before: string | undefined; ; page++) {
+          const { messages, oldestId, full } = await this.discordMirror.fetchMirrorMessagesBefore(
+            location,
+            before,
+            CATCH_UP_PAGE,
+          );
+          for (const message of messages) {
+            found.set(message.id, message);
+          }
+          reached = full && oldestId !== null ? BigInt(oldestId) : 0n;
+          if (reached <= oldest || page === CATCH_UP_PAGES) {
+            break;
+          }
+          before = oldestId!;
+        }
+      } catch (error) {
+        if (!isMirrorError(error, 'unknown-channel')) {
+          this.fail(`${pair.key}: could not recheck Discord channel ${location}`, error);
+        }
+        continue;
+      }
+      if (found.size === 0) {
+        continue;
+      }
+      for (const row of located) {
+        const dto = found.get(row.discordMessageId);
+        if (!dto && BigInt(row.discordMessageId) >= reached) {
+          ops.push({
+            label: `deletion of Discord messages ${row.discordMessageId}`,
+            run: () => this.deleteFromDiscord(state, [row.discordMessageId]),
+          });
+        } else if (dto && discordSourceHash(dto) !== row.sourceHash) {
+          ops.push({ label: `edit of Discord message ${dto.id}`, run: () => this.editFromDiscord(state, dto) });
+        }
+      }
+    }
+    return ops;
+  }
+
+  /** Like Discord, a stream that shows none of the messages is left alone. */
+  private async recheckOnZulip(state: PairState, rows: MirrorMessage[]) {
+    const { pair } = state;
+    const hashes = new Map(rows.map(({ zulipMessageId, sourceHash }) => [zulipMessageId, sourceHash]));
+    const ids = [...hashes.keys()].toSorted((a, b) => a - b);
+    if (ids.length === 0 || !this.subscribedStreams.has(pair.zulipStreamId)) {
+      return [];
+    }
+    const found = new Map<number, ZulipReceivedMessage>();
+    try {
+      for (let start = 0; start < ids.length; start += ZULIP_ID_BATCH) {
+        const batch = ids.slice(start, start + ZULIP_ID_BATCH);
+        for (const message of await this.retryZulip(() => this.zulip.getMessagesByIds(batch))) {
+          found.set(message.id, message);
+        }
+      }
+    } catch (error) {
+      this.fail(`${pair.key}: could not recheck Zulip stream ${pair.zulipStreamId}`, error);
+      return [];
+    }
+    const ops: Op[] = [];
+    // An unreadable message counts as deleted, as it does live: Zulip sends a delete_message event to a user who
+    // loses access to a moved message.
+    const gone = ids.filter((id) => !found.has(id));
+    if (found.size === 0) {
+      return [];
+    }
+    if (gone.length > 0) {
+      ops.push({
+        label: `deletion of Zulip messages ${gone.join(', ')}`,
+        run: () => this.deleteFromZulip(state, gone),
+      });
+    }
+    for (const [id, message] of found) {
+      if (sha256(message.content) !== hashes.get(id)) {
+        ops.push({ label: `edit of Zulip message ${id}`, run: () => this.editFromZulip(state, id, message.content) });
+      }
+    }
+    return ops;
   }
 
   private discordReady(state: PairState) {
@@ -1121,7 +1399,83 @@ export class MirrorService implements OnModuleDestroy {
         }
       }
     }
-    return { zulipUserByDiscordId: this.membersOf(dto.guildId).zulipByDiscord };
+    const text = [dto.content, ...dto.forwarded, dto.replyTo?.content ?? ''].join('\n');
+    const emoteIds = [...text.matchAll(CUSTOM_EMOTE_IDS)].map(([, id]) => id);
+    const emotes =
+      emoteIds.length > 0
+        ? (await this.emoteMaps(dto.guildId, (maps) => emoteIds.some((id) => !maps.zulipByEmoteId.has(id))))
+            ?.zulipByEmoteId
+        : undefined;
+    const channels = new Map<string, ZulipChannel>();
+    for (const [, channelId] of text.matchAll(CHANNEL_MENTION)) {
+      const channel = channels.has(channelId) ? undefined : await this.zulipChannelOf(channelId);
+      if (channel) {
+        channels.set(channelId, channel);
+      }
+    }
+    return {
+      zulipUserByDiscordId: this.membersOf(dto.guildId).zulipByDiscord,
+      ...(emotes ? { zulipEmojiByEmoteId: new Map([...emotes].map(([id, { name }]) => [id, name])) } : {}),
+      ...(channels.size > 0 ? { zulipChannelByDiscordId: channels } : {}),
+    };
+  }
+
+  /** The stream of a linked channel, with its main topic, or the stream and topic of a mirrored thread. */
+  private async zulipChannelOf(channelId: string): Promise<ZulipChannel | undefined> {
+    const linked = this.pairs.find(({ pair }) => pair.discordChannelId === channelId)?.pair;
+    let found: { streamId: number; topic?: string } | undefined = linked && {
+      streamId: linked.zulipStreamId,
+      ...(linked.mainTopic === null ? {} : { topic: linked.mainTopic }),
+    };
+    for (const { pair } of found ? [] : this.pairs) {
+      const conversation = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, channelId);
+      if (conversation) {
+        found = { streamId: conversation.zulipStreamId, topic: conversation.zulipTopic };
+        break;
+      }
+    }
+    const stream = found && (await this.streamName(found.streamId));
+    return found && stream !== undefined ? { ...found, stream } : undefined;
+  }
+
+  private async streamName(streamId: number) {
+    const known = this.streamNames.get(streamId);
+    if (known !== undefined) {
+      return known;
+    }
+    try {
+      const { name } = await this.retryZulip(() => this.zulip.getStream(streamId));
+      this.streamNames.set(streamId, name);
+      return name;
+    } catch (error) {
+      this.fail(`Could not read the name of Zulip stream ${streamId}`, error);
+      return undefined;
+    }
+  }
+
+  /** The Discord channel of a linked stream or its main topic, or the thread of a mirrored topic. */
+  private async discordChannelOf({ stream, topic }: ZulipChannelRef) {
+    let state: PairState | undefined;
+    for (const candidate of this.pairs) {
+      const { zulipStreamId } = candidate.pair;
+      if (
+        typeof stream === 'number'
+          ? zulipStreamId === stream
+          : (await this.streamName(zulipStreamId))?.toLowerCase() === stream.toLowerCase()
+      ) {
+        state = candidate;
+        break;
+      }
+    }
+    if (!state || topic === undefined) {
+      return state?.pair.discordChannelId;
+    }
+    const key = topicKey(this.fromZulipTopic(topic));
+    if (isMainTopic(state.pair, key)) {
+      return state.pair.discordChannelId;
+    }
+    const conversation = await this.database.getMirrorConversationByZulipTopic(state.pair.zulipStreamId, key);
+    return conversation?.discordThreadId ?? undefined;
   }
 
   private async verifyTeamMembers(guildId: string) {
@@ -1162,6 +1516,9 @@ export class MirrorService implements OnModuleDestroy {
       return cached.identity;
     }
 
+    if (this.botSenders.has(sender.id)) {
+      return { username: sanitiseWebhookUsername(sender.fullName, ' (Zulip bot)') };
+    }
     const fallback = { username: sanitiseWebhookUsername(sender.fullName, ' (Zulip)') };
     let identity: Identity = fallback;
     const discordId = this.teamMembers.get(sender.id);
@@ -1186,7 +1543,7 @@ export class MirrorService implements OnModuleDestroy {
     return identity;
   }
 
-  private async unicodeEmoji() {
+  private async emojiTables() {
     if (this.emojiCodes || Date.now() < this.emojiRetryAt) {
       return this.emojiCodes;
     }
@@ -1201,25 +1558,45 @@ export class MirrorService implements OnModuleDestroy {
     return this.emojiCodes;
   }
 
-  private async customEmotes(guildId: string) {
+  /**
+   * The names the emote sync gives the emotes, so that a renamed one (`fire2`) is found by the name it has on Zulip.
+   * `undefined` while either side cannot be read, which a reaction sync must not take for an emote nobody uses.
+   */
+  /** An emote synced or uploaded since the maps were read is found by reading them again, at most once a minute. */
+  private async emoteMaps(guildId: string, lacks?: (maps: EmoteMaps) => boolean): Promise<EmoteMaps | undefined> {
     const cached = this.emotes.get(guildId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.byName;
+    const now = Date.now();
+    if (cached && (now - cached.triedAt < MINUTE || (now - cached.loadedAt < HOUR && !lacks?.(cached.maps)))) {
+      return cached.maps;
     }
-    const byName = new Map<string, string>();
+    if (cached) {
+      cached.triedAt = now;
+    }
+    // Maps that could not be read again are still better than none: they hold every emote known until then.
+    const maps = await this.readEmoteMaps(guildId);
+    if (!maps) {
+      return cached?.maps;
+    }
+    this.emotes.set(guildId, { maps, loadedAt: now, triedAt: now });
+    return maps;
+  }
+
+  private async readEmoteMaps(guildId: string) {
+    const codes = await this.emojiTables();
+    if (!codes) {
+      return undefined;
+    }
     try {
-      for (const emote of (await this.discordMirror.getEmotes(guildId)) ?? []) {
-        const name = toZulipEmojiName(emote.name ?? '');
-        if (!byName.has(name)) {
-          byName.set(name, emote.animated ? `<${emote.identifier}>` : `<:${emote.identifier}>`);
-        }
+      const emotes = await this.discordMirror.getEmotes(guildId);
+      if (!emotes) {
+        return undefined;
       }
+      const realm = await this.retryZulip(() => this.zulip.listEmoji());
+      return toEmoteMaps(emotes, zulipBuiltInEmoji(codes), realm);
     } catch (error) {
-      this.fail(`Could not list the Discord emotes of guild ${guildId}`, error);
-      return byName;
+      this.fail(`Could not match the Discord emotes of guild ${guildId} with the Zulip realm emoji`, error);
+      return undefined;
     }
-    this.emotes.set(guildId, { byName, expiresAt: Date.now() + HOUR });
-    return byName;
   }
 
   private async renderForDiscord(state: PairState, raw: string, lateTimestamp?: number) {
@@ -1245,15 +1622,33 @@ export class MirrorService implements OnModuleDestroy {
       });
     }
 
+    const channels = new Map<string, string>();
+    for (const ref of refs.channels) {
+      const channelId = await this.discordChannelOf(ref);
+      if (channelId !== undefined) {
+        channels.set(channelRefKey(ref), channelId);
+      }
+    }
+
     const needsEmoji = refs.emojiNames.length > 0;
-    const unicode = needsEmoji ? await this.unicodeEmoji() : undefined;
-    const custom = needsEmoji ? await this.customEmotes(guildId) : undefined;
+    const unicode = needsEmoji ? (await this.emojiTables())?.unicode : undefined;
+    const custom = needsEmoji
+      ? (
+          await this.emoteMaps(guildId, (maps) =>
+            refs.emojiNames.some((name) => !maps.discordByZulipName.has(name) && unicode?.[name] === undefined),
+          )
+        )?.discordByZulipName
+      : undefined;
     return toDiscordMirrorContent(raw, {
       realmOrigin: this.realmOrigin,
       messages,
       deletedMessageIds: new Set([...deleted].filter((id) => !messages.has(id))),
+      channels,
       discordUserByZulipId: this.membersOf(guildId).discordByZulip,
-      emoji: (name) => custom?.get(name) ?? unicode?.[name],
+      emoji: (name) => {
+        const emote = custom?.get(name);
+        return emote ? (emote.animated ? `<${emote.identifier}>` : `<:${emote.identifier}>`) : unicode?.[name];
+      },
       lateTimestamp,
     });
   }
@@ -1262,6 +1657,7 @@ export class MirrorService implements OnModuleDestroy {
     state: PairState,
     messageId: number,
     { uploads: paths, spoilerUploads }: { uploads: string[]; spoilerUploads: string[] },
+    slots = MAX_FILES,
   ) {
     const files: File[] = [];
     const notes: Note[] = [];
@@ -1269,7 +1665,7 @@ export class MirrorService implements OnModuleDestroy {
     const deadline = transferDeadline();
     for (const [index, path] of paths.entries()) {
       const note = { name: uploadName(path), spoiler: spoilerUploads.includes(path) };
-      if (index >= MAX_FILES || deadline.signal.aborted) {
+      if (index >= slots || deadline.signal.aborted) {
         notes.push(note);
         continue;
       }
@@ -1310,6 +1706,9 @@ export class MirrorService implements OnModuleDestroy {
         return;
       }
       this.senderNames.set(message.senderId, message.senderFullName);
+      if (isZulipBot(message)) {
+        this.botSenders.add(message.senderId);
+      }
       const conversation = await this.conversationForZulip(state, message);
       const late = message.timestamp > 0 && Date.now() - message.timestamp * 1000 > LATE_MS;
       const rendered = await this.renderForDiscord(state, message.content, late ? message.timestamp : undefined);
@@ -1484,11 +1883,7 @@ export class MirrorService implements OnModuleDestroy {
       if (!isMirrorError(error, 'too-large') || files.length === 0) {
         throw error;
       }
-      const dropped = files.map(({ name }) => ({
-        name: name.startsWith(SPOILER_FILE) ? name.slice(SPOILER_FILE.length) : name,
-        spoiler: name.startsWith(SPOILER_FILE),
-      }));
-      parts = withNotes(outgoing.text, [...outgoing.notes, ...dropped]);
+      parts = withNotes(outgoing.text, [...outgoing.notes, ...files.map(toNote)]);
       files = [];
       sent = await send(parts[0], { ...first, files });
     }
@@ -1578,7 +1973,11 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
-  private async editFromZulip(state: PairState, messageId: number, content: string, attempt = 1) {
+  /**
+   * `before` is the content the edit replaced, which an edit event carries: the uploads it adds are attached to the
+   * first part. Without it, as when catch-up finds the edit, the copy keeps the files it has.
+   */
+  private async editFromZulip(state: PairState, messageId: number, content: string, attempt = 1, before?: string) {
     const { pair } = state;
     const label = `edit of Zulip message ${messageId}`;
     const all = (await this.database.getMirrorMessagesByZulipIds([messageId], { withDeleted: true })).filter(
@@ -1588,32 +1987,45 @@ export class MirrorService implements OnModuleDestroy {
     const hash = sha256(content);
     if (
       rows.length === 0 ||
-      this.holdFor(state, 'Discord', label, () => this.editFromZulip(state, messageId, content, attempt)) ||
+      this.holdFor(state, 'Discord', label, () => this.editFromZulip(state, messageId, content, attempt, before)) ||
       rows[0].sourceHash === hash
     ) {
       return;
     }
 
     const rendered = await this.renderForDiscord(state, content);
-    if (rendered.uploads.length > 0) {
+    const earlier = before === undefined ? undefined : parseZulipRefs(before, this.realmOrigin).uploads;
+    const added = earlier === undefined ? [] : rendered.uploads.filter((path) => !earlier.includes(path));
+    if (
+      earlier === undefined ? rendered.uploads.length > 0 : earlier.some((path) => !rendered.uploads.includes(path))
+    ) {
       this.logger.log(
         `${pair.key}: Zulip message ${messageId} was edited; its Discord copy keeps the files it was sent with`,
       );
     }
-    let parts = splitDiscordContent(rendered.text);
+    const upload =
+      added.length > 0 && rows[0].part === 0
+        ? await this.downloadUploads(
+            state,
+            messageId,
+            { uploads: added, spoilerUploads: rendered.spoilerUploads },
+            await this.freeFileSlots(rows[0], earlier!.length),
+          )
+        : { files: [], notes: [] };
+    let parts = withNotes(rendered.text, upload.notes);
     if (parts.length === 0) {
       parts = [''];
     }
 
     const kept: MirrorMessage[] = [];
     let again = false;
+    let attached = false;
     for (const row of rows) {
       try {
         if (row.part < parts.length) {
-          const edit = { content: parts[row.part], suppressEmbeds: suppressEmbeds(parts[row.part]) };
-          await this.onDiscord(state, row.discordThreadId, () =>
-            this.discordMirror.editMirrorMessage(toTarget(row), edit),
-          );
+          const files = row.part === 0 ? upload.files : [];
+          attached =
+            (await this.editOnDiscord(state, row, parts[row.part], files, rendered.text, upload.notes)) || attached;
           kept.push(row);
         } else if (row.part > 0) {
           await this.onDiscord(state, row.discordThreadId, () => this.discordMirror.deleteMirrorMessage(toTarget(row)));
@@ -1622,6 +2034,7 @@ export class MirrorService implements OnModuleDestroy {
       } catch (error) {
         if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
           again = true;
+          attached ||= row.part === 0 && upload.files.length > 0 && mayHaveBeenCarriedOut(error);
           continue;
         }
         await this.discordEditFailed(state, row, error);
@@ -1631,7 +2044,10 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     if (again) {
-      this.retryOnDiscord(state, label, attempt, (next) => this.editFromZulip(state, messageId, content, next));
+      // Files the first part took, or may have, are not attached again: the retry sees them as there before the edit.
+      this.retryOnDiscord(state, label, attempt, (next) =>
+        this.editFromZulip(state, messageId, content, next, attached ? content : before),
+      );
       return;
     }
     await this.database.updateMirrorMessages(
@@ -1642,6 +2058,47 @@ export class MirrorService implements OnModuleDestroy {
     const complete = all.every(({ part, deletedAt }, index) => part === index && deletedAt === null);
     if (complete && parts.length > rows.length) {
       await this.appendParts(state, rows, parts.slice(rows.length), hash);
+    }
+  }
+
+  /** Uploads the first mirroring turned into notes left their slots free, so the copy itself is counted. */
+  private async freeFileSlots(row: MirrorMessage, earlierUploads: number) {
+    try {
+      return MAX_FILES - Math.min(await this.discordMirror.countMirrorAttachments(toTarget(row)), MAX_FILES);
+    } catch {
+      return MAX_FILES - Math.min(earlierUploads, MAX_FILES);
+    }
+  }
+
+  /**
+   * Discord keeps a message's attachments through an edit, and adds the files given; files it finds too large become
+   * notes. Resolves to whether files were attached.
+   */
+  private async editOnDiscord(
+    state: PairState,
+    row: MirrorMessage,
+    content: string,
+    files: File[],
+    text: string,
+    notes: Note[],
+  ) {
+    const edit = (body: string, withFiles: File[]) =>
+      this.onDiscord(state, row.discordThreadId, () =>
+        this.discordMirror.editMirrorMessage(toTarget(row), {
+          content: body,
+          suppressEmbeds: suppressEmbeds(body),
+          ...(withFiles.length > 0 ? { files: withFiles } : {}),
+        }),
+      );
+    try {
+      await edit(content, files);
+      return files.length > 0;
+    } catch (error) {
+      if (!isMirrorError(error, 'too-large') || files.length === 0) {
+        throw error;
+      }
+      await edit(withNotes(text, [...notes, ...files.map(toNote)])[0] ?? '', []);
+      return false;
     }
   }
 
@@ -1841,6 +2298,9 @@ export class MirrorService implements OnModuleDestroy {
       if (name !== toDiscordThreadName(previous)) {
         await this.renameThread(state, conversation, name);
       }
+      if (isResolvedTopic(update.topic) !== isResolvedTopic(previous)) {
+        await this.archiveThread(state, { ...conversation, zulipTopic: update.topic });
+      }
     }
   }
 
@@ -1868,6 +2328,114 @@ export class MirrorService implements OnModuleDestroy {
         );
       }
     }
+  }
+
+  /** Resolving a topic archives its thread, and unresolving it takes the thread out of the archive. */
+  private async archiveThread(state: PairState, conversation: MirrorConversation, attempt = 1) {
+    const threadId = conversation.discordThreadId!;
+    const archive = isResolvedTopic(conversation.zulipTopic);
+    const label = `${archive ? 'archiving' : 'unarchiving'} of Discord thread ${threadId}`;
+    const later = (next: number) => async () => {
+      const current = await this.database.getMirrorConversation(conversation.id);
+      if (current) {
+        await this.archiveThread(state, current, next);
+      }
+    };
+    if (this.holdFor(state, 'Discord', label, later(attempt))) {
+      return;
+    }
+    try {
+      await (archive
+        ? this.discordMirror.archiveMirrorThread(threadId)
+        : this.discordMirror.unarchiveMirrorThread(threadId));
+    } catch (error) {
+      if (isMirrorError(error, 'unknown-channel')) {
+        await this.detach(state, conversation, 'the Discord thread no longer exists');
+      } else if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
+        this.retryOnDiscord(state, label, attempt, (next) => later(next)());
+      } else {
+        this.logger.warn(
+          `${state.pair.key}: could not ${archive ? 'archive' : 'unarchive'} Discord thread ${threadId} after its Zulip topic was ${archive ? 'resolved' : 'unresolved'}: ${describe(error)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * The tags of a forum post are the first line of the first message of its topic when the bot posted that message,
+   * and a notice in the topic when a Zulip user did, or when the message can no longer be edited.
+   */
+  private async tagsFromDiscord(state: PairState, thread: { threadId: string; tags: string[] }) {
+    const { pair } = state;
+    const { threadId, tags } = thread;
+    if (this.holdFor(state, 'Zulip', `tags of Discord thread ${threadId}`, () => this.tagsFromDiscord(state, thread))) {
+      return;
+    }
+    const found = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
+    const conversation = found && (await this.verifyConversation(state, found));
+    if (!conversation) {
+      return;
+    }
+    const [row] = (await this.database.getMirrorMessagesByDiscordIds([threadId])).filter(
+      ({ origin }) => origin === 'discord',
+    );
+    if (row && (await this.editTags(state, row, tags))) {
+      return;
+    }
+    try {
+      await this.zulip.sendMessage({
+        stream: pair.zulipStreamId,
+        topic: conversation.zulipTopic,
+        content: zulipTagsNotice(tags),
+      });
+    } catch (error) {
+      this.fail(
+        `${pair.key}: could not post the tags of Discord thread ${threadId} in Zulip stream ${pair.zulipStreamId}`,
+        error,
+      );
+    }
+  }
+
+  /** Resolves to whether the first message now shows the tags. */
+  private async editTags(state: PairState, row: MirrorMessage, tags: string[]) {
+    const { pair } = state;
+    const lead = withZulipTags(row.zulipHeader ?? '', tags);
+    if (lead === row.zulipHeader) {
+      return true;
+    }
+    let dto: DiscordSourceMessage | undefined;
+    try {
+      dto = await this.discordMirror.fetchMirrorMessage(
+        row.discordThreadId ?? row.discordChannelId,
+        row.discordMessageId,
+      );
+    } catch (error) {
+      this.fail(`${pair.key}: could not read Discord message ${row.discordMessageId} to show its thread's tags`, error);
+      return false;
+    }
+    if (!dto) {
+      return false;
+    }
+    const content = zulipMirrorContent(
+      lead,
+      toZulipMirrorBody(dto, await this.renderContext(dto)),
+      row.zulipAttachments ?? '',
+    );
+    try {
+      await this.retryZulip(() => this.zulip.updateMessage(row.zulipMessageId, { content }));
+    } catch (error) {
+      if (!isNothingToChange(error)) {
+        this.logger.log(
+          `${pair.key}: could not edit the tags into Zulip message ${row.zulipMessageId}, so they are posted instead: ${describe(error)}`,
+        );
+        return false;
+      }
+    }
+    await this.database.updateMirrorMessages([row.discordMessageId], {
+      zulipHeader: lead,
+      sourceHash: discordSourceHash(dto),
+    });
+    return true;
   }
 
   /** Moved messages whose conversation stays behind no longer belong to it, so they can never become its anchor. */
@@ -1934,7 +2502,7 @@ export class MirrorService implements OnModuleDestroy {
       await this.detach(state, conversation, 'its Zulip topic was moved to another stream');
       return undefined;
     }
-    const topic = found.topic || EMPTY_TOPIC_NAME;
+    const { topic } = found;
     if (topic !== conversation.zulipTopic) {
       const zulipTopicKey = topicKey(topic);
       if (await this.isTakenByAnother(state, conversation, zulipTopicKey)) {
@@ -2029,7 +2597,12 @@ export class MirrorService implements OnModuleDestroy {
       const reply = await this.replyTarget(dto, topic);
       const late = Date.now() - dto.createdTimestamp > LATE_MS;
       const header = zulipAuthorHeader(dto, { ...ctx, reply, late });
-      const lead = zulipMirrorLead(header, dto.replyTo?.content ? toZulipReplySnippet(dto.replyTo.content, ctx) : null);
+      const context = conversation || pair.kind !== 'text' ? '' : await this.threadContext(state, dto.threadId!, ctx);
+      const tags = !conversation && pair.kind === 'forum' && dto.id === dto.threadId ? (dto.threadTags ?? []) : [];
+      const lead = withZulipTags(
+        context + zulipMirrorLead(header, dto.replyTo?.content ? toZulipReplySnippet(dto.replyTo.content, ctx) : null),
+        tags,
+      );
       const attachments = toZulipAttachmentLines(await this.uploadAttachments(state, dto), dto.jumpUrl);
       if (body.trim() === '' && attachments === '') {
         return;
@@ -2069,6 +2642,37 @@ export class MirrorService implements OnModuleDestroy {
       this.createFailed(state, source, error, attempt, turnAway);
       this.fail(`${pair.key}: could not mirror Discord message ${dto.id} to Zulip`, error);
     }
+  }
+
+  /** A thread started from a message has that message's ID, and a thread started without one none of a message. */
+  private async threadContext(state: PairState, threadId: string, ctx: DiscordRenderContext) {
+    const { pair } = state;
+    let starter: DiscordSourceMessage | undefined;
+    try {
+      starter = await this.discordMirror.fetchMirrorMessage(pair.discordChannelId, threadId);
+    } catch (error) {
+      this.logger.warn(
+        `${pair.key}: could not read the message Discord thread ${threadId} was started from: ${describe(error)}`,
+      );
+      return '';
+    }
+    if (!starter) {
+      return '';
+    }
+    const [row] = await this.database.getMirrorMessagesByDiscordIds([threadId]);
+    const conversation =
+      !row || row.conversationId === null ? undefined : await this.database.getMirrorConversation(row.conversationId);
+    return zulipThreadContext(
+      {
+        zulipLink: row
+          ? zulipNarrowLink(row.zulipStreamId, conversation?.zulipTopic ?? pair.mainTopic ?? '', row.zulipMessageId)
+          : null,
+        jumpUrl: starter.jumpUrl,
+        authorName: starter.author.displayName || starter.author.username,
+        content: starter.content,
+      },
+      ctx,
+    );
   }
 
   private async replyTarget(dto: DiscordSourceMessage, topic: string): Promise<ZulipReplyTarget | null> {
@@ -2179,6 +2783,173 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     await this.reanchor(state, [row.zulipMessageId]);
+  }
+
+  /**
+   * The bot can only react as itself, so its reactions on the Zulip message stand for the Discord users who react to the
+   * Discord side, however many: it reacts once someone does and takes its reaction back when nobody does any more.
+   */
+  private async reactionsToZulip(state: PairState, discordMessageId: string) {
+    const { pair } = state;
+    const label = `reactions of Discord message ${discordMessageId}`;
+    const [row] = await this.database.getMirrorMessagesByDiscordIds([discordMessageId]);
+    if (
+      !row ||
+      row.discordChannelId !== pair.discordChannelId ||
+      this.holdFor(state, 'Zulip', label, () => this.reactionsToZulip(state, discordMessageId))
+    ) {
+      return;
+    }
+    const copies =
+      row.origin === 'zulip' ? await this.database.getMirrorMessagesByZulipIds([row.zulipMessageId]) : [row];
+    const codes = await this.emojiTables();
+    if (!codes) {
+      return;
+    }
+    const wanted = new Map<string, ZulipReactionEmoji>();
+    try {
+      const read: Awaited<ReturnType<typeof this.readDiscordReactions>> = [];
+      for (const copy of copies) {
+        read.push(...(await this.readDiscordReactions(copy)));
+      }
+      const emotes = await this.emoteMaps(state.guildId!, (maps) =>
+        read.some(({ emoji }) => emoji.id !== null && !maps.zulipByEmoteId.has(emoji.id)),
+      );
+      if (!emotes) {
+        return;
+      }
+      for (const { emoji, count, me } of read) {
+        const zulipEmoji = count > (me ? 1 : 0) ? toZulipReactionEmoji(emoji, codes.names, emotes) : undefined;
+        if (zulipEmoji) {
+          wanted.set(zulipReactionKey(zulipEmoji), zulipEmoji);
+        }
+      }
+      const self = this.zulipService.ownUser?.userId;
+      const { reactions = [] } = await this.retryZulip(() => this.zulip.getMessage(row.zulipMessageId));
+      const mine = new Map(
+        reactions
+          .filter(({ userId }) => userId === self)
+          .map(({ name, code, type }) => [zulipReactionKey({ name, code, type }), { name, code, type }] as const),
+      );
+      for (const [key, emoji] of wanted) {
+        if (!mine.has(key)) {
+          await this.changeZulipReaction(
+            () => this.zulip.addReaction(row.zulipMessageId, emoji),
+            'REACTION_ALREADY_EXISTS',
+          );
+        }
+      }
+      for (const [key, emoji] of mine) {
+        if (!wanted.has(key)) {
+          await this.changeZulipReaction(
+            () => this.zulip.removeReaction(row.zulipMessageId, emoji),
+            'REACTION_DOES_NOT_EXIST',
+          );
+        }
+      }
+    } catch (error) {
+      if (!isZulipMessageGone(error) && !isMirrorError(error, 'unknown-channel')) {
+        this.fail(`${pair.key}: could not mirror the reactions of Discord message ${discordMessageId} to Zulip`, error);
+      }
+    }
+  }
+
+  /** A copy deleted on Discord has no reactions left to count. */
+  private async readDiscordReactions(row: MirrorMessage) {
+    try {
+      return await this.discordMirror.getMirrorReactions(toTarget(row));
+    } catch (error) {
+      if (isMirrorError(error, 'unknown-message')) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  private async changeZulipReaction(call: () => Promise<void>, alreadyCode: string) {
+    try {
+      await this.retryZulip(call);
+    } catch (error) {
+      if (!(error instanceof ZulipApiError && error.code === alreadyCode)) {
+        throw error;
+      }
+    }
+  }
+
+  /** The Zulip side of `reactionsToZulip`: the bot reacts on the first part of the Discord copy. */
+  private async reactionsToDiscord(state: PairState, zulipMessageId: number) {
+    const { pair } = state;
+    const label = `reactions of Zulip message ${zulipMessageId}`;
+    const [row] = (await this.database.getMirrorMessagesByZulipIds([zulipMessageId])).filter(
+      ({ discordChannelId }) => discordChannelId === pair.discordChannelId,
+    );
+    if (!row || this.holdFor(state, 'Discord', label, () => this.reactionsToDiscord(state, zulipMessageId))) {
+      return;
+    }
+    const target = toTarget(row);
+    try {
+      const self = this.zulipService.ownUser?.userId;
+      const { reactions = [] } = await this.retryZulip(() => this.zulip.getMessage(zulipMessageId));
+      const emotes = await this.emoteMaps(state.guildId!, (maps) =>
+        reactions.some(({ type, name }) => type === 'realm_emoji' && !maps.discordByZulipName.has(name)),
+      );
+      if (!emotes) {
+        return;
+      }
+      const wanted = new Map<string, DiscordReactionEmoji>();
+      for (const { userId, ...emoji } of reactions) {
+        const discordEmoji = userId === self ? undefined : toDiscordReactionEmoji(emoji, emotes);
+        if (discordEmoji) {
+          wanted.set(discordReactionKey(discordEmoji), discordEmoji);
+        }
+      }
+      const mine = new Map(
+        (await this.discordMirror.getMirrorReactions(target))
+          .filter(({ me }) => me)
+          .map(({ emoji }) => [discordReactionKey(emoji), emoji] as const),
+      );
+      for (const [key, emoji] of wanted) {
+        if (!mine.has(key)) {
+          await this.addDiscordReaction(state, row, emoji);
+        }
+      }
+      for (const [key, emoji] of mine) {
+        if (!wanted.has(key)) {
+          await this.discordMirror.removeMirrorReaction(target, emoji);
+        }
+      }
+    } catch (error) {
+      if (isZulipMessageGone(error) || isMirrorError(error, 'unknown-message')) {
+        return;
+      }
+      if (isMirrorError(error, 'unknown-channel') && row.discordThreadId !== null) {
+        await this.threadDeleted(state, row.discordThreadId, 'the Discord thread no longer exists');
+        return;
+      }
+      this.fail(`${pair.key}: could not mirror the reactions of Zulip message ${zulipMessageId} to Discord`, error);
+    }
+  }
+
+  private async addDiscordReaction(state: PairState, row: MirrorMessage, emoji: DiscordReactionEmoji) {
+    const target = toTarget(row);
+    try {
+      await this.onDiscord(state, row.discordThreadId, () => this.discordMirror.addMirrorReaction(target, emoji));
+    } catch (error) {
+      const qualified = isMirrorError(error, 'unknown-emoji') ? withVariationSelectors(emoji) : undefined;
+      if (!qualified) {
+        throw error;
+      }
+      try {
+        await this.discordMirror.addMirrorReaction(target, qualified);
+      } catch (again) {
+        if (!isMirrorError(again, 'unknown-emoji')) {
+          throw again;
+        }
+        this.logger.log(
+          `${state.pair.key}: Discord does not support an emoji a Zulip user reacted with, so that reaction to Discord message ${target.messageId} is not mirrored`,
+        );
+      }
+    }
   }
 
   /** Whether the rename is the echo of one the mirror made, which a later one may already have overtaken. */

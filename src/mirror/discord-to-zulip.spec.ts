@@ -7,10 +7,13 @@ import {
   toZulipAttachmentLines,
   toZulipMirrorBody,
   toZulipReplySnippet,
+  withZulipTags,
   zulipAuthorHeader,
   ZulipHeaderContext,
   zulipMirrorContent,
   zulipMirrorLead,
+  zulipTagsNotice,
+  zulipThreadContext,
 } from 'src/mirror/discord-to-zulip';
 import { describe, expect, it } from 'vitest';
 
@@ -162,6 +165,85 @@ describe('zulipAuthorHeader', () => {
   });
 });
 
+describe('forum tags', () => {
+  it('should put the tags on the first line of the lead, replacing the ones there, or take them out', () => {
+    const tagged = withZulipTags('**contrib123**', ['bug', 'a*b']);
+
+    expect(tagged).toBe('**Tags:** bug, a&#42;b\n**contrib123**');
+    expect(withZulipTags(tagged, ['mobile'])).toBe('**Tags:** mobile\n**contrib123**');
+    expect(withZulipTags(tagged, [])).toBe('**contrib123**');
+    expect(zulipMirrorContent(tagged, 'the post', '')).toBe('**Tags:** bug, a&#42;b\n**contrib123**: the post');
+  });
+
+  it('should say what the tags are now', () => {
+    expect(zulipTagsNotice(['bug', '@mobile'])).toBe('Tags changed: bug, &#64;mobile');
+    expect(zulipTagsNotice([])).toBe('Tags changed: none');
+  });
+});
+
+describe('zulipThreadContext', () => {
+  const starter = {
+    zulipLink: '#narrow/channel/900/topic//with/70',
+    jumpUrl: JUMP_URL,
+    authorName: 'Alex *A*',
+    content: 'why does <@222222222222222222> crash?',
+  };
+  const lead = (context: string) => zulipMirrorContent(`${context}**contrib123**`, 'I think so', '');
+
+  it('should link the Zulip copy of the message and quote it', () => {
+    expect(lead(zulipThreadContext(starter, ctx))).toBe(
+      '↪ Thread started from [a message](#narrow/channel/900/topic//with/70) by **Alex &#42;A&#42;**:\n~~~ quote\nwhy does @_**|8** crash?\n~~~\n**contrib123**: I think so',
+    );
+  });
+
+  it('should link the Discord message when it was not mirrored, and quote nothing when it says nothing', () => {
+    expect(lead(zulipThreadContext({ ...starter, zulipLink: null, authorName: null, content: '' }, ctx))).toBe(
+      `↪ Thread started from [a message](${JUMP_URL}) on Discord\n**contrib123**: I think so`,
+    );
+  });
+});
+
+describe('bot messages', () => {
+  const bot = { id: '9', username: 'backups', displayName: 'FutoBackupsBot', bot: true };
+
+  it('should name a bot or webhook as a bot, never as a team member', () => {
+    expect(zulipAuthorHeader(message({ author: bot }), ctx)).toBe('**FutoBackupsBot** (bot)');
+    expect(zulipAuthorHeader(message({ author: { ...bot, displayName: '' } }), ctx)).toBe('**backups** (bot)');
+    expect(zulipAuthorHeader(message({ author: { ...bot, id: TEAM_MEMBER } }), ctx)).toBe('**FutoBackupsBot** (bot)');
+  });
+
+  it('should quote the embeds a bot wrote after its message', () => {
+    const dto = message({
+      author: bot,
+      content: 'nightly run',
+      embeds: [
+        {
+          title: 'Backup done [ok]',
+          url: 'https://example.com/run/1',
+          description: 'All **good** <@222222222222222222>\n@everyone',
+          fields: [
+            { name: 'Size', value: '12\nGB' },
+            { name: '@all', value: '`x`' },
+          ],
+        },
+        { title: null, url: null, description: null, fields: [] },
+      ],
+    });
+
+    expect(zulipMirrorContent('**FutoBackupsBot** (bot)', toZulipMirrorBody(dto, ctx), '')).toBe(
+      `**FutoBackupsBot** (bot): nightly run\n~~~ quote\n**[Backup done &#91;ok&#93;](https://example.com/run/1)**\nAll **good** &#64;Zack\n@everyone\n**Size:** 12 GB\n**&#64;all:** \`x\`\n~~~`,
+    );
+  });
+
+  it('should hash the embeds only when there are some', () => {
+    const plain = message({ content: 'x' });
+    expect(discordSourceHash({ ...plain, embeds: [] })).toBe(discordSourceHash(plain));
+    expect(
+      discordSourceHash({ ...plain, embeds: [{ title: 'a', url: null, description: null, fields: [] }] }),
+    ).not.toBe(discordSourceHash(plain));
+  });
+});
+
 describe('toZulipMirrorBody', () => {
   describe('neutralising Zulip syntax', () => {
     it.each(['@**all**', '@_**all**', '@**everyone**', '@*team*', '@_*team*', '#**immich-alerts>x**', '#**s>t@5**'])(
@@ -224,12 +306,44 @@ describe('toZulipMirrorBody', () => {
       ).toBe('&#35;dev&#95;ops &#35;unknown-channel');
     });
 
+    it('should link a linked channel or mirrored thread as its Zulip stream and topic', () => {
+      const linked = {
+        ...ctx,
+        zulipChannelByDiscordId: new Map([
+          ['100000000000000001', { streamId: 900, stream: 'immich-dev', topic: '' }],
+          ['100000000000000002', { streamId: 901, stream: 'immich-dev-focus-topic' }],
+          ['200000000000000001', { streamId: 900, stream: 'immich-dev', topic: 'Crash on upload' }],
+          ['200000000000000002', { streamId: 900, stream: 'immich-dev', topic: 'a *b* @12' }],
+          ['200000000000000003', { streamId: 902, stream: 'odd>name', topic: 'x' }],
+        ]),
+      };
+      const dto = message({
+        content:
+          'see <#100000000000000001>, <#100000000000000002> and <#200000000000000001>: <#200000000000000002> <#200000000000000003> [<#200000000000000001>]',
+      });
+
+      expect(zulipMirrorContent('**contrib123**', toZulipMirrorBody(dto, linked), '')).toBe(
+        '**contrib123**: see #**immich-dev>**, #**immich-dev-focus-topic** and #**immich-dev>Crash on upload**: [#immich-dev > a *b* @12](#narrow/channel/900/topic/a.20.2Ab.2A.20.4012) [#odd>name > x](#narrow/channel/902/topic/x) &#91; #**immich-dev>Crash on upload**&#93;',
+      );
+    });
+
     it('should put a space before a mention Zulip would not render after the character before it', () => {
       expect(body('cc,<@222222222222222222> (<@222222222222222222>)')).toBe('cc, @**|8** (@**|8**)');
     });
 
-    it('should map custom emotes to the names emote sync gives them', () => {
-      expect(body('<:catJam:123456789012345678> <a:party_parrot_:123456789012345678>')).toBe(':catjam: :party_parrot:');
+    it('should link the image of an emote with no realm emoji, animated or not, under the name emote sync would give it', () => {
+      expect(body('<:catJam:123456789012345678> <a:party_parrot_:123456789012345678>')).toBe(
+        '[:catjam:](https://cdn.discordapp.com/emojis/123456789012345678.webp?size=48) [:party_parrot:](https://cdn.discordapp.com/emojis/123456789012345678.gif?size=48)',
+      );
+    });
+
+    it('should map an emote to the realm emoji the emote sync made of it, renamed or not', () => {
+      const emotes = { ...ctx, zulipEmojiByEmoteId: new Map([['123456789012345671', 'fire2']]) };
+      const dto = message({ content: '<:fire:123456789012345671> <:fire:123456789012345672>' });
+
+      expect(zulipMirrorContent('**x**', toZulipMirrorBody(dto, emotes), '')).toBe(
+        '**x**: :fire2: [:fire:](https://cdn.discordapp.com/emojis/123456789012345672.webp?size=48)',
+      );
     });
 
     it('should turn timestamps into Zulip times', () => {

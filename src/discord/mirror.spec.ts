@@ -1,12 +1,14 @@
 import { Logger } from '@nestjs/common';
 import { AnyThreadChannel, ChannelType, Collection, Message, TextBasedChannel } from 'discord.js';
 import { MetadataStorage } from 'discordx';
+import { Constants } from 'src/constants';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
-import { isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
+import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { MirrorService } from 'src/services/mirror.service';
 import { afterEach, beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
 
 vitest.mock('src/mirror/discord-message', () => ({
+  forumTagNames: vitest.fn(),
   isMirrorCandidate: vitest.fn(),
   mirrorLocation: vitest.fn(),
   toDiscordSourceMessage: vitest.fn(),
@@ -23,6 +25,7 @@ const thread = (overrides: Record<string, unknown> = {}) =>
     name: 'Crash',
     parentId: PARENT,
     type: ChannelType.PublicThread,
+    appliedTags: [],
     ...overrides,
   }) as unknown as AnyThreadChannel;
 
@@ -32,11 +35,14 @@ describe(DiscordMirrorEvents.name, () => {
     Pick<
       MirrorService,
       | 'handlesChannel'
+      | 'isOwnWebhook'
       | 'onDiscordMessage'
       | 'onDiscordMessageEdited'
       | 'onDiscordMessagesDeleted'
       | 'onDiscordThreadRenamed'
       | 'onDiscordThreadDeleted'
+      | 'onDiscordThreadTagsChanged'
+      | 'onDiscordReactionsChanged'
       | 'onDiscordReady'
       | 'onDiscordDisconnected'
       | 'onDiscordResumed'
@@ -47,16 +53,20 @@ describe(DiscordMirrorEvents.name, () => {
     vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mirror = {
       handlesChannel: vitest.fn((channelId: string) => channelId === PARENT),
+      isOwnWebhook: vitest.fn((webhookId: string) => webhookId === '700000000000000001'),
       onDiscordMessage: vitest.fn(),
       onDiscordMessageEdited: vitest.fn(),
       onDiscordMessagesDeleted: vitest.fn(),
       onDiscordThreadRenamed: vitest.fn(),
       onDiscordThreadDeleted: vitest.fn(),
+      onDiscordThreadTagsChanged: vitest.fn(),
+      onDiscordReactionsChanged: vitest.fn(),
       onDiscordReady: vitest.fn().mockResolvedValue(undefined),
       onDiscordDisconnected: vitest.fn(),
       onDiscordResumed: vitest.fn(),
     };
     vitest.mocked(isMirrorCandidate).mockReturnValue(true);
+    vitest.mocked(forumTagNames).mockReturnValue(undefined);
     vitest.mocked(mirrorLocation).mockReturnValue({ channelId: PARENT, threadId: THREAD, threadName: 'Crash' });
     vitest.mocked(toDiscordSourceMessage).mockReturnValue(dto as ReturnType<typeof toDiscordSourceMessage>);
     sut = new DiscordMirrorEvents(mirror as unknown as MirrorService);
@@ -75,6 +85,10 @@ describe(DiscordMirrorEvents.name, () => {
       messageUpdate: 0,
       messageDelete: 0,
       messageDeleteBulk: 0,
+      messageReactionAdd: 0,
+      messageReactionRemove: 0,
+      messageReactionRemoveAll: 0,
+      messageReactionRemoveEmoji: 0,
       threadUpdate: 0,
       threadDelete: 0,
       shardReady: Number.MAX_SAFE_INTEGER,
@@ -90,6 +104,8 @@ describe(DiscordMirrorEvents.name, () => {
 
     expect(mirrorLocation).toHaveBeenCalledWith(guildChannel);
     expect(mirror.onDiscordMessage).toHaveBeenCalledExactlyOnceWith(dto);
+    const isOwnWebhook = vitest.mocked(isMirrorCandidate).mock.calls[0][1];
+    expect([isOwnWebhook('700000000000000001'), isOwnWebhook('700000000000000002')]).toEqual([true, false]);
     expect(mirror.onDiscordMessageEdited).toHaveBeenCalledExactlyOnceWith(dto);
   });
 
@@ -138,6 +154,37 @@ describe(DiscordMirrorEvents.name, () => {
     expect(mirror.onDiscordMessagesDeleted).not.toHaveBeenCalled();
   });
 
+  describe('reactions', () => {
+    const BOT_USER = '500000000000000001';
+    const reacted = (overrides: Record<string, unknown> = {}) =>
+      ({
+        id: dto.id,
+        guildId: Constants.Discord.Servers[0],
+        channel: guildChannel,
+        client: { user: { id: BOT_USER } },
+        ...overrides,
+      }) as unknown as Message<true>;
+
+    it('should pass every change to the reactions of a message in a mirrored channel on', () => {
+      sut.onReactionAdd([{ message: reacted() }, { id: '400000000000000001' }] as never);
+      sut.onReactionRemove([{ message: reacted() }, { id: '400000000000000001' }] as never);
+      sut.onReactionRemoveAll([reacted(), new Collection()] as never);
+      sut.onReactionRemoveEmoji([{ message: reacted() }] as never);
+
+      expect(mirror.onDiscordReactionsChanged.mock.calls).toEqual(Array(4).fill([PARENT, dto.id]));
+    });
+
+    it.each([
+      ["the bot's own", [{ message: reacted() }, { id: BOT_USER }]],
+      ['one in another guild', [{ message: reacted({ guildId: '999' }) }, { id: '400000000000000001' }]],
+      ['one in an uncached channel', [{ message: reacted({ channel: null }) }, { id: '400000000000000001' }]],
+    ])('should drop %s reaction', (_, args) => {
+      sut.onReactionAdd(args as never);
+
+      expect(mirror.onDiscordReactionsChanged).not.toHaveBeenCalled();
+    });
+  });
+
   it('should pass a thread rename on', () => {
     sut.onThreadUpdate([thread(), thread({ name: 'Crash on start' })]);
 
@@ -156,6 +203,27 @@ describe(DiscordMirrorEvents.name, () => {
   ])('should ignore an update of a thread that %s', (_, overrides) => {
     sut.onThreadUpdate([thread(), thread(overrides)]);
 
+    expect(mirror.onDiscordThreadRenamed).not.toHaveBeenCalled();
+  });
+
+  it('should pass a change of the tags of a forum post on, by name', () => {
+    vitest.mocked(forumTagNames).mockReturnValue(['bug', 'mobile']);
+
+    sut.onThreadUpdate([thread({ appliedTags: ['1'] }), thread({ appliedTags: ['1', '2'] })]);
+    sut.onThreadUpdate([thread({ appliedTags: ['1'] }), thread({ appliedTags: ['1'] })]);
+
+    expect(mirror.onDiscordThreadTagsChanged).toHaveBeenCalledExactlyOnceWith({
+      channelId: PARENT,
+      threadId: THREAD,
+      tags: ['bug', 'mobile'],
+    });
+    expect(mirror.onDiscordThreadRenamed).not.toHaveBeenCalled();
+  });
+
+  it('should leave the tags of a thread outside a forum, and any archiving, alone', () => {
+    sut.onThreadUpdate([thread({ appliedTags: ['1'] }), thread({ appliedTags: ['2'], archived: true })]);
+
+    expect(mirror.onDiscordThreadTagsChanged).not.toHaveBeenCalled();
     expect(mirror.onDiscordThreadRenamed).not.toHaveBeenCalled();
   });
 

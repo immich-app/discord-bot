@@ -8,6 +8,7 @@ import {
   splitOutsideCode,
   toZulipQuote,
   ZULIP_MAX_MESSAGE_LENGTH,
+  zulipChannelNarrowLink,
 } from 'src/format';
 import { DiscordSourceMessage } from 'src/interfaces/discord-mirror.interface';
 import { stripBidiControls } from 'src/mirror/names';
@@ -16,7 +17,14 @@ import { toZulipEmojiName } from 'src/services/chat.service';
 export type DiscordRenderContext = {
   /** Verified team members only. */
   zulipUserByDiscordId: Map<string, number>;
+  /** The realm emoji the emote sync made of each Discord emote, by emote ID. */
+  zulipEmojiByEmoteId?: Map<string, string>;
+  /** The stream of each linked channel, with its main topic, and the stream and topic of each mirrored thread. */
+  zulipChannelByDiscordId?: Map<string, ZulipChannel>;
 };
+
+/** `topic` is left out for a forum, which has no main topic. */
+export type ZulipChannel = { streamId: number; stream: string; topic?: string };
 
 export type ZulipReplyTarget =
   | { origin: 'zulip'; zulipSenderId: number; link: string }
@@ -51,8 +59,9 @@ const URL_UNSAFE = /[\s`*$<>()[\]\\"']/g;
 
 const INLINE_ESCAPES = /[\\*_`~[\]()<>#@:$|!{}]/g;
 
-/** Zulip only renders `@**...**` after whitespace, a quote, an opening bracket, `/` or `<`. */
+/** Zulip only renders `@**...**` after whitespace, a quote, an opening bracket, `/` or `<`, and `#**...**` not after `[`. */
 const MENTION_ALLOWED_BEFORE = /[\s'"({[/<]/;
+const CHANNEL_LINK_ALLOWED_BEFORE = /[\s'"({/<]/;
 
 const BLOCK_START = /^(?:```|~~~|>|#|-|\*|\+|\d+[.)]|\||\t| {4})/;
 
@@ -63,7 +72,7 @@ const DISCORD_INLINE = new RegExp(
     String.raw`<@!?(?<user>\d+)>`,
     String.raw`<@&(?<role>\d+)>`,
     String.raw`<#(?<channel>\d+)>`,
-    String.raw`<a?:(?<emote>\w+):\d+>`,
+    String.raw`<(?<animated>a)?:(?<emote>\w+):(?<emoteId>\d+)>`,
     String.raw`<t:(?<unix>-?\d{1,13})(?::[tTdDfFR])?>`,
     String.raw`<\/(?<command>[^:<>\n]+):\d+>`,
   ].join('|'),
@@ -87,6 +96,15 @@ const safeLabel = (label: string) =>
 const zulipMention = (zulipUserId: number, silent: boolean) => protect(`@${silent ? '_' : ''}**|${zulipUserId}**`);
 
 const zulipLink = (label: string, url: string) => protect(`[${safeLabel(label)}](${safeUrl(url)})`);
+
+/** Zulip's `#**channel>topic**` cannot hold every name, so a name it cannot is linked by its narrow instead. */
+const zulipChannelLink = ({ streamId, stream, topic }: ZulipChannel) => {
+  const syntax = !/[*>\n]/.test(stream) && (topic === undefined || !/[*\n]|@\d+$/.test(topic));
+  if (syntax) {
+    return protect(`#**${stream}${topic === undefined ? '' : `>${topic}`}**`);
+  }
+  return zulipLink(topic ? `#${stream} > ${topic}` : `#${stream}`, zulipChannelNarrowLink(streamId, topic));
+};
 
 const DOMAIN = /(?:[a-z][\w+.-]*:\/\/)?((?:[a-z\d-]+\.)+[a-z]{2,})/gi;
 
@@ -167,10 +185,22 @@ const translateInline = (part: string, message: TranslatedMessage, ctx: DiscordR
       return `&#64;${escapeZulipInline(message.mentions.roles[groups.role] ?? 'unknown-role')}`;
     }
     if (groups.channel !== undefined) {
-      return `&#35;${escapeZulipInline(message.mentions.channels[groups.channel] ?? 'unknown-channel')}`;
+      const zulip = ctx.zulipChannelByDiscordId?.get(groups.channel);
+      return zulip
+        ? zulipChannelLink(zulip)
+        : `&#35;${escapeZulipInline(message.mentions.channels[groups.channel] ?? 'unknown-channel')}`;
     }
     if (groups.emote !== undefined) {
-      return `:${toZulipEmojiName(groups.emote)}:`;
+      const synced = ctx.zulipEmojiByEmoteId?.get(groups.emoteId!);
+      if (synced) {
+        return `:${synced}:`;
+      }
+      // An emote of a server that is not synced (a Nitro user's) has no realm emoji; Zulip previews its image instead.
+      const extension = groups.animated ? 'gif' : 'webp';
+      return zulipLink(
+        `:${toZulipEmojiName(groups.emote)}:`,
+        `https://cdn.discordapp.com/emojis/${groups.emoteId}.${extension}?size=48`,
+      );
     }
     if (groups.unix !== undefined) {
       const date = new Date(Number(groups.unix) * 1000);
@@ -245,6 +275,33 @@ export const toZulipMirrorBody = (dto: DiscordSourceMessage, ctx: DiscordRenderC
   if (dto.poll !== null) {
     parts.push(`*[poll: ${escapeZulipInline(dto.poll)}]*`);
   }
+  for (const embed of dto.embeds ?? []) {
+    const inline = (content: string) =>
+      translateMessage({ content, mentions: dto.mentions, pills: 'text' }, ctx)
+        .replaceAll(/\s*\n\s*/g, ' ')
+        .trim();
+    const lines: string[] = [];
+    if (embed.title) {
+      lines.push(
+        embed.url && /^https?:\/\//i.test(embed.url)
+          ? `**${zulipLink(embed.title, embed.url)}**`
+          : `**${escapeZulipInline(embed.title)}**`,
+      );
+    }
+    if (embed.description) {
+      lines.push(
+        closeFences(
+          translateMessage({ content: embed.description, mentions: dto.mentions, pills: 'text' }, ctx).trimEnd(),
+        ),
+      );
+    }
+    for (const { name, value } of embed.fields) {
+      lines.push(`**${escapeZulipInline(name)}:** ${inline(value)}`);
+    }
+    if (lines.length > 0) {
+      parts.push(toZulipQuote(lines.join('\n')));
+    }
+  }
   for (const content of dto.forwarded) {
     const forwarded = translateMessage({ content, mentions: dto.mentions, pills: 'silent' }, ctx).trimEnd();
     parts.push(forwarded.trim() ? `*[forwarded message]*\n${toZulipQuote(forwarded)}` : '*[forwarded message]*');
@@ -281,7 +338,9 @@ const replySuffix = (reply: ZulipReplyTarget, ctx: DiscordRenderContext, silent:
 export const zulipAuthorHeader = (dto: DiscordSourceMessage, ctx: ZulipHeaderContext) => {
   const zulipUserId = ctx.zulipUserByDiscordId.get(dto.author.id);
   let author: string;
-  if (zulipUserId === undefined) {
+  if (dto.author.bot) {
+    author = `**${escapeZulipInline(dto.author.displayName) || escapeZulipInline(dto.author.username) || 'unknown-bot'}** (bot)`;
+  } else if (zulipUserId === undefined) {
     const username = escapeZulipInline(dto.author.username) || 'unknown-user';
     const displayName = escapeZulipInline(dto.author.displayName);
     author =
@@ -295,6 +354,36 @@ export const zulipAuthorHeader = (dto: DiscordSourceMessage, ctx: ZulipHeaderCon
   const late = ctx.late ? ` · <time:${new Date(dto.createdTimestamp).toISOString()}>` : '';
   return `${author}${reply}${late}`;
 };
+
+/** `zulipLink` is the Zulip copy of the message a Discord thread was started from, if it has one. */
+export type ZulipThreadStarter = {
+  zulipLink: string | null;
+  jumpUrl: string;
+  authorName: string | null;
+  content: string;
+};
+
+/** The line that opens a Zulip topic made of a Discord thread started from a message, to put before its lead. */
+export const zulipThreadContext = (
+  { zulipLink: link, jumpUrl, authorName, content }: ZulipThreadStarter,
+  ctx: DiscordRenderContext,
+) => {
+  const by = authorName ? ` by ${bold(authorName)}` : '';
+  const line = `↪ Thread started from ${zulipLink('a message', link ?? jumpUrl)}${by}${link ? '' : ' on Discord'}`;
+  const snippet = toZulipReplySnippet(content, ctx);
+  return snippet.trim() ? `${line}:\n${toZulipQuote(snippet)}\n` : `${line}\n`;
+};
+
+const TAGS_LINE = /^\*\*Tags:\*\* [^\n]*\n/;
+
+/** The first line of the lead of a forum post's first message, which a change of tags rewrites. */
+export const withZulipTags = (lead: string, tags: string[]) => {
+  const line = tags.length > 0 ? `**Tags:** ${tags.map(escapeZulipInline).join(', ')}\n` : '';
+  return line + lead.replace(TAGS_LINE, '');
+};
+
+export const zulipTagsNotice = (tags: string[]) =>
+  `Tags changed: ${tags.length > 0 ? tags.map(escapeZulipInline).join(', ') : 'none'}`;
 
 export const zulipMirrorLead = (header: string, replySnippet: string | null) =>
   replySnippet ? `${header}:\n${toZulipQuote(replySnippet)}\n` : header;
@@ -324,9 +413,12 @@ const finalise = (content: string) =>
   mapOutsideCode(content, neutraliseUnprotected)
     .replaceAll(PROTECTED, (_match: string, payload: string, offset: number, whole: string) => {
       const before = whole[offset - 1];
-      return payload.startsWith('@') && before !== undefined && !MENTION_ALLOWED_BEFORE.test(before)
-        ? ` ${payload}`
-        : payload;
+      const allowed = payload.startsWith('@')
+        ? MENTION_ALLOWED_BEFORE
+        : payload.startsWith('#**')
+          ? CHANNEL_LINK_ALLOWED_BEFORE
+          : undefined;
+      return allowed && before !== undefined && !allowed.test(before) ? ` ${payload}` : payload;
     })
     .replaceAll(RESERVED, '');
 
@@ -349,7 +441,12 @@ export const zulipMirrorContent = (lead: string, body: string, attachments: stri
   }
 };
 
-export const discordSourceHash = (dto: Pick<DiscordSourceMessage, 'content' | 'stickers' | 'poll' | 'forwarded'>) =>
+/** Embeds count only when there are some, so the hash of every message without them stays what it was. */
+export const discordSourceHash = (
+  dto: Pick<DiscordSourceMessage, 'content' | 'stickers' | 'poll' | 'forwarded' | 'embeds'>,
+) =>
   createHash('sha256')
-    .update(JSON.stringify([dto.content, dto.stickers, dto.poll, dto.forwarded]))
+    .update(
+      JSON.stringify([dto.content, dto.stickers, dto.poll, dto.forwarded, ...(dto.embeds?.length ? [dto.embeds] : [])]),
+    )
     .digest('hex');

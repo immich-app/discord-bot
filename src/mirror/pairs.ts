@@ -1,5 +1,5 @@
 import { Constants } from 'src/constants';
-import { shortenCodePoints, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH } from 'src/format';
+import { ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH } from 'src/format';
 import { MirrorLink } from 'src/schema';
 
 export type EnabledPair = {
@@ -8,6 +8,7 @@ export type EnabledPair = {
   kind: 'text' | 'forum';
   discordChannelId: string;
   zulipStreamId: number;
+  /** `''` is the empty topic, Zulip's "general chat", and `null` a forum's absence of one. */
   mainTopic: string | null;
   /** Catch-up never reaches back past the moment the link was made. */
   linkedAt: number;
@@ -21,9 +22,6 @@ export const toEnabledPair = (link: MirrorLink): EnabledPair => ({
   mainTopic: link.kind === 'text' ? link.mainTopic : null,
   linkedAt: link.createdAt.getTime(),
 });
-
-export const defaultMainTopic = (channelName: string) =>
-  shortenCodePoints(`#${channelName}`, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH).trim();
 
 export const mainTopicProblem = (topic: string) =>
   topic.trim() === '' || topic.trim() !== topic || [...topic].length > ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH
