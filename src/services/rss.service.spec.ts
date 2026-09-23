@@ -1,10 +1,14 @@
+import { Logger } from '@nestjs/common';
 import { EmbedBuilder } from 'discord.js';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { FeedItem, IRSSInterface, PostItem } from 'src/interfaces/rss.interface';
+import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { RSSFeed } from 'src/schema';
+import { NotificationService } from 'src/services/notification.service';
 import { RSSService } from 'src/services/rss.service';
-import { Mocked, beforeEach, describe, expect, it, vitest } from 'vitest';
+import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const newDatabaseMock = (): Mocked<
   Pick<IDatabaseRepository, 'createRSSFeed' | 'getRSSFeeds' | 'removeRSSFeed' | 'updateRSSFeed'>
@@ -23,6 +27,38 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   setThreadArchived: vitest.fn(),
   createThread: vitest.fn(),
   updateThread: vitest.fn(),
+});
+
+const newMattermostMock = (): Mocked<IMattermostInterface> => ({
+  init: vitest.fn(),
+  registerEventListener: vitest.fn() as any,
+  send: vitest.fn(),
+  reply: vitest.fn(),
+  updatePost: vitest.fn(),
+  createEmote: vitest.fn(),
+  listEmoji: vitest.fn(),
+  streamChannels: vitest.fn(),
+  joinChannel: vitest.fn(),
+  registerCommand: vitest.fn() as any,
+  runCommand: vitest.fn(),
+  openDialog: vitest.fn(),
+  submitDialog: vitest.fn(),
+});
+
+const newZulipMock = (): Mocked<IZulipInterface> => ({
+  init: vitest.fn(),
+  isInitialised: vitest.fn().mockReturnValue(true),
+  sendMessage: vitest.fn().mockResolvedValue({ id: 1 }),
+  createEmote: vitest.fn(),
+  getMessage: vitest.fn(),
+  updateMessage: vitest.fn(),
+  listEmoji: vitest.fn(),
+  getSubscriptions: vitest.fn(),
+  getOwnUser: vitest.fn(),
+  getMessages: vitest.fn(),
+  registerQueue: vitest.fn(),
+  getEvents: vitest.fn(),
+  deleteQueue: vitest.fn(),
 });
 
 const newRSSMock = (): Mocked<IRSSInterface> => ({
@@ -46,6 +82,8 @@ const makePost = (id: string, overrides: Partial<PostItem> = {}): PostItem => ({
 const makeRow = (overrides: Partial<RSSFeed> = {}): RSSFeed => ({
   url,
   channelId,
+  service: 'discord',
+  topic: null,
   lastId: 'old',
   title: 'Immich Blog',
   profileImageUrl: 'https://immich.app/favicon.png',
@@ -56,6 +94,7 @@ describe(RSSService.name, () => {
   let sut: RSSService;
   let databaseMock: ReturnType<typeof newDatabaseMock>;
   let discordMock: Mocked<IDiscordInterface>;
+  let zulipMock: Mocked<IZulipInterface>;
   let rssMock: Mocked<IRSSInterface>;
 
   const sent = () => discordMock.sendMessage.mock.calls.map(([dto]) => JSON.parse(JSON.stringify(dto)));
@@ -74,8 +113,14 @@ describe(RSSService.name, () => {
   beforeEach(() => {
     databaseMock = newDatabaseMock();
     discordMock = newDiscordMock();
+    zulipMock = newZulipMock();
     rssMock = newRSSMock();
-    sut = new RSSService(databaseMock as unknown as IDatabaseRepository, discordMock, rssMock);
+    const notifications = new NotificationService(discordMock, newMattermostMock(), zulipMock);
+    sut = new RSSService(databaseMock as unknown as IDatabaseRepository, notifications, rssMock);
+  });
+
+  afterEach(() => {
+    vitest.restoreAllMocks();
   });
 
   describe('the Discord embed for a post', () => {
@@ -242,61 +287,116 @@ describe(RSSService.name, () => {
       expect(embed.author).toStrictEqual({ name: 'Immich Blog', url });
     });
 
-    it('should send an empty embed for a post with nothing but an ID from a feed with nothing', async () => {
+    it('should skip a post with nothing but an ID from a feed with nothing, which Discord would refuse as an empty embed, and store it as the last post', async () => {
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
       rssMock.getFeed.mockResolvedValue({ feed: {}, posts: [{ id: 'p1' }] });
 
       await sut.initFeed(url, channelId);
 
-      expect(sent()).toStrictEqual([{ channelId, message: { embeds: [{}] } }]);
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
+        `Skipping p1 of the RSS feed ${url}: it has nothing to post`,
+      );
       expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
         url,
         channelId,
+        service: 'discord',
         lastId: 'p1',
         profileImageUrl: undefined,
         title: undefined,
       });
     });
+
+    it('should send a post with nothing but an ID as the feed author alone, and store it as the last post', async () => {
+      rssMock.getFeed.mockResolvedValue({ feed, posts: [{ id: 'p1' }] });
+
+      await sut.initFeed(url, channelId);
+
+      expect(sent()).toStrictEqual([
+        {
+          channelId,
+          message: { embeds: [{ author: { name: 'Immich Blog', url, icon_url: 'https://immich.app/favicon.png' } }] },
+        },
+      ]);
+      expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
+        url,
+        channelId,
+        service: 'discord',
+        lastId: 'p1',
+        ...feed,
+      });
+    });
+
+    it('should send a post with nothing but an ID and a date from a feed with nothing as the timestamp alone', async () => {
+      rssMock.getFeed.mockResolvedValue({ feed: {}, posts: [{ id: 'p1', pubDate: 'Tue, 10 Jun 2025 09:30:00 GMT' }] });
+
+      await sut.initFeed(url, channelId);
+
+      expect(sent()).toStrictEqual([{ channelId, message: { embeds: [{ timestamp: '2025-06-10T09:30:00.000Z' }] } }]);
+    });
   });
 
-  describe('posts the embed builder refuses (current behaviour: the whole run rejects)', () => {
+  describe('posts the embed builder refuses, delivered with the bad field cut or dropped', () => {
+    const embed = {
+      author: { name: 'Immich Blog', icon_url: 'https://immich.app/favicon.png', url },
+      title: 'Post p1',
+      description: 'Summary of p1',
+      timestamp: '2025-06-10T09:30:00.000Z',
+      url: 'https://immich.app/blog/p1',
+    };
+    const without = (key: keyof typeof embed) => Object.fromEntries(Object.entries(embed).filter(([k]) => k !== key));
+    const [untitled, unlinked, undated] = [without('title'), without('url'), without('timestamp')];
+
     it.each([
-      ['a title over 256 characters', makePost('p1', { title: 't'.repeat(257) })],
-      ['an empty title', makePost('p1', { title: '' })],
-      ['a relative link', makePost('p1', { link: '/blog/p1' })],
-      ['an empty link', makePost('p1', { link: '' })],
-      ['a date that does not parse', makePost('p1', { pubDate: 'not a date' })],
-    ])('should reject a post with %s, sending and storing nothing', async (_, post) => {
+      [
+        'a title over 256 characters, cut to 256',
+        makePost('p1', { title: 't'.repeat(257) }),
+        { ...embed, title: 't'.repeat(253) + '...' },
+      ],
+      ['an empty title, without the title', makePost('p1', { title: '' }), untitled],
+      ['a relative link, without the link', makePost('p1', { link: '/blog/p1' }), unlinked],
+      ['an empty link, without the link', makePost('p1', { link: '' }), unlinked],
+      ['a date that does not parse, without the timestamp', makePost('p1', { pubDate: 'not a date' }), undated],
+    ])('should send a post with %s, and store it as the last post', async (_, post, expected) => {
       rssMock.getFeed.mockResolvedValue({ feed, posts: [post] });
 
-      await expect(sut.initFeed(url, channelId)).rejects.toThrow();
+      await sut.initFeed(url, channelId);
 
-      expect(discordMock.sendMessage).not.toHaveBeenCalled();
-      expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
+      expect(sentEmbeds()).toStrictEqual([[expected]]);
+      expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ lastId: 'p1' }));
     });
 
     it.each([
-      ['a title over 256 characters', { ...feed, title: 'f'.repeat(257) }],
-      ['an image URL that is not absolute', { ...feed, profileImageUrl: '/favicon.png' }],
-    ])('should reject a feed with %s, sending and storing nothing', async (_, fetchedFeed) => {
+      [
+        'a title over 256 characters, cut to 256',
+        { ...feed, title: 'f'.repeat(257) },
+        { ...embed, author: { ...embed.author, name: 'f'.repeat(253) + '...' } },
+      ],
+      [
+        'an image URL that is not absolute, without the icon',
+        { ...feed, profileImageUrl: '/favicon.png' },
+        { ...embed, author: { name: 'Immich Blog', url } },
+      ],
+    ])('should send a post of a feed with %s, and store it as the last post', async (_, fetchedFeed, expected) => {
       rssMock.getFeed.mockResolvedValue({ feed: fetchedFeed, posts: [makePost('p1')] });
 
-      await expect(sut.initFeed(url, channelId)).rejects.toThrow();
+      await sut.initFeed(url, channelId);
 
-      expect(discordMock.sendMessage).not.toHaveBeenCalled();
-      expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
+      expect(sentEmbeds()).toStrictEqual([[expected]]);
+      expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ lastId: 'p1' }));
     });
 
-    it('should stop a poll at the refused post, after sending the older ones and before storing a lastId', async () => {
+    it('should not stop a poll at a post the embed builder would refuse, sending every post and storing the newest', async () => {
       databaseMock.getRSSFeeds.mockResolvedValue([makeRow({ lastId: 'p0' })]);
       rssMock.getFeed.mockResolvedValue({
         feed,
         posts: [makePost('p3'), makePost('p2', { title: 't'.repeat(257) }), makePost('p1')],
       });
 
-      await expect(sut.onFeedUpdates()).rejects.toThrow();
+      await sut.onFeedUpdates();
 
-      expect(sentEmbeds().map(([embed]) => embed.title)).toEqual(['Post p1']);
-      expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
+      expect(sentEmbeds().map(([embed]) => embed.title)).toEqual(['Post p1', 't'.repeat(253) + '...', 'Post p3']);
+      expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ lastId: 'p3' }));
     });
   });
 
@@ -330,6 +430,7 @@ describe(RSSService.name, () => {
       expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
         url,
         channelId,
+        service: 'discord',
         lastId: 'p3',
         profileImageUrl: 'https://immich.app/favicon.png',
         title: 'Immich Blog',
@@ -345,13 +446,19 @@ describe(RSSService.name, () => {
 
       await sut.createRSSFeed(url, channelId);
 
-      expect(databaseMock.createRSSFeed).toHaveBeenCalledExactlyOnceWith({ url, channelId });
+      expect(databaseMock.createRSSFeed).toHaveBeenCalledExactlyOnceWith({
+        url,
+        channelId,
+        service: 'discord',
+        topic: null,
+      });
       expect(rssMock.getFeed).toHaveBeenCalledExactlyOnceWith(url, null);
       expect(sentEmbeds().map(([embed]) => embed.title)).toEqual(['Post p3']);
       expect(sent()[0].channelId).toBe(channelId);
       expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
         url,
         channelId,
+        service: 'discord',
         lastId: 'p3',
         profileImageUrl: 'https://immich.app/favicon.png',
         title: 'Immich Blog',
@@ -386,28 +493,39 @@ describe(RSSService.name, () => {
       expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
     });
 
-    it('should reject from createRSSFeed when the feed has no posts, leaving the stored row behind', async () => {
+    it('should reject from createRSSFeed when the feed has no posts, removing the row it stored', async () => {
       rssMock.getFeed.mockResolvedValue({ feed, posts: [] });
 
       await expect(sut.createRSSFeed(url, channelId)).rejects.toThrow(new Error(`Could not fetch posts from ${url}`));
 
-      expect(databaseMock.createRSSFeed).toHaveBeenCalledExactlyOnceWith({ url, channelId });
-      expect(databaseMock.removeRSSFeed).not.toHaveBeenCalled();
+      expect(databaseMock.createRSSFeed).toHaveBeenCalledExactlyOnceWith({
+        url,
+        channelId,
+        service: 'discord',
+        topic: null,
+      });
+      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, channelId, 'discord');
     });
 
-    it('should reject when the newest post cannot be sent, storing no lastId', async () => {
-      const error = new Error('Missing Access');
+    it('should reject when the newest post cannot be sent, storing no lastId and removing the row it stored', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       rssMock.getFeed.mockResolvedValue({ feed, posts: [makePost('p1')] });
-      discordMock.sendMessage.mockRejectedValue(error);
+      discordMock.sendMessage.mockRejectedValue(new Error('Missing Access'));
 
-      await expect(sut.createRSSFeed(url, channelId)).rejects.toBe(error);
+      await expect(sut.createRSSFeed(url, channelId)).rejects.toThrow(
+        new Error(`Could not post the newest post of ${url}`),
+      );
 
       expect(databaseMock.createRSSFeed).toHaveBeenCalledOnce();
       expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
-      expect(databaseMock.removeRSSFeed).not.toHaveBeenCalled();
+      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, channelId, 'discord');
+      expect(Logger.prototype.error).toHaveBeenCalledWith(
+        `Could not notify channel ${channelId} on discord: Error: Missing Access`,
+        expect.any(String),
+      );
     });
 
-    it('should reject when the feed cannot be fetched, leaving the stored row behind', async () => {
+    it('should reject when the feed cannot be fetched, removing the row it stored', async () => {
       const error = new Error('Status code 404');
       rssMock.getFeed.mockRejectedValue(error);
 
@@ -415,7 +533,20 @@ describe(RSSService.name, () => {
 
       expect(databaseMock.createRSSFeed).toHaveBeenCalledOnce();
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
-      expect(databaseMock.removeRSSFeed).not.toHaveBeenCalled();
+      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, channelId, 'discord');
+    });
+
+    it('should keep the original failure when the row it stored cannot be removed either', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      const error = new Error('Status code 404');
+      rssMock.getFeed.mockRejectedValue(error);
+      databaseMock.removeRSSFeed.mockRejectedValue(new Error('connection terminated'));
+
+      await expect(sut.createRSSFeed(url, channelId)).rejects.toBe(error);
+
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        `Could not remove the RSS feed ${url} it failed to add: Error: connection terminated`,
+      );
     });
 
     it('should not fetch or send anything when the row cannot be stored', async () => {
@@ -426,6 +557,14 @@ describe(RSSService.name, () => {
 
       expect(rssMock.getFeed).not.toHaveBeenCalled();
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should not remove a row it did not store', async () => {
+      databaseMock.createRSSFeed.mockRejectedValue(new Error('duplicate key value violates unique constraint'));
+
+      await expect(sut.createRSSFeed(url, channelId)).rejects.toThrow();
+
+      expect(databaseMock.removeRSSFeed).not.toHaveBeenCalled();
     });
   });
 
@@ -476,9 +615,9 @@ describe(RSSService.name, () => {
         url: other,
       });
       expect(databaseMock.updateRSSFeed.mock.calls).toEqual([
-        [{ url, channelId: 'channel-1', lastId: 'a2', ...feed }],
-        [{ url: other, channelId: 'channel-2', lastId: 'r2', ...releases }],
-        [{ url, channelId: 'channel-3', lastId: 'a2', ...feed }],
+        [{ url, channelId: 'channel-1', service: 'discord', lastId: 'a2', ...feed }],
+        [{ url: other, channelId: 'channel-2', service: 'discord', lastId: 'r2', ...releases }],
+        [{ url, channelId: 'channel-3', service: 'discord', lastId: 'a2', ...feed }],
       ]);
     });
 
@@ -513,6 +652,7 @@ describe(RSSService.name, () => {
       expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
         url,
         channelId,
+        service: 'discord',
         lastId: 'p1',
         ...fetchedFeed,
       });
@@ -528,6 +668,7 @@ describe(RSSService.name, () => {
       expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
         url,
         channelId,
+        service: 'discord',
         lastId: undefined,
         profileImageUrl: 'https://immich.app/favicon.png',
         title: 'Immich Blog',
@@ -546,7 +687,8 @@ describe(RSSService.name, () => {
       expect(sentEmbeds().map(([embed]) => embed.title)).toEqual(['Post p1', 'Post p2', 'Post p3']);
     });
 
-    it('should reject at a feed that cannot be fetched, leaving the feeds after it unpolled', async () => {
+    it('should log a feed that cannot be fetched with its URL and poll the feeds after it', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       const error = new Error('Status code 503');
       databaseMock.getRSSFeeds.mockResolvedValue([
         makeRow({ channelId: 'channel-1' }),
@@ -558,14 +700,22 @@ describe(RSSService.name, () => {
         .mockRejectedValueOnce(error)
         .mockResolvedValueOnce({ feed, posts: [makePost('p1')] });
 
-      await expect(sut.onFeedUpdates()).rejects.toBe(error);
+      await expect(sut.onFeedUpdates()).resolves.toBeUndefined();
 
-      expect(rssMock.getFeed).toHaveBeenCalledTimes(2);
-      expect(sent().map(({ channelId }) => channelId)).toEqual(['channel-1']);
-      expect(databaseMock.updateRSSFeed.mock.calls.map(([{ channelId }]) => channelId)).toEqual(['channel-1']);
+      expect(rssMock.getFeed).toHaveBeenCalledTimes(3);
+      expect(sent().map(({ channelId }) => channelId)).toEqual(['channel-1', 'channel-3']);
+      expect(databaseMock.updateRSSFeed.mock.calls.map(([{ channelId }]) => channelId)).toEqual([
+        'channel-1',
+        'channel-3',
+      ]);
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        `Could not update the RSS feed ${url} in discord channel channel-2: Error: Status code 503`,
+      );
     });
 
-    it('should reject at a post that cannot be sent, storing nothing for that feed and polling no further feed', async () => {
+    it('should stop a feed at a post that cannot be sent, store the post before it, and poll the feeds after it', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
       const error = new Error('Missing Access');
       databaseMock.getRSSFeeds.mockResolvedValue([
         makeRow({ channelId: 'channel-1', lastId: 'p0' }),
@@ -574,11 +724,23 @@ describe(RSSService.name, () => {
       rssMock.getFeed.mockResolvedValue({ feed, posts: [makePost('p3'), makePost('p2'), makePost('p1')] });
       discordMock.sendMessage.mockResolvedValueOnce(undefined).mockRejectedValueOnce(error);
 
-      await expect(sut.onFeedUpdates()).rejects.toBe(error);
+      await expect(sut.onFeedUpdates()).resolves.toBeUndefined();
 
-      expect(sentEmbeds().map(([embed]) => embed.title)).toEqual(['Post p1', 'Post p2']);
-      expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
-      expect(rssMock.getFeed).toHaveBeenCalledOnce();
+      expect(sent().map(({ channelId, message }) => [channelId, message.embeds[0].title])).toEqual([
+        ['channel-1', 'Post p1'],
+        ['channel-1', 'Post p2'],
+        ['channel-2', 'Post p1'],
+        ['channel-2', 'Post p2'],
+        ['channel-2', 'Post p3'],
+      ]);
+      expect(databaseMock.updateRSSFeed.mock.calls).toEqual([
+        [{ url, channelId: 'channel-1', service: 'discord', lastId: 'p1', ...feed }],
+        [{ url, channelId: 'channel-2', service: 'discord', lastId: 'p3', ...feed }],
+      ]);
+      expect(rssMock.getFeed).toHaveBeenCalledTimes(2);
+      expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
+        `Could not post p2 of the RSS feed ${url}; it is retried on the next poll`,
+      );
     });
   });
 
@@ -586,7 +748,7 @@ describe(RSSService.name, () => {
     it('should remove the row for that URL and channel, and do nothing else', async () => {
       await sut.removeRSSFeed(url, channelId);
 
-      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, channelId);
+      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, channelId, 'discord');
       expect(databaseMock.getRSSFeeds).not.toHaveBeenCalled();
       expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
       expect(rssMock.getFeed).not.toHaveBeenCalled();
@@ -613,7 +775,7 @@ describe(RSSService.name, () => {
 
       const result = await sut.searchRSSFeeds('', channelId);
 
-      expect(databaseMock.getRSSFeeds).toHaveBeenCalledExactlyOnceWith(channelId);
+      expect(databaseMock.getRSSFeeds).toHaveBeenCalledExactlyOnceWith({ channelId, service: 'discord' });
       expect('https://example.com/exactly-forty-chars.').toHaveLength(40);
       expect(result).toStrictEqual([
         { name: 'https://example.com/a/very/long/path/...', value: long },
@@ -637,7 +799,7 @@ describe(RSSService.name, () => {
       await expect(sut.searchRSSFeeds('nothing matches', channelId)).resolves.toStrictEqual([]);
     });
 
-    it('should return more than 25 feeds, uncapped (bug B4, which Phase 4c fixes on purpose)', async () => {
+    it('should return at most 25 feeds, the most Discord accepts in an autocomplete response', async () => {
       databaseMock.getRSSFeeds.mockResolvedValue(
         Array.from({ length: 30 }, (_, i) => makeRow({ url: `https://example.com/${i}.xml` })),
       );
@@ -645,9 +807,132 @@ describe(RSSService.name, () => {
       const all = await sut.searchRSSFeeds('', channelId);
       const filtered = await sut.searchRSSFeeds('example', channelId);
 
-      expect(all).toHaveLength(30);
-      expect(filtered).toHaveLength(30);
-      expect(all.at(-1)).toStrictEqual({ name: 'https://example.com/29.xml', value: 'https://example.com/29.xml' });
+      expect(all).toHaveLength(25);
+      expect(filtered).toHaveLength(25);
+      expect(all.at(-1)).toStrictEqual({ name: 'https://example.com/24.xml', value: 'https://example.com/24.xml' });
+    });
+
+    it('should cap the feeds that match the query, not the feeds before filtering', async () => {
+      databaseMock.getRSSFeeds.mockResolvedValue([
+        ...Array.from({ length: 30 }, (_, i) => makeRow({ url: `https://example.com/${i}.xml` })),
+        makeRow({ url }),
+      ]);
+
+      await expect(sut.searchRSSFeeds('immich', channelId)).resolves.toStrictEqual([{ name: url, value: url }]);
+    });
+  });
+
+  describe('zulip feeds', () => {
+    const zulipRow = (overrides: Partial<RSSFeed> = {}) =>
+      makeRow({ channelId: '107', service: 'zulip', topic: 'blog', lastId: 'p0', ...overrides });
+
+    const expected = [
+      '**[Post p1](https://immich.app/blog/p1)** — [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+      '~~~ quote',
+      'Summary of p1',
+      '~~~',
+    ].join('\n');
+
+    it('should store the feed for the stream and topic, then post the newest post there and store its ID', async () => {
+      rssMock.getFeed.mockResolvedValue({ feed, posts: [makePost('p1')] });
+
+      await sut.createZulipRSSFeed(url, 107, 'blog');
+
+      expect(databaseMock.createRSSFeed).toHaveBeenCalledExactlyOnceWith({
+        url,
+        channelId: '107',
+        service: 'zulip',
+        topic: 'blog',
+      });
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({ stream: 107, topic: 'blog', content: expected });
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith({
+        url,
+        channelId: '107',
+        service: 'zulip',
+        lastId: 'p1',
+        ...feed,
+      });
+    });
+
+    it('should post a post whose link was dropped with its title unlinked, and an untitled post labelled with its link', async () => {
+      databaseMock.getRSSFeeds.mockResolvedValue([zulipRow()]);
+      rssMock.getFeed.mockResolvedValue({
+        feed,
+        posts: [makePost('p2', { title: '', summary: '' }), makePost('p1', { link: '/blog/p1', summary: '' })],
+      });
+
+      await sut.onFeedUpdates();
+
+      expect(zulipMock.sendMessage.mock.calls.map(([{ content }]) => content)).toEqual([
+        '**Post p1** — [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+        '**[https://immich.app/blog/p2](https://immich.app/blog/p2)** — [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+      ]);
+    });
+
+    it('should post a post with nothing but an ID and a date as the feed author and the date', async () => {
+      databaseMock.getRSSFeeds.mockResolvedValue([zulipRow()]);
+      rssMock.getFeed.mockResolvedValue({ feed, posts: [{ id: 'p1', pubDate: 'Tue, 10 Jun 2025 09:30:00 GMT' }] });
+
+      await sut.onFeedUpdates();
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 107,
+        topic: 'blog',
+        content: '— [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+      });
+    });
+
+    it('should remove the Zulip row it stored when the newest post cannot be posted', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      rssMock.getFeed.mockResolvedValue({ feed, posts: [makePost('p1')] });
+      zulipMock.sendMessage.mockRejectedValue(new Error('stream does not exist'));
+
+      await expect(sut.createZulipRSSFeed(url, 107, 'blog')).rejects.toThrow(
+        `Could not post the newest post of ${url}`,
+      );
+
+      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, '107', 'zulip');
+      expect(databaseMock.updateRSSFeed).not.toHaveBeenCalled();
+    });
+
+    it('should poll a Zulip row into its stream and topic, and store its lastId on that row', async () => {
+      databaseMock.getRSSFeeds.mockResolvedValue([zulipRow(), makeRow({ lastId: 'p0' })]);
+      rssMock.getFeed.mockResolvedValue({ feed, posts: [makePost('p1')] });
+
+      await sut.onFeedUpdates();
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({ stream: 107, topic: 'blog', content: expected });
+      expect(discordMock.sendMessage).toHaveBeenCalledOnce();
+      expect(databaseMock.updateRSSFeed.mock.calls).toEqual([
+        [{ url, channelId: '107', service: 'zulip', lastId: 'p1', ...feed }],
+        [{ url, channelId, service: 'discord', lastId: 'p1', ...feed }],
+      ]);
+    });
+
+    it('should keep the lastId of a Zulip row while Zulip is not configured, so its posts wait for it', async () => {
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      zulipMock.isInitialised.mockReturnValue(false);
+      databaseMock.getRSSFeeds.mockResolvedValue([zulipRow()]);
+      rssMock.getFeed.mockResolvedValue({ feed, posts: [makePost('p2'), makePost('p1')] });
+
+      await sut.onFeedUpdates();
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(databaseMock.updateRSSFeed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ lastId: undefined }),
+      );
+    });
+
+    it('should list and remove the Zulip feeds of a stream only', async () => {
+      databaseMock.getRSSFeeds.mockResolvedValue([zulipRow()]);
+      databaseMock.removeRSSFeed.mockResolvedValue(true);
+
+      await expect(sut.getZulipRSSFeeds(107)).resolves.toEqual([zulipRow()]);
+      await expect(sut.removeZulipRSSFeed(url, 107)).resolves.toBe(true);
+
+      expect(databaseMock.getRSSFeeds).toHaveBeenCalledExactlyOnceWith({ channelId: '107', service: 'zulip' });
+      expect(databaseMock.removeRSSFeed).toHaveBeenCalledExactlyOnceWith(url, '107', 'zulip');
     });
   });
 });

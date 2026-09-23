@@ -24,7 +24,10 @@ export class ScheduledMessageTable {
   name!: string;
 
   @Column({ default: 'discord', primary: true })
-  service!: 'discord' | 'mattermost';
+  service!: 'discord' | 'mattermost' | 'zulip';
+
+  @Column({ nullable: true })
+  topic!: string | null;
 
   @CreateDateColumn()
   createdAt!: Generated<Date>;

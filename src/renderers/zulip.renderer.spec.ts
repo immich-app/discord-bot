@@ -505,4 +505,70 @@ describe('toZulipMessage', () => {
       });
     });
   });
+
+  describe('rss', () => {
+    const post = {
+      kind: 'rss' as const,
+      author: { name: 'Immich Blog', url: 'https://immich.app/blog/rss.xml' },
+      title: 'Immich v2.0.0',
+      url: 'https://immich.app/blog/v2',
+      body: 'Summary',
+      timestamp: '2025-06-10T09:30:00.000Z',
+    };
+
+    it("should render the post title linked, the feed, the time in every reader's zone and the quoted summary", () => {
+      expect(toZulipMessage(post)).toBe(
+        [
+          '**[Immich v2.0.0](https://immich.app/blog/v2)** — [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+          '~~~ quote',
+          'Summary',
+          '~~~',
+        ].join('\n'),
+      );
+    });
+
+    it('should label a post without a title with its own link, and leave out a missing time', () => {
+      expect(toZulipMessage({ ...post, title: '', timestamp: undefined, body: undefined })).toBe(
+        '**[https://immich.app/blog/v2](https://immich.app/blog/v2)** — [Immich Blog](https://immich.app/blog/rss.xml)',
+      );
+    });
+
+    it('should render the title of a post without a link unlinked', () => {
+      expect(toZulipMessage({ ...post, url: undefined, body: undefined })).toBe(
+        '**Immich v2.0.0** — [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+      );
+    });
+
+    it('should leave the title out of a post with neither a title nor a link, without an empty first line', () => {
+      expect(toZulipMessage({ ...post, title: '', url: undefined, body: undefined })).toBe(
+        '— [Immich Blog](https://immich.app/blog/rss.xml) · <time:2025-06-10T09:30:00.000Z>',
+      );
+      expect(toZulipMessage({ kind: 'rss', title: '', body: 'Summary' })).toBe('~~~ quote\nSummary\n~~~');
+    });
+
+    it('should never render a timestamp on another kind', () => {
+      expect(toZulipMessage({ kind: 'feed', title: 'T', url: 'https://x', timestamp: post.timestamp })).toBe(
+        '**[T](https://x)**',
+      );
+    });
+
+    it('should keep a link that holds parentheses or whitespace inside its link, where it can mention nobody', () => {
+      const url = 'https://evil.example/a) @**all** (b\nc';
+      expect(toZulipMessage({ ...post, url, body: undefined, timestamp: undefined })).toBe(
+        '**[Immich v2.0.0](https://evil.example/a%29%20@**all**%20%28b%0Ac)** — [Immich Blog](https://immich.app/blog/rss.xml)',
+      );
+      expect(
+        toZulipMessage({
+          ...post,
+          author: { name: 'Blog', url },
+          url,
+          title: '',
+          body: undefined,
+          timestamp: undefined,
+        }),
+      ).toBe(
+        '**[https://evil.example/a%29%20@\u200B**all**%20%28b%0Ac](https://evil.example/a%29%20@**all**%20%28b%0Ac)** — [Blog](https://evil.example/a%29%20@**all**%20%28b%0Ac)',
+      );
+    });
+  });
 });

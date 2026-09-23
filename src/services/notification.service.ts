@@ -2,13 +2,16 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { NotificationDestination, NotificationRoute, NotificationRoutes } from 'src/constants';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
-import { Notification } from 'src/interfaces/notification.interface';
+import { Notification, NotificationTarget } from 'src/interfaces/notification.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { toDiscordEmbed } from 'src/renderers/discord.renderer';
 import { toMattermostBlock } from 'src/renderers/mattermost.renderer';
 import { toZulipMessage } from 'src/renderers/zulip.renderer';
 
 type Platform = keyof NotificationRoute;
+type DiscordRoute = NonNullable<NotificationRoute['discord']>;
+type MattermostRoute = NonNullable<NotificationRoute['mattermost']>;
+type ZulipRoute = NonNullable<NotificationRoute['zulip']>;
 
 /**
  * The one place a notification meets a platform. Services describe an event as a `Notification` and
@@ -35,27 +38,15 @@ export class NotificationService {
     const delivered: boolean[] = [];
 
     if (discord) {
-      const render = () => ({
-        channelId: discord.channelId,
-        message: { embeds: [toDiscordEmbed(notification)] },
-        ...(discord.crosspost ? { crosspost: true } : {}),
-      });
-      delivered.push(await this.deliver(destination, 'discord', render, (dto) => this.discord.sendMessage(dto)));
+      delivered.push(await this.toDiscord(destination, notification, discord));
     }
 
     if (mattermost) {
-      const render = () => ({
-        channelId: mattermost.channelId,
-        message: '',
-        ...(mattermost.silent ? { silent: true } : {}),
-        props: { mm_blocks: [toMattermostBlock(notification)] },
-      });
-      delivered.push(await this.deliver(destination, 'mattermost', render, (post) => this.mattermost.send(post)));
+      delivered.push(await this.toMattermost(destination, notification, mattermost));
     }
 
     if (zulip && this.zulip.isInitialised()) {
-      const render = () => ({ stream: zulip.stream, topic: zulip.topic, content: toZulipMessage(notification) });
-      delivered.push(await this.deliver(destination, 'zulip', render, (payload) => this.zulip.sendMessage(payload)));
+      delivered.push(await this.toZulip(destination, notification, zulip));
     }
 
     if (delivered.length > 0 && !delivered.includes(true)) {
@@ -63,20 +54,67 @@ export class NotificationService {
     }
   }
 
+  async notifyTarget(target: NotificationTarget, notification: Notification): Promise<boolean> {
+    switch (target.platform) {
+      case 'discord': {
+        return this.toDiscord(`channel ${target.channelId}`, notification, target);
+      }
+      case 'mattermost': {
+        return this.toMattermost(`channel ${target.channelId}`, notification, target);
+      }
+      case 'zulip': {
+        const label = `stream ${target.stream}, topic "${target.topic}"`;
+        return this.zulip.isInitialised() && this.toZulip(label, notification, target);
+      }
+    }
+  }
+
+  private toDiscord(label: string, notification: Notification, { channelId, crosspost }: DiscordRoute) {
+    const render = () => ({
+      channelId,
+      message: { embeds: [toDiscordEmbed(notification)] },
+      ...(crosspost ? { crosspost: true } : {}),
+    });
+    return this.deliver(label, 'discord', render, (dto) => this.discord.sendMessage(dto));
+  }
+
+  private toMattermost(label: string, notification: Notification, { channelId, silent }: MattermostRoute) {
+    const render = () => ({
+      channelId,
+      message: '',
+      ...(silent ? { silent: true } : {}),
+      props: { mm_blocks: [toMattermostBlock(notification)] },
+    });
+    return this.deliver(label, 'mattermost', render, (post) => this.mattermost.send(post));
+  }
+
+  private toZulip(label: string, notification: Notification, { stream, topic }: ZulipRoute) {
+    const render = () => ({ stream, topic, content: toZulipMessage(notification) });
+    return this.deliver(label, 'zulip', render, (payload) => this.zulip.sendMessage(payload));
+  }
+
   /** Only the send is isolated: a renderer error is a bug and must propagate, not be logged as an outage. */
-  private async deliver<T>(
-    destination: NotificationDestination,
-    platform: Platform,
-    render: () => T,
-    send: (payload: T) => Promise<unknown>,
-  ) {
+  private async deliver<T>(label: string, platform: Platform, render: () => T, send: (payload: T) => Promise<unknown>) {
     const payload = render();
     try {
       await send(payload);
       return true;
     } catch (error) {
-      this.logger.error(`Could not notify ${destination} on ${platform}: ${error}`, (error as Error)?.stack);
+      this.logger.error(`Could not notify ${label} on ${platform}: ${error}`, (error as Error)?.stack);
       return false;
     }
   }
 }
+
+export const toNotificationTarget = ({
+  service,
+  channelId,
+  topic,
+}: {
+  service: Platform;
+  channelId: string;
+  topic: string | null;
+}): NotificationTarget =>
+  service === 'zulip'
+    ? { platform: 'zulip', stream: Number(channelId), topic: topic ?? '' }
+    : { platform: service, channelId };

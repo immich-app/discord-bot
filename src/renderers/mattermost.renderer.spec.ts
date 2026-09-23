@@ -170,4 +170,26 @@ describe('toMattermostBlock', () => {
   it('should leave the accent colour unset without an accent', () => {
     expect(toMattermostBlock({ kind: 'alert', title: 'Title' })).toHaveProperty('accent_color', undefined);
   });
+
+  it('should render an rss post like a feed item', () => {
+    const post = {
+      author: { name: 'Immich Blog', url: 'https://x/rss.xml', iconUrl: '' },
+      title: 'T',
+      url: 'https://x/1',
+      body: 'B',
+    };
+    expect(toMattermostBlock({ kind: 'rss', ...post, timestamp: '2025-06-10T09:30:00.000Z' })).toEqual(
+      toMattermostBlock({ kind: 'feed', ...post }),
+    );
+  });
+
+  it('should label an rss post without a title with its link, and leave a post without a link unlinked', () => {
+    const titleOf = (post: { title: string; url?: string }) =>
+      (toMattermostBlock({ kind: 'rss', ...post }).content as Array<{ text: string } | undefined>).flatMap((block) =>
+        block ? [block.text] : [],
+      );
+    expect(titleOf({ title: '', url: 'https://x/1' })).toEqual(['##### [https://x/1](https://x/1)']);
+    expect(titleOf({ title: 'T' })).toEqual(['##### T']);
+    expect(titleOf({ title: '' })).toEqual([]);
+  });
 });
