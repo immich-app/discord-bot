@@ -282,7 +282,7 @@ describe('ZulipService', () => {
       zulipMock.getOwnUser.mockResolvedValue({ userId: 7, fullName: 'Immich' });
       zulipMock.registerQueue.mockResolvedValue({
         queue: { queueId: 'q1', lastEventId: -1 },
-        streams: Object.values(Constants.Zulip.TeamStreams).map((streamId) => ({ streamId, isPrivate: true })),
+        subscribedStreamIds: [Constants.Zulip.Streams.Immich, ...Object.values(Constants.Zulip.TeamStreams)],
       });
       zulipMock.getEvents.mockImplementation(() => new Promise((resolve) => (endPoll = () => resolve([]))));
       zulipMock.deleteQueue.mockImplementation(async () => endPoll());
@@ -398,8 +398,7 @@ describe('ZulipService', () => {
     const HANDLER_TIMEOUT_MS = 30_000;
     const SHUTDOWN_GRACE_MS = 5000;
     const UNHEALTHY_STREAK = 10;
-    const LISTENING_STREAMS = Object.values(Constants.Zulip.TeamStreams);
-    const asPrivate = (streamIds: number[]) => streamIds.map((streamId) => ({ streamId, isPrivate: true }));
+    const LISTENING_STREAMS = [Constants.Zulip.Streams.Immich, ...Object.values(Constants.Zulip.TeamStreams)];
     const badQueue = () => new ZulipApiError(400, 'BAD_EVENT_QUEUE_ID', 'Bad event queue ID: q1', 'GET /events');
     const outage = () => new ZulipApiError(502, 'UNKNOWN_ERROR', 'Bad Gateway', 'GET /events');
     const timeout = () => new DOMException('The operation was aborted due to timeout', 'TimeoutError');
@@ -446,7 +445,7 @@ describe('ZulipService', () => {
       zulipMock.getOwnUser.mockResolvedValue({ userId: OWN_USER_ID, fullName: 'Immich' });
       zulipMock.registerQueue.mockImplementation(async () => ({
         queue: { queueId: `q${++registered}`, lastEventId: -1 },
-        streams: asPrivate(LISTENING_STREAMS),
+        subscribedStreamIds: LISTENING_STREAMS,
       }));
       zulipMock.deleteQueue.mockResolvedValue();
       zulipMock.getEvents.mockImplementation(
@@ -523,9 +522,8 @@ describe('ZulipService', () => {
     });
 
     describe('listening streams', () => {
-      it('should listen in the four team streams and not in the notification digest', () => {
-        expect(LISTENING_STREAMS).toEqual([107, 109, 110, 112]);
-        expect(LISTENING_STREAMS).not.toContain(Constants.Zulip.Streams.ImmichThirdParties);
+      it('should listen in #Immich and every immich team stream', () => {
+        expect(LISTENING_STREAMS).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
       });
 
       it('should stay quiet when the queue carries every listening stream', async () => {
@@ -538,7 +536,7 @@ describe('ZulipService', () => {
       it('should warn, naming the stream, for each listening stream the queue cannot see, and poll all the same', async () => {
         zulipMock.registerQueue.mockResolvedValue({
           queue: { queueId: 'q1', lastEventId: -1 },
-          streams: asPrivate([107, 112]),
+          subscribedStreamIds: LISTENING_STREAMS.filter((streamId) => streamId !== 109 && streamId !== 110),
         });
 
         await sut.init();
@@ -556,22 +554,24 @@ describe('ZulipService', () => {
       });
 
       it('should check again at every registration, so a subscription added since is confirmed', async () => {
-        zulipMock.registerQueue.mockResolvedValueOnce({ queue: { queueId: 'q1', lastEventId: -1 }, streams: [] });
+        zulipMock.registerQueue.mockResolvedValueOnce({
+          queue: { queueId: 'q1', lastEventId: -1 },
+          subscribedStreamIds: [],
+        });
 
         await sut.init();
         await flush();
-        expect(Logger.prototype.warn).toHaveBeenCalledTimes(4);
+        expect(Logger.prototype.warn).toHaveBeenCalledTimes(LISTENING_STREAMS.length);
 
         polls[0].reject(badQueue());
         await nextPoll();
 
         expect(zulipMock.registerQueue).toHaveBeenCalledTimes(2);
-        expect(Logger.prototype.warn).toHaveBeenCalledTimes(4);
+        expect(Logger.prototype.warn).toHaveBeenCalledTimes(LISTENING_STREAMS.length);
         expect(polls).toHaveLength(2);
       });
 
       it('should check every stream the command router listens in too', async () => {
-        expect(Constants.Zulip.Commands).toEqual(LISTENING_STREAMS);
         const commands = Constants.Zulip.Commands;
         commands.push(998);
         try {
@@ -600,105 +600,6 @@ describe('ZulipService', () => {
         expect(Logger.prototype.warn).toHaveBeenCalledWith(
           'The Zulip bot is not subscribed to stream 999: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it',
         );
-      });
-    });
-
-    describe('stream privacy', () => {
-      const notPrivate = (streamId: number) =>
-        `The Zulip bot is allowlisted to expand GitHub references in stream ${streamId} (${Object.entries(Constants.Zulip.TeamStreams).find(([, id]) => id === streamId)?.[0]}), but the server does not report that stream as private: private repository titles and code would leak, so nothing is expanded there until the stream is made private or removed from Constants.Zulip.Expanders.GithubReferences`;
-
-      it('should call no stream private before the first registration', () => {
-        for (const streamId of LISTENING_STREAMS) {
-          expect(sut.isPrivateStream(streamId)).toBe(false);
-        }
-      });
-
-      it('should call every listening stream private, and log nothing, when the server reports each as private', async () => {
-        await sut.init();
-        await flush();
-
-        for (const streamId of LISTENING_STREAMS) {
-          expect(sut.isPrivateStream(streamId)).toBe(true);
-        }
-        expect(sut.isPrivateStream(Constants.Zulip.Streams.ImmichThirdParties)).toBe(false);
-        expect(Logger.prototype.error).not.toHaveBeenCalled();
-        expect(Logger.prototype.warn).not.toHaveBeenCalled();
-      });
-
-      it('should log an error, naming the stream, for an allowlisted stream the server does not report as private, and refuse to call it private', async () => {
-        zulipMock.registerQueue.mockResolvedValue({
-          queue: { queueId: 'q1', lastEventId: -1 },
-          streams: [{ streamId: 107, isPrivate: false }, ...asPrivate([109, 110, 112])],
-        });
-
-        await sut.init();
-        await flush();
-
-        expect(sut.isPrivateStream(107)).toBe(false);
-        expect(sut.isPrivateStream(109)).toBe(true);
-        expect(Logger.prototype.error).toHaveBeenCalledOnce();
-        expect(Logger.prototype.error).toHaveBeenCalledWith(notPrivate(107));
-        expect(Logger.prototype.warn).not.toHaveBeenCalled();
-        expect(polls).toHaveLength(1);
-      });
-
-      it('should call no stream private when the server reported no subscriptions, and say so for each as unsubscribed only', async () => {
-        zulipMock.registerQueue.mockResolvedValue({ queue: { queueId: 'q1', lastEventId: -1 }, streams: [] });
-
-        await sut.init();
-        await flush();
-
-        for (const streamId of LISTENING_STREAMS) {
-          expect(sut.isPrivateStream(streamId)).toBe(false);
-        }
-        expect(Logger.prototype.warn).toHaveBeenCalledTimes(4);
-        expect(Logger.prototype.error).not.toHaveBeenCalled();
-      });
-
-      it('should learn privacy again at every registration, in both directions', async () => {
-        zulipMock.registerQueue
-          .mockResolvedValueOnce({
-            queue: { queueId: 'q1', lastEventId: -1 },
-            streams: [{ streamId: 107, isPrivate: false }, ...asPrivate([109, 110, 112])],
-          })
-          .mockResolvedValueOnce({
-            queue: { queueId: 'q2', lastEventId: -1 },
-            streams: [{ streamId: 109, isPrivate: false }, ...asPrivate([107, 110, 112])],
-          });
-
-        await sut.init();
-        await flush();
-        expect(sut.isPrivateStream(107)).toBe(false);
-        expect(sut.isPrivateStream(109)).toBe(true);
-
-        polls[0].reject(badQueue());
-        await nextPoll();
-
-        expect(sut.isPrivateStream(107)).toBe(true);
-        expect(sut.isPrivateStream(109)).toBe(false);
-        expect(Logger.prototype.error).toHaveBeenCalledTimes(2);
-        expect(Logger.prototype.error).toHaveBeenLastCalledWith(notPrivate(109));
-      });
-
-      it('should log an error for a stream the command router listens in that the server does not report as private', async () => {
-        const commands = Constants.Zulip.Commands;
-        commands.push(998);
-        zulipMock.registerQueue.mockResolvedValue({
-          queue: { queueId: 'q1', lastEventId: -1 },
-          streams: [{ streamId: 998, isPrivate: false }, ...asPrivate(LISTENING_STREAMS)],
-        });
-        try {
-          await sut.init();
-          await flush();
-        } finally {
-          commands.pop();
-        }
-
-        expect(sut.isPrivateStream(998)).toBe(false);
-        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
-          'The Zulip bot takes commands in stream 998, but the server does not report that stream as private: anyone in the realm could drive it, so no command is taken there until the stream is made private or removed from Constants.Zulip.Commands',
-        );
-        expect(Logger.prototype.warn).not.toHaveBeenCalled();
       });
     });
 
@@ -1277,7 +1178,7 @@ describe('ZulipService', () => {
         expect(settled).toBe(false);
         expect(zulipMock.deleteQueue).not.toHaveBeenCalled();
 
-        register({ queue: { queueId: 'q2', lastEventId: -1 }, streams: asPrivate(LISTENING_STREAMS) });
+        register({ queue: { queueId: 'q2', lastEventId: -1 }, subscribedStreamIds: LISTENING_STREAMS });
         await destroyed;
 
         expect(zulipMock.deleteQueue).toHaveBeenCalledOnce();

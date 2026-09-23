@@ -5,7 +5,7 @@ import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.inte
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
-import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
+import { ZulipService, isBotSender } from 'src/services/zulip.service';
 
 /** Zulip's default `max_message_length`, in code points: the server refuses a longer message. */
 const MAX_MESSAGE_LENGTH = 10_000;
@@ -214,13 +214,6 @@ export class ZulipCommandService {
     if (parsed.status === 'ignored') {
       return;
     }
-    if (!this.zulipService.isPrivateStream(streamId)) {
-      this.logger.warn(
-        `Ignoring a command in Zulip stream ${describeZulipStream(streamId)}: it is allowlisted, but the server does not report it as private, and membership of a private team stream is the only authorisation a command has`,
-      );
-      return;
-    }
-
     const reply = await this.answer({ ...message, streamId }, parsed);
     if (reply === undefined) {
       return;

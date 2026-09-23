@@ -56,12 +56,6 @@ export const describeZulipStream = (streamId: number) => {
 
 const listeningStreams = () =>
   new Set([...Object.values(Constants.Zulip.Expanders).flat(), ...Constants.Zulip.Commands]);
-const privilegedStreams = () => new Set([...Constants.Zulip.Expanders.GithubReferences, ...Constants.Zulip.Commands]);
-
-const notPrivate = (streamId: number) =>
-  Constants.Zulip.Expanders.GithubReferences.includes(streamId)
-    ? `The Zulip bot is allowlisted to expand GitHub references in stream ${describeZulipStream(streamId)}, but the server does not report that stream as private: private repository titles and code would leak, so nothing is expanded there until the stream is made private or removed from Constants.Zulip.Expanders.GithubReferences`
-    : `The Zulip bot takes commands in stream ${describeZulipStream(streamId)}, but the server does not report that stream as private: anyone in the realm could drive it, so no command is taken there until the stream is made private or removed from Constants.Zulip.Commands`;
 
 @Injectable()
 export class ZulipService implements OnModuleDestroy {
@@ -69,7 +63,6 @@ export class ZulipService implements OnModuleDestroy {
   private handlers: ZulipMessageHandler[] = [];
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
-  private privateStreams = new Set<number>();
   private self?: ZulipUser;
   private loop?: { promise: Promise<void>; controller: AbortController };
 
@@ -89,10 +82,6 @@ export class ZulipService implements OnModuleDestroy {
 
   onMessage(handler: ZulipMessageHandler) {
     this.handlers.push(handler);
-  }
-
-  isPrivateStream(streamId: number) {
-    return this.privateStreams.has(streamId);
   }
 
   get ownUser(): ZulipUser | undefined {
@@ -203,22 +192,16 @@ export class ZulipService implements OnModuleDestroy {
   }
 
   private async registerQueueNow() {
-    const { queue, streams } = await this.zulip.registerQueue();
+    const { queue, subscribedStreamIds } = await this.zulip.registerQueue();
     // Set here, not only by the loop's own assignment, so that a shutdown waiting on this registration finds it.
     this.queue = queue;
     this.logger.log(`Registered Zulip event queue ${queue.queueId}`);
-    const subscribed = new Set(streams.map(({ streamId }) => streamId));
-    this.privateStreams = new Set(streams.filter(({ isPrivate }) => isPrivate).map(({ streamId }) => streamId));
+    const subscribed = new Set(subscribedStreamIds);
     for (const streamId of listeningStreams()) {
       if (!subscribed.has(streamId)) {
         this.logger.warn(
           `The Zulip bot is not subscribed to stream ${describeZulipStream(streamId)}: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it`,
         );
-      }
-    }
-    for (const streamId of privilegedStreams()) {
-      if (subscribed.has(streamId) && !this.privateStreams.has(streamId)) {
-        this.logger.error(notPrivate(streamId));
       }
     }
     return queue;

@@ -16,7 +16,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
-import { ZulipService, describeZulipStream } from 'src/services/zulip.service';
+import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
@@ -191,17 +191,11 @@ ${messageParts.join('\n')}`,
 
     const parts: string[] = [];
     if (Constants.Zulip.Expanders.GithubReferences.includes(streamId)) {
-      if (this.zulipService.isPrivateStream(streamId)) {
-        // Snippets are not neutralised: Zulip renders no mention inside a code fence,
-        // and a zero-width space would corrupt the code.
-        const snippets = await this.handleGithubFileReferences(content, true);
-        const links = await this.handleGithubThreadReferences({ content }, true);
-        parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
-      } else {
-        this.logger.warn(
-          `Not expanding GitHub references in Zulip stream ${describeZulipStream(streamId)}: it is allowlisted, but the server does not report it as private, and the expander would show private repository titles and code there`,
-        );
-      }
+      // Snippets are not neutralised: Zulip renders no mention inside a code fence,
+      // and a zero-width space would corrupt the code.
+      const snippets = await this.handleGithubFileReferences(content, true);
+      const links = await this.handleGithubThreadReferences({ content }, true);
+      parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
     }
     if (Constants.Zulip.Expanders.TwitterMirror.includes(streamId)) {
       parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));

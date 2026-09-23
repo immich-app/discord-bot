@@ -137,11 +137,10 @@ export class ZulipRepository implements IZulipInterface {
       this.clients.events = createZulipClient({ ...this.botIdentity, timeoutMs: longpollTimeoutMs(timeoutSeconds) });
     }
 
-    // Unknown privacy counts as public: the expanders show private repository details on the strength of this flag.
     return {
       queue: { queueId: data.queue_id, lastEventId: data.last_event_id ?? -1 },
-      streams: (data.subscriptions ?? []).flatMap(({ stream_id, invite_only }) =>
-        stream_id === undefined ? [] : [{ streamId: stream_id, isPrivate: invite_only === true }],
+      subscribedStreamIds: (data.subscriptions ?? []).flatMap(({ stream_id }) =>
+        stream_id === undefined ? [] : [stream_id],
       ),
     };
   }
