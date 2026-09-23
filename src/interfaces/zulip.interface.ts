@@ -32,16 +32,63 @@ export type ZulipReceivedMessage = {
   id: number;
   senderId: number;
   senderEmail: string;
+  senderFullName: string;
   type: 'stream' | 'private';
   streamId?: number;
   topic: string;
   content: string;
+  /** Seconds since the epoch. */
+  timestamp: number;
+  /** Set once the message has been moved to another topic or stream. */
+  movedAt?: number;
 };
 
-export type ZulipMessageEvent = { id: number; type: 'message'; message: ZulipReceivedMessage };
+export type ZulipMessageUpdated = {
+  /** `null` for an update the server made itself, such as a link preview. */
+  userId: number | null;
+  renderingOnly: boolean;
+  messageId: number;
+  messageIds: number[];
+  streamId?: number;
+  newStreamId?: number;
+  origTopic?: string;
+  topic?: string;
+  propagateMode?: 'change_one' | 'change_later' | 'change_all';
+  content?: string;
+};
+
+export type ZulipMessagesDeleted = { messageIds: number[]; streamId?: number; topic?: string };
+
+export type ZulipMessageEvent = {
+  id: number;
+  type: 'message';
+  message: ZulipReceivedMessage;
+  update?: undefined;
+  deletion?: undefined;
+};
+
+export type ZulipUpdateEvent = {
+  id: number;
+  type: 'update_message';
+  update: ZulipMessageUpdated;
+  message?: undefined;
+  deletion?: undefined;
+};
+
+export type ZulipDeleteEvent = {
+  id: number;
+  type: 'delete_message';
+  deletion: ZulipMessagesDeleted;
+  message?: undefined;
+  update?: undefined;
+};
 
 /** Zulip also sends `heartbeat` events; the loop must acknowledge every event's ID, whatever its type. */
-export type ZulipEvent = ZulipMessageEvent | { id: number; type: string; message?: undefined };
+export type ZulipEvent =
+  | ZulipMessageEvent
+  | ZulipUpdateEvent
+  | ZulipDeleteEvent
+  | { id: number; type: string; message?: undefined; update?: undefined; deletion?: undefined };
 
 export interface IZulipInterface {
   init(config: ZulipConfig): Promise<void>;

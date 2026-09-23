@@ -1,4 +1,4 @@
-import type { components } from 'src/generated/zulip';
+import type { components, paths } from 'src/generated/zulip';
 import {
   IZulipInterface,
   MessagePayload,
@@ -28,6 +28,9 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/webp': 'webp',
   'image/jpeg': 'jpg',
 };
+
+/** Typed as empty by the generated types, but the server requires `notification_settings_null`, false by default. */
+const CLIENT_CAPABILITIES: unknown = { notification_settings_null: false, bulk_message_deletion: true };
 
 type Clients = { bot: ZulipClient; user: ZulipClient; events: ZulipClient };
 
@@ -170,7 +173,12 @@ export class ZulipRepository implements IZulipInterface {
 
   async registerQueue(): Promise<ZulipQueueRegistration> {
     const { data } = await this.bot.POST('/register', {
-      body: { event_types: ['message'], apply_markdown: false, fetch_event_types: ['subscription'] },
+      body: {
+        event_types: ['message', 'update_message', 'delete_message'],
+        apply_markdown: false,
+        client_capabilities: CLIENT_CAPABILITIES as Record<string, never>,
+        fetch_event_types: ['subscription'],
+      },
     });
     if (!data?.queue_id) {
       throw new Error('Zulip registered no event queue');
@@ -222,22 +230,55 @@ export class ZulipRepository implements IZulipInterface {
   }
 }
 
-type RawEvent = { id?: number; type?: string; message?: components['schemas']['MessagesEvent'] };
+type RawEvent = NonNullable<paths['/events']['get']['responses'][200]['content']['application/json']['events']>[number];
 
 const toReceivedMessage = (message: components['schemas']['MessagesBase']): ZulipReceivedMessage => ({
   id: message.id ?? -1,
   senderId: message.sender_id ?? -1,
   senderEmail: message.sender_email ?? '',
+  senderFullName: message.sender_full_name ?? '',
   type: message.type === 'private' ? 'private' : 'stream',
   streamId: message.stream_id,
   topic: message.subject ?? '',
   content: message.content ?? '',
+  timestamp: message.timestamp ?? 0,
+  movedAt: message.last_moved_timestamp,
 });
 
 const toEvent = (event: RawEvent): ZulipEvent => {
   const id = event.id ?? -1;
-  if (event.type !== 'message' || !event.message) {
-    return { id, type: event.type ?? 'unknown' };
+  if (event.type === 'message' && event.message) {
+    return { id, type: 'message', message: toReceivedMessage(event.message) };
   }
-  return { id, type: 'message', message: toReceivedMessage(event.message) };
+  if (event.type === 'update_message') {
+    return {
+      id,
+      type: 'update_message',
+      update: {
+        userId: event.user_id,
+        renderingOnly: event.rendering_only,
+        messageId: event.message_id,
+        messageIds: event.message_ids,
+        streamId: event.stream_id,
+        newStreamId: event.new_stream_id,
+        origTopic: event.orig_subject,
+        topic: event.subject,
+        propagateMode: event.propagate_mode,
+        content: event.content,
+      },
+    };
+  }
+  if (event.type === 'delete_message') {
+    const { message_ids, message_id } = event;
+    return {
+      id,
+      type: 'delete_message',
+      deletion: {
+        messageIds: message_ids ?? (message_id === undefined ? [] : [message_id]),
+        streamId: event.stream_id,
+        topic: event.topic,
+      },
+    };
+  }
+  return { id, type: event.type ?? 'unknown' };
 };

@@ -346,20 +346,25 @@ describe('ZulipRepository', () => {
               id: 490,
               sender_id: 12,
               sender_email: 'alice@example.com',
+              sender_full_name: 'Alice',
               type: 'stream',
               stream_id: 107,
               subject: 'deploy',
               content: 'the thumbnails crash',
+              timestamp: 1_700_000_000,
+              last_moved_timestamp: 1_700_000_500,
               flags: ['read'],
             },
             {
               id: 500,
               sender_id: 12,
               sender_email: 'alice@example.com',
+              sender_full_name: 'Alice',
               type: 'stream',
               stream_id: 107,
               subject: 'deploy',
               content: '@**Immich** similar',
+              timestamp: 1_700_000_100,
               flags: ['mentioned'],
             },
           ],
@@ -371,19 +376,25 @@ describe('ZulipRepository', () => {
           id: 490,
           senderId: 12,
           senderEmail: 'alice@example.com',
+          senderFullName: 'Alice',
           type: 'stream',
           streamId: 107,
           topic: 'deploy',
           content: 'the thumbnails crash',
+          timestamp: 1_700_000_000,
+          movedAt: 1_700_000_500,
         },
         {
           id: 500,
           senderId: 12,
           senderEmail: 'alice@example.com',
+          senderFullName: 'Alice',
           type: 'stream',
           streamId: 107,
           topic: 'deploy',
           content: '@**Immich** similar',
+          timestamp: 1_700_000_100,
+          movedAt: undefined,
         },
       ]);
 
@@ -430,7 +441,7 @@ describe('ZulipRepository', () => {
       await sut.init(config);
     });
 
-    it('should register a queue for message events only, as raw markdown, and return its ID, cursor and subscribed streams', async () => {
+    it('should register a queue for messages, their edits and bulk deletions, as raw markdown, and return its ID, cursor and subscribed streams', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
@@ -456,7 +467,7 @@ describe('ZulipRepository', () => {
       expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
       expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
       expect(await request(0).text()).toBe(
-        'event_types=%5B%22message%22%5D&apply_markdown=false&fetch_event_types=%5B%22subscription%22%5D',
+        'event_types=%5B%22message%22%2C%22update_message%22%2C%22delete_message%22%5D&apply_markdown=false&client_capabilities=%7B%22notification_settings_null%22%3Afalse%2C%22bulk_message_deletion%22%3Atrue%7D&fetch_event_types=%5B%22subscription%22%5D',
       );
     });
 
@@ -475,6 +486,16 @@ describe('ZulipRepository', () => {
       await sut.registerQueue();
 
       expect(await request(0).text()).not.toContain('all_public_streams');
+    });
+
+    it('should keep the empty topic and avatars in the form every handler has always seen', async () => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '', queue_id: 'q1', last_event_id: -1 }));
+
+      await sut.registerQueue();
+
+      const body = await request(0).text();
+      expect(body).not.toContain('empty_topic_name');
+      expect(body).not.toContain('client_gravatar');
     });
 
     it('should throw when the server registers no queue', async () => {
@@ -552,10 +573,13 @@ describe('ZulipRepository', () => {
             id: 500,
             senderId: 12,
             senderEmail: 'alice@example.com',
+            senderFullName: 'Alice',
             type: 'stream',
             streamId: 107,
             topic: 'thumbnails',
             content: 'see #4242',
+            timestamp: 1_700_000_000,
+            movedAt: undefined,
           },
         },
         {
@@ -565,12 +589,149 @@ describe('ZulipRepository', () => {
             id: 501,
             senderId: 12,
             senderEmail: '',
+            senderFullName: '',
             type: 'private',
             streamId: undefined,
             topic: '',
             content: 'hi',
+            timestamp: 0,
+            movedAt: undefined,
           },
         },
+      ]);
+    });
+
+    it('should return an edit, a move and a preview with the fields a handler needs', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          events: [
+            {
+              id: 6,
+              type: 'update_message',
+              user_id: 12,
+              rendering_only: false,
+              message_id: 500,
+              message_ids: [500],
+              flags: [],
+              edit_timestamp: 1_700_000_100,
+              stream_id: 107,
+              orig_content: 'see #4242',
+              content: 'see #4243',
+              rendered_content: '<p>see #4243</p>',
+              is_me_message: false,
+            },
+            {
+              id: 7,
+              type: 'update_message',
+              user_id: 13,
+              rendering_only: false,
+              message_id: 500,
+              message_ids: [498, 500, 502],
+              flags: [],
+              edit_timestamp: 1_700_000_200,
+              stream_id: 107,
+              new_stream_id: 108,
+              propagate_mode: 'change_all',
+              orig_subject: 'thumbnails',
+              subject: '✔ thumbnails',
+              topic_links: [],
+            },
+            {
+              id: 8,
+              type: 'update_message',
+              user_id: null,
+              rendering_only: true,
+              message_id: 500,
+              message_ids: [500],
+              flags: [],
+              edit_timestamp: 1_700_000_300,
+              content: 'see https://example.com',
+              rendered_content: '<p>preview</p>',
+            },
+          ],
+        }),
+      );
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live())).resolves.toEqual([
+        {
+          id: 6,
+          type: 'update_message',
+          update: {
+            userId: 12,
+            renderingOnly: false,
+            messageId: 500,
+            messageIds: [500],
+            streamId: 107,
+            newStreamId: undefined,
+            origTopic: undefined,
+            topic: undefined,
+            propagateMode: undefined,
+            content: 'see #4243',
+          },
+        },
+        {
+          id: 7,
+          type: 'update_message',
+          update: {
+            userId: 13,
+            renderingOnly: false,
+            messageId: 500,
+            messageIds: [498, 500, 502],
+            streamId: 107,
+            newStreamId: 108,
+            origTopic: 'thumbnails',
+            topic: '✔ thumbnails',
+            propagateMode: 'change_all',
+            content: undefined,
+          },
+        },
+        {
+          id: 8,
+          type: 'update_message',
+          update: {
+            userId: null,
+            renderingOnly: true,
+            messageId: 500,
+            messageIds: [500],
+            streamId: undefined,
+            newStreamId: undefined,
+            origTopic: undefined,
+            topic: undefined,
+            propagateMode: undefined,
+            content: 'see https://example.com',
+          },
+        },
+      ]);
+    });
+
+    it('should return a deletion as a list of IDs, whether it came in bulk or for one message', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          events: [
+            {
+              id: 9,
+              type: 'delete_message',
+              message_type: 'stream',
+              message_ids: [500, 501],
+              stream_id: 107,
+              topic: 'x',
+            },
+            { id: 10, type: 'delete_message', message_type: 'stream', message_id: 502, stream_id: 107, topic: 'y' },
+            { id: 11, type: 'delete_message', message_type: 'private', message_ids: [503] },
+            { id: 12, type: 'delete_message', message_type: 'private' },
+          ],
+        }),
+      );
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live())).resolves.toEqual([
+        { id: 9, type: 'delete_message', deletion: { messageIds: [500, 501], streamId: 107, topic: 'x' } },
+        { id: 10, type: 'delete_message', deletion: { messageIds: [502], streamId: 107, topic: 'y' } },
+        { id: 11, type: 'delete_message', deletion: { messageIds: [503], streamId: undefined, topic: undefined } },
+        { id: 12, type: 'delete_message', deletion: { messageIds: [], streamId: undefined, topic: undefined } },
       ]);
     });
 

@@ -1624,10 +1624,12 @@ describe('Bot test', () => {
     id: 900,
     senderId: 12,
     senderEmail: 'alice@example.com',
+    senderFullName: 'Alice',
     type: 'stream',
     streamId: Constants.Zulip.TeamStreams.ImmichGeneral,
     topic: 'thumbnails',
     content: 'hello',
+    timestamp: 1_700_000_000,
     ...overrides,
   });
 
