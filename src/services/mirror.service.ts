@@ -865,7 +865,7 @@ export class MirrorService implements OnModuleDestroy {
       for (const emote of (await this.discordMirror.getEmotes(guildId)) ?? []) {
         const name = toZulipEmojiName(emote.name ?? '');
         if (!byName.has(name)) {
-          byName.set(name, `<${emote.identifier}>`);
+          byName.set(name, emote.animated ? `<${emote.identifier}>` : `<:${emote.identifier}>`);
         }
       }
     } catch (error) {

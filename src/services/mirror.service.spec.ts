@@ -950,12 +950,13 @@ describe(MirrorService.name, () => {
     it('should resolve unicode and custom emoji', async () => {
       discord.getEmotes.mockResolvedValue([
         { identifier: 'PartyParrot:500000000000000001', name: 'PartyParrot', url: 'x', animated: false },
+        { identifier: 'a:Dance:500000000000000002', name: 'Dance', url: 'y', animated: true },
       ]);
 
-      await fromZulip(zulipMessage({ content: 'nice :smile: :partyparrot: :unknown:' }));
+      await fromZulip(zulipMessage({ content: 'nice :smile: :partyparrot: :dance: :unknown:' }));
       await fromZulip(zulipMessage({ id: 1002, content: ':smile:' }));
 
-      expect(sent(0).content).toBe('nice 😄 <PartyParrot:500000000000000001> :unknown:');
+      expect(sent(0).content).toBe('nice 😄 <:PartyParrot:500000000000000001> <a:Dance:500000000000000002> :unknown:');
       expect(zulip.getEmojiCodes).toHaveBeenCalledOnce();
       expect(discord.getEmotes).toHaveBeenCalledOnce();
     });
