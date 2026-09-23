@@ -5,11 +5,14 @@ import {
   DiscordLinkUpdate,
   DiscordMessage,
   MirrorConversation,
+  MirrorIdentity,
+  MirrorLink,
   MirrorMessage,
   NewDiscordLink,
   NewDiscordMessage,
   NewFourthwallOrder,
   NewMirrorConversation,
+  NewMirrorLink,
   NewMirrorMessage,
   NewPayment,
   NewPullRequest,
@@ -30,6 +33,8 @@ import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 export const IDatabaseRepository = 'IDatabaseRepository';
 
 export type MirrorMessageQuery = { withDeleted?: boolean };
+
+export type MirrorIdentityOwner = { zulipUserId: number } | { discordUserId: string };
 
 export type ReportOptions = {
   day?: DateTime;
@@ -100,4 +105,14 @@ export interface IDatabaseRepository {
    * (length("discordMessageId"), "discordMessageId").
    */
   getMirrorDiscordHighWater(discordChannelId: string, discordThreadId: string | null): Promise<string | undefined>;
+  getMirrorLinks(): Promise<MirrorLink[]>;
+  createMirrorLink(entity: NewMirrorLink): Promise<MirrorLink>;
+  setMirrorLinkAnnouncement(discordChannelId: string, discordAnnouncementId: string | null): Promise<void>;
+  /** Resolves to the removed link, `undefined` when there was none. */
+  removeMirrorLink(discordChannelId: string): Promise<MirrorLink | undefined>;
+  getMirrorIdentities(): Promise<MirrorIdentity[]>;
+  /** Replaces any identity either user had; resolves to the ones it replaced. */
+  setMirrorIdentity(zulipUserId: number, discordUserId: string): Promise<MirrorIdentity[]>;
+  /** Resolves to the removed identity, `undefined` when there was none. */
+  removeMirrorIdentity(owner: MirrorIdentityOwner): Promise<MirrorIdentity | undefined>;
 }

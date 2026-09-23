@@ -10,104 +10,30 @@ import {
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
+import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mirror-link.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
+import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
 const SIMILAR_LOOKBACK = 10;
 const ECHO_LENGTH = 80;
 const ERROR_LENGTH = 300;
 const SCHEDULE_ECHO_LENGTH = 80;
 
-/** Straight and curly double quotes: a phone keyboard curls the quotes around `text="two words"`. */
-const QUOTES = new Set(['"', '“', '”']);
-
 const BOTH_PLATFORMS: BackfillPlatforms = { discord: true, zulip: true };
 
 const SUPPRESS_EMBEDS_IGNORED =
   '`suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message';
 
+/** Zulip's roles are ordered: 100 is an owner, 200 an administrator. */
+const ZULIP_ADMINISTRATOR_ROLE = 200;
+
+const NOT_AN_ADMINISTRATOR =
+  'Only Zulip organization administrators and owners can change or list the Discord-Zulip mirror.';
+
 const EMOTE_SYNC_SERVER = `the ${Constants.Discord.EmoteSyncServer.name} Discord server (${Constants.Discord.EmoteSyncServer.id})`;
-
-export type ParsedCommand = { name: string; tokens: string[] };
-
-export type Arguments = { args: string[]; options: Record<string, string> };
-
-export type ParseResult =
-  { status: 'ignored' } | { status: 'malformed'; reason: string } | { status: 'ok'; command: ParsedCommand };
-
-export const tokenize = (text: string): string[] | undefined => {
-  const tokens: string[] = [];
-  let current = '';
-  let started = false;
-  let quoted = false;
-  for (const char of text) {
-    if (QUOTES.has(char)) {
-      quoted = !quoted;
-      started = true;
-    } else if (!quoted && /\s/.test(char)) {
-      if (started) {
-        tokens.push(current);
-        current = '';
-        started = false;
-      }
-    } else {
-      current += char;
-      started = true;
-    }
-  }
-  if (quoted) {
-    return undefined;
-  }
-  if (started) {
-    tokens.push(current);
-  }
-  return tokens;
-};
-
-const escapeRegExp = (text: string) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-
-/** Only newlines may precede the mention: a line indented by four spaces or a tab is a Markdown code block, which must not run a command. */
-const mentionOf = (botName: string) => new RegExp(String.raw`^[\r\n]*@_?\*\*${escapeRegExp(botName)}(\|\d+)?\*\*`, 'i');
-
-/** Zulip's "Quote and reply" starts with a silent mention of the quoted author, so a reply quoting the bot is not a command. */
-const QUOTE_AND_REPLY = /^\s*\[said\]\(/;
-
-const OPTION = /^([A-Za-z][\w-]*)=(.*)$/s;
-
-export const parseCommand = (content: string, botName: string): ParseResult => {
-  // Without a name there is nothing to mention: `@****` must not read as one.
-  const mention = botName && content.match(mentionOf(botName));
-  if (!mention) {
-    return { status: 'ignored' };
-  }
-  const after = content.slice(mention[0].length);
-  if (QUOTE_AND_REPLY.test(after)) {
-    return { status: 'ignored' };
-  }
-  const tokens = tokenize(after);
-  if (!tokens) {
-    return { status: 'malformed', reason: 'a quote is opened and never closed' };
-  }
-  const [name = '', ...rest] = tokens;
-  return { status: 'ok', command: { name: name.toLowerCase(), tokens: rest } };
-};
-
-export const splitArguments = (tokens: string[], keys: string[]): Arguments => {
-  const args: string[] = [];
-  const options: Record<string, string> = {};
-  for (const token of tokens) {
-    const option = token.match(OPTION);
-    const key = option?.[1].toLowerCase();
-    if (option && key !== undefined && keys.includes(key)) {
-      options[key] = option[2];
-    } else {
-      args.push(token);
-    }
-  }
-  return { args, options };
-};
 
 /** Whitespace is collapsed because a newline in typed text would let it add Markdown structure in the bot's own voice. */
 const code = (text: string) => `\`${neutraliseZulipMentions(text.replaceAll('`', '').replaceAll(/\s+/g, ' '))}\``;
@@ -147,6 +73,8 @@ type Command = {
   description: string;
   positionals: number;
   options: string[];
+  /** Taken in any stream, from organization administrators and owners only. */
+  administrators?: true;
   run: (context: CommandContext) => Promise<string | undefined>;
 };
 
@@ -245,6 +173,39 @@ export class ZulipCommandService {
       options: [],
       run: ({ message }) => this.rssList(message),
     },
+    'mirror-link': {
+      usage: 'mirror-link [topic=<main topic>]',
+      description:
+        "start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, `#channel-name` by default) holds the channel's own messages",
+      positionals: 0,
+      options: ['topic'],
+      administrators: true,
+      run: (context) => this.mirrorLink(context),
+    },
+    'mirror-unlink': {
+      usage: 'mirror-unlink',
+      description: 'stop mirroring this stream with its Discord channel, and announce it on both sides',
+      positionals: 0,
+      options: [],
+      administrators: true,
+      run: ({ message }) => this.mirrorUnlink(message),
+    },
+    'mirror-list': {
+      usage: 'mirror-list',
+      description: 'list the mirrored channels and streams, and the linked accounts',
+      positionals: 0,
+      options: [],
+      administrators: true,
+      run: () => this.mirrorLinks.list('zulip'),
+    },
+    'discord-unlink': {
+      usage: 'discord-unlink',
+      description:
+        'unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
+      positionals: 0,
+      options: [],
+      run: ({ message }) => this.mirrorLinks.unlinkIdentity({ zulipUserId: message.senderId }, 'zulip'),
+    },
     similar: {
       usage: 'similar [text]',
       description:
@@ -263,16 +224,24 @@ export class ZulipCommandService {
     private webhookService: WebhookService,
     private scheduledMessageService: ScheduledMessageService,
     private rssService: RSSService,
+    private mirrorLinks: MirrorLinkService,
   ) {}
 
   async init() {
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
   }
 
-  /** Stream membership is the only authorisation, so a command in a stream the server does not report as private is not run. */
+  /**
+   * Stream membership is the authorisation, so a command outside the team streams is not run; the mirror commands,
+   * whose stream is usually not a team one, check the sender's role instead.
+   */
   async onZulipMessage(message: ZulipReceivedMessage) {
     const { streamId } = message;
-    if (message.type !== 'stream' || streamId === undefined || !Constants.Zulip.Commands.includes(streamId)) {
+    if (message.type === 'private') {
+      await this.onDirectMessage(message);
+      return;
+    }
+    if (streamId === undefined) {
       return;
     }
     const botName = this.zulipService.ownUser?.fullName;
@@ -285,6 +254,10 @@ export class ZulipCommandService {
     }
     const parsed = parseCommand(message.content, botName);
     if (parsed.status === 'ignored') {
+      return;
+    }
+    const anyStream = parsed.status === 'ok' && this.commands[parsed.command.name]?.administrators;
+    if (!anyStream && !Constants.Zulip.Commands.includes(streamId)) {
       return;
     }
     const reply = await this.answer({ ...message, streamId }, parsed);
@@ -316,11 +289,80 @@ export class ZulipCommandService {
       return this.usage(name);
     }
     try {
+      if (command.administrators && !(await this.isAdministrator(message.senderId))) {
+        return NOT_AN_ADMINISTRATOR;
+      }
       return await command.run({ message, args, options });
     } catch (error) {
       this.logger.error(`The Zulip command ${name} failed on message ${message.id}`, error);
       return `${code(name)} failed: ${describeError(error)}`;
     }
+  }
+
+  /**
+   * Only `link <code>` and `unlink` are taken in a direct message, exactly as typed, so that nothing else said to the
+   * bot, in a group conversation too, gets an answer. The answer goes to the sender alone.
+   */
+  private async onDirectMessage(message: ZulipReceivedMessage) {
+    const parsed = parseCommand(message.content, this.zulipService.ownUser?.fullName ?? '');
+    const tokens = parsed.status === 'ok' ? [parsed.command.name, ...parsed.command.tokens] : tokenize(message.content);
+    if (parsed.status === 'malformed' || !tokens) {
+      return;
+    }
+    const [name = '', ...args] = tokens;
+    const command = name.toLowerCase();
+    let run: (() => Promise<string>) | undefined;
+    if ((command === 'link' || command === 'discord-link') && args.length === 1) {
+      run = () =>
+        this.mirrorLinks.redeemIdentityCode({ id: message.senderId, fullName: message.senderFullName }, args[0]);
+    } else if ((command === 'unlink' || command === 'discord-unlink') && args.length === 0) {
+      run = () => this.mirrorLinks.unlinkIdentity({ zulipUserId: message.senderId }, 'zulip');
+    }
+    if (!run) {
+      return;
+    }
+
+    let reply: string;
+    try {
+      reply = await run();
+    } catch (error) {
+      this.logger.error(`The Zulip direct message command ${command} failed on message ${message.id}`, error);
+      reply = `${code(command)} failed: ${describeError(error)}`;
+    }
+    try {
+      await this.zulip.sendDirectMessage([message.senderId], fit(reply));
+    } catch (error) {
+      this.logger.error(`Could not answer the Zulip direct message ${message.id}`, error);
+    }
+  }
+
+  private async isAdministrator(userId: number) {
+    const { role } = await this.zulip.getUser(userId);
+    return role <= ZULIP_ADMINISTRATOR_ROLE;
+  }
+
+  private actorOf(message: StreamMessage): MirrorActor {
+    return { platform: 'zulip', id: String(message.senderId), name: message.senderFullName };
+  }
+
+  /** The announcement says it all in its own topic, so a command given there is answered with the rest only. */
+  private linkReply(message: StreamMessage, { summary, details, zulipAnnouncement }: MirrorLinkReply) {
+    const announcedHere = zulipAnnouncement?.streamId === message.streamId && zulipAnnouncement.topic === message.topic;
+    const lines = announcedHere ? details : [summary, ...details];
+    return lines.length > 0 ? lines.join('\n') : undefined;
+  }
+
+  private mirrorLink({ message, options }: CommandContext) {
+    return this.mirrorLinks.requestLink({
+      zulipStreamId: message.streamId,
+      mainTopic: options.topic,
+      actor: this.actorOf(message),
+    });
+  }
+
+  private async mirrorUnlink(message: StreamMessage) {
+    const reply = await this.mirrorLinks.unlink({ zulipStreamId: message.streamId, actor: this.actorOf(message) });
+    return this.linkReply(message, reply);
   }
 
   private reply({ streamId, topic }: ZulipReceivedMessage, content: string) {
@@ -335,6 +377,7 @@ export class ZulipCommandService {
       // The blank line ends the list: without it, Markdown reads the next line as the last item's continuation.
       '',
       `Arguments are positional or ${code('key=value')}; quote a value with spaces (${code('text="two words"')}). Every reply is posted here, in the topic.`,
+      `The ${code('mirror-*')} commands are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
     ].join('\n');
   }
 

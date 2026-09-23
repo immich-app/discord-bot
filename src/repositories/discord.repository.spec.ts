@@ -172,7 +172,6 @@ describe(DiscordRepository.name, () => {
         guildId,
         name: 'dev',
         kind: 'text',
-        categoryId,
         everyoneCanView: false,
         missingPermissions: [],
       });
@@ -785,6 +784,95 @@ describe(DiscordRepository.name, () => {
     it('should map errors', async () => {
       channel.messages.fetch.mockRejectedValue(apiError(50_001, 403));
       await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
+    });
+  });
+
+  describe('sendMirrorNotice', () => {
+    const notice = { title: 'Mirrored with Zulip', content: 'This channel is now mirrored' };
+    const expected = { content: notice.content, allowedMentions: { parse: [] }, flags: [MessageFlags.SuppressEmbeds] };
+
+    it('should post and pin a message in a text channel, pinging nobody', async () => {
+      const sent = { id: '300000000000000009', pin: vitest.fn() };
+      const send = vitest.fn().mockResolvedValue(sent);
+      bot.channels.fetch.mockResolvedValue(makeChannel({ send }));
+
+      await expect(sut.sendMirrorNotice(channelId, notice, true)).resolves.toEqual({
+        messageId: sent.id,
+        pinned: true,
+      });
+      expect(send).toHaveBeenCalledWith(expected);
+      expect(sent.pin).toHaveBeenCalledOnce();
+    });
+
+    it('should open a post in a forum and pin the post', async () => {
+      const post = { id: threadId, pin: vitest.fn() };
+      const forum = makeChannel({
+        type: ChannelType.GuildForum,
+        threads: { create: vitest.fn().mockResolvedValue(post) },
+      });
+      bot.channels.fetch.mockResolvedValue(forum);
+
+      await expect(sut.sendMirrorNotice(channelId, notice, true)).resolves.toEqual({
+        messageId: threadId,
+        pinned: true,
+      });
+      expect(forum.threads.create).toHaveBeenCalledWith({ name: notice.title, message: expected });
+    });
+
+    it('should say when the pin failed, and not pin when not asked', async () => {
+      const sent = { id: '300000000000000009', pin: vitest.fn().mockRejectedValue(apiError(50_013, 403)) };
+      bot.channels.fetch.mockResolvedValue(makeChannel({ send: vitest.fn().mockResolvedValue(sent) }));
+
+      await expect(sut.sendMirrorNotice(channelId, notice, true)).resolves.toEqual({
+        messageId: sent.id,
+        pinned: false,
+      });
+      await expect(sut.sendMirrorNotice(channelId, notice, false)).resolves.toEqual({
+        messageId: sent.id,
+        pinned: false,
+      });
+      expect(sent.pin).toHaveBeenCalledOnce();
+    });
+
+    it('should refuse any other kind of channel, and a send Discord refuses, without the request', async () => {
+      bot.channels.fetch.mockResolvedValueOnce(makeChannel({ type: ChannelType.GuildVoice }));
+      expect((await rejection(sut.sendMirrorNotice(channelId, notice, true))).kind).toBe('unknown-channel');
+
+      bot.channels.fetch.mockResolvedValueOnce(
+        makeChannel({ send: vitest.fn().mockRejectedValue(apiError(50_001, 403)) }),
+      );
+      const error = await rejection(sut.sendMirrorNotice(channelId, notice, true));
+      expect(error).toEqual(expect.objectContaining({ kind: 'forbidden', code: 50_001 }));
+      expect(inspect(error)).not.toContain('secret');
+    });
+  });
+
+  describe('unpinMirrorNotice', () => {
+    it('should unpin the message in a text channel', async () => {
+      const message = { unpin: vitest.fn() };
+      channel.messages.fetch.mockResolvedValue(message);
+
+      await sut.unpinMirrorNotice(channelId, '300000000000000009');
+
+      expect(channel.messages.fetch).toHaveBeenCalledWith('300000000000000009');
+      expect(message.unpin).toHaveBeenCalledOnce();
+    });
+
+    it('should unpin the post in a forum', async () => {
+      const post = { unpin: vitest.fn() };
+      bot.channels.fetch.mockResolvedValue(
+        makeChannel({ type: ChannelType.GuildForum, threads: { fetch: vitest.fn().mockResolvedValue(post) } }),
+      );
+
+      await sut.unpinMirrorNotice(channelId, threadId);
+
+      expect(post.unpin).toHaveBeenCalledOnce();
+    });
+
+    it('should turn a failure into a mirror error', async () => {
+      channel.messages.fetch.mockRejectedValue(apiError(10_008, 404));
+
+      expect((await rejection(sut.unpinMirrorNotice(channelId, '300000000000000009'))).kind).toBe('unknown-message');
     });
   });
 });

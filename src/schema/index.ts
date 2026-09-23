@@ -4,6 +4,8 @@ import { DiscordLinkTable } from 'src/schema/tables/discord-links.table';
 import { DiscordMessageTable } from 'src/schema/tables/discord-messages.table';
 import { FourthwallOrderTable } from 'src/schema/tables/fourthwall-orders.table';
 import { MirrorConversationTable } from 'src/schema/tables/mirror-conversation.table';
+import { MirrorIdentityTable } from 'src/schema/tables/mirror-identity.table';
+import { MirrorLinkTable } from 'src/schema/tables/mirror-link.table';
 import { MirrorMessageTable } from 'src/schema/tables/mirror-message.table';
 import { PaymentTable } from 'src/schema/tables/payment.table';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
@@ -25,6 +27,8 @@ export class DiscordBotDatabase {
     PullRequestTable,
     MirrorConversationTable,
     MirrorMessageTable,
+    MirrorLinkTable,
+    MirrorIdentityTable,
   ];
 }
 
@@ -65,6 +69,12 @@ export type MirrorMessage = Selectable<MirrorMessageTable>;
 export type NewMirrorMessage = Insertable<MirrorMessageTable>;
 export type UpdateMirrorMessage = Updateable<MirrorMessageTable>;
 
+export type MirrorLink = Selectable<MirrorLinkTable>;
+export type NewMirrorLink = Insertable<MirrorLinkTable>;
+
+export type MirrorIdentity = Selectable<MirrorIdentityTable>;
+export type NewMirrorIdentity = Insertable<MirrorIdentityTable>;
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
@@ -76,4 +86,6 @@ export interface Database {
   pull_request: PullRequestTable;
   mirror_conversation: MirrorConversationTable;
   mirror_message: MirrorMessageTable;
+  mirror_link: MirrorLinkTable;
+  mirror_identity: MirrorIdentityTable;
 }

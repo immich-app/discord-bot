@@ -7,6 +7,7 @@ import { DiscordContextMenus } from 'src/discord/context-menus';
 import { DiscordEvents } from 'src/discord/events';
 import { DiscordHelpDesk } from 'src/discord/help-desk';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
+import { DiscordMirrorCommands } from 'src/discord/mirror-commands';
 import { providers } from 'src/repositories';
 import { services } from 'src/services';
 import { ChatService } from 'src/services/chat.service';
@@ -18,7 +19,14 @@ import { ZulipCommandService } from 'src/services/zulip-command.service';
 import { ZulipService } from 'src/services/zulip.service';
 
 const middleware = [{ provide: APP_PIPE, useValue: new ValidationPipe({ transform: true, whitelist: true }) }];
-const discord = [DiscordCommands, DiscordEvents, DiscordHelpDesk, DiscordContextMenus, DiscordMirrorEvents];
+const discord = [
+  DiscordCommands,
+  DiscordEvents,
+  DiscordHelpDesk,
+  DiscordContextMenus,
+  DiscordMirrorEvents,
+  DiscordMirrorCommands,
+];
 
 @Module({
   imports: [ScheduleModule.forRoot()],
@@ -40,7 +48,7 @@ export class AppModule implements OnModuleInit {
     await this.githubService.init();
     await this.databaseService.runMigrations();
     // Every Zulip handler registers in its service's init, which must run before ZulipService.init starts the loop, or it silently misses messages.
-    this.mirrorService.init();
+    await this.mirrorService.init();
     await this.chatService.init();
     await this.scheduledMessageService.init();
     await this.zulipCommandService.init();

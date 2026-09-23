@@ -28,7 +28,6 @@ export type DiscordMirrorChannel = {
   guildId: string;
   name: string;
   kind: 'text' | 'forum' | 'other';
-  categoryId: string | null;
   everyoneCanView: boolean;
   missingPermissions: string[];
 };
@@ -54,6 +53,8 @@ export type DiscordMirrorTarget = {
   messageId: string;
   webhookId: string | null;
 };
+
+export type DiscordMirrorNotice = { messageId: string; pinned: boolean };
 
 export type DiscordTeamMember = { displayName: string; avatarUrl: string; roleIds: string[] };
 
@@ -99,6 +100,16 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   renameMirrorThread(threadId: string, name: string): Promise<void>;
   unarchiveMirrorThread(threadId: string): Promise<void>;
   getTeamMember(guildId: string, userId: string): Promise<DiscordTeamMember | undefined>;
+  /**
+   * As the bot and pinging nobody: a message in a text channel, a post named `title` in a forum, whose ID is then
+   * the `messageId`. A pin that fails leaves `pinned` false.
+   */
+  sendMirrorNotice(
+    channelId: string,
+    notice: { title: string; content: string },
+    pin: boolean,
+  ): Promise<DiscordMirrorNotice>;
+  unpinMirrorNotice(channelId: string, messageId: string): Promise<void>;
   /** `channelId` may be a thread. */
   fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
 }

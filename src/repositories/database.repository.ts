@@ -6,18 +6,26 @@ import path from 'node:path';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { getConfig } from 'src/config';
-import { IDatabaseRepository, MirrorMessageQuery, ReportOptions } from 'src/interfaces/database.interface';
+import {
+  IDatabaseRepository,
+  MirrorIdentityOwner,
+  MirrorMessageQuery,
+  ReportOptions,
+} from 'src/interfaces/database.interface';
 import {
   Database,
   DiscordLink,
   DiscordLinkUpdate,
   DiscordMessage,
   MirrorConversation,
+  MirrorIdentity,
+  MirrorLink,
   MirrorMessage,
   NewDiscordLink,
   NewDiscordMessage,
   NewFourthwallOrder,
   NewMirrorConversation,
+  NewMirrorLink,
   NewMirrorMessage,
   NewPayment,
   NewRSSFeed,
@@ -477,5 +485,54 @@ export class DatabaseRepository implements IDatabaseRepository {
       .limit(1)
       .executeTakeFirst();
     return row?.discordMessageId;
+  }
+
+  getMirrorLinks(): Promise<MirrorLink[]> {
+    return this.db.selectFrom('mirror_link').selectAll().orderBy('createdAt').execute();
+  }
+
+  createMirrorLink(entity: NewMirrorLink): Promise<MirrorLink> {
+    return this.db.insertInto('mirror_link').values(entity).returningAll().executeTakeFirstOrThrow();
+  }
+
+  async setMirrorLinkAnnouncement(discordChannelId: string, discordAnnouncementId: string | null): Promise<void> {
+    await this.db
+      .updateTable('mirror_link')
+      .set({ discordAnnouncementId })
+      .where('discordChannelId', '=', discordChannelId)
+      .execute();
+  }
+
+  removeMirrorLink(discordChannelId: string): Promise<MirrorLink | undefined> {
+    return this.db
+      .deleteFrom('mirror_link')
+      .where('discordChannelId', '=', discordChannelId)
+      .returningAll()
+      .executeTakeFirst();
+  }
+
+  getMirrorIdentities(): Promise<MirrorIdentity[]> {
+    return this.db.selectFrom('mirror_identity').selectAll().orderBy('createdAt').execute();
+  }
+
+  setMirrorIdentity(zulipUserId: number, discordUserId: string): Promise<MirrorIdentity[]> {
+    return this.db.transaction().execute(async (trx) => {
+      const replaced = await trx
+        .deleteFrom('mirror_identity')
+        .where((eb) => eb.or([eb('zulipUserId', '=', zulipUserId), eb('discordUserId', '=', discordUserId)]))
+        .returningAll()
+        .execute();
+      await trx.insertInto('mirror_identity').values({ zulipUserId, discordUserId }).execute();
+      return replaced;
+    });
+  }
+
+  removeMirrorIdentity(owner: MirrorIdentityOwner): Promise<MirrorIdentity | undefined> {
+    const query = this.db.deleteFrom('mirror_identity');
+    const matching =
+      'zulipUserId' in owner
+        ? query.where('zulipUserId', '=', owner.zulipUserId)
+        : query.where('discordUserId', '=', owner.discordUserId);
+    return matching.returningAll().executeTakeFirst();
   }
 }

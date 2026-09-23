@@ -152,31 +152,6 @@ const zulipTeamStreams = {
   ImmichAlerts: zulipStreams.ImmichAlerts,
 };
 
-export type MirrorPairKey = 'Dev' | 'DevOffTopic' | 'DevFocusTopic';
-
-export type MirrorPairConfig = {
-  kind: 'text' | 'forum';
-  discordChannelId: string | null;
-  zulipStreamId: number | null;
-  /** Text pairs only: where the channel's own messages go; each public thread gets a topic of its own. */
-  mainTopic?: string;
-  /** A Discord channel that @everyone can view is refused unless this is set. */
-  public?: boolean;
-};
-
-/** A null ID is a placeholder: its pair stays disabled, named in one startup warning, until it is filled in. */
-const mirrorPairs: Record<MirrorPairKey, MirrorPairConfig> = {
-  // PLACEHOLDER: the Discord ID of #dev and the Zulip ID of stream immich-dev
-  Dev: { kind: 'text', discordChannelId: null, zulipStreamId: null, mainTopic: '#dev' },
-  // PLACEHOLDER: the Discord ID of #dev-off-topic and the Zulip ID of stream immich-dev-off-topic
-  DevOffTopic: { kind: 'text', discordChannelId: null, zulipStreamId: null, mainTopic: '#dev-off-topic' },
-  // PLACEHOLDER: the Zulip ID of stream immich-dev-focus-topic
-  DevFocusTopic: { kind: 'forum', discordChannelId: discordChannels.DevFocusTopic, zulipStreamId: null },
-};
-
-/** Zulip user ID to the Discord user ID of the same team member. IDs only: this repository is public. */
-const mirrorTeamMembers: Record<number, string> = {};
-
 /**
  * Where a notification destination is posted on each platform. A destination is an audience
  * (`community.*` is public, `team.*` is internal) plus a subject; services pick destinations and
@@ -289,8 +264,6 @@ export const Constants = {
     TeamStreams: zulipTeamStreams,
   },
   Mirror: {
-    Pairs: mirrorPairs,
-    TeamMembers: mirrorTeamMembers,
     MaxFileBytes: 10 * 1024 * 1024,
     MaxUploadBytes: 25 * 1024 * 1024,
     DeleteSyncMaxAgeDays: 7,

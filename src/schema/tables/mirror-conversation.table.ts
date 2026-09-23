@@ -28,9 +28,6 @@ export class MirrorConversationTable {
   id!: Generated<string>;
 
   @Column()
-  pair!: string;
-
-  @Column()
   discordChannelId!: string;
 
   @Column({ nullable: true })

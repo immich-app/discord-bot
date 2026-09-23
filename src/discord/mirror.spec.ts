@@ -190,15 +190,11 @@ describe(DiscordMirrorEvents.name, () => {
     expect(mirror.onDiscordResumed).toHaveBeenCalledOnce();
   });
 
-  it('should log a handler that throws instead of passing it to discordx', () => {
+  it('should leave a handler that throws to the global guard', () => {
     vitest.mocked(toDiscordSourceMessage).mockImplementation(() => {
       throw new Error('boom');
     });
 
-    expect(() => sut.onMessageCreate([message])).not.toThrow();
-    expect(Logger.prototype.error).toHaveBeenCalledWith(
-      'The Discord-Zulip mirror failed on messageCreate',
-      expect.any(Error),
-    );
+    expect(() => sut.onMessageCreate([message])).toThrow('boom');
   });
 });

@@ -94,6 +94,13 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   removeMirrorMessages: vitest.fn(),
   getMirrorZulipHighWater: vitest.fn(),
   getMirrorDiscordHighWater: vitest.fn(),
+  getMirrorLinks: vitest.fn(),
+  createMirrorLink: vitest.fn(),
+  setMirrorLinkAnnouncement: vitest.fn(),
+  removeMirrorLink: vitest.fn(),
+  getMirrorIdentities: vitest.fn(),
+  setMirrorIdentity: vitest.fn(),
+  removeMirrorIdentity: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -155,11 +162,14 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   isInitialised: vitest.fn().mockReturnValue(false),
   createEmote: vitest.fn(),
   sendMessage: vitest.fn(),
+  sendDirectMessage: vitest.fn(),
   getMessage: vitest.fn(),
   updateMessage: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
+  getUser: vitest.fn(),
+  getStream: vitest.fn(),
   getMessages: vitest.fn(),
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),

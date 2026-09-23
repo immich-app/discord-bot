@@ -20,6 +20,7 @@ import {
   DiscordMirrorChannel,
   DiscordMirrorError,
   DiscordMirrorErrorKind,
+  DiscordMirrorNotice,
   DiscordMirrorPage,
   DiscordMirrorSend,
   DiscordMirrorSent,
@@ -335,7 +336,6 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
         guildId: channel.guildId,
         name: channel.name,
         kind,
-        categoryId: channel.parentId,
         everyoneCanView: channel.permissionsFor(guild.roles.everyone).has('ViewChannel'),
         missingPermissions: channel.permissionsFor(me).missing(required),
       };
@@ -495,6 +495,54 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       if (hasCode(error, RESTJSONErrorCodes.UnknownMember, RESTJSONErrorCodes.UnknownUser)) {
         return undefined;
       }
+      throw toMirrorError(error);
+    }
+  }
+
+  async sendMirrorNotice(
+    channelId: string,
+    { title, content }: { title: string; content: string },
+    pin: boolean,
+  ): Promise<DiscordMirrorNotice> {
+    const message = { content, allowedMentions: { parse: [] }, flags: [MessageFlags.SuppressEmbeds] } as const;
+    let sent: { id: string; pin: () => Promise<unknown> };
+    try {
+      const channel = await bot.channels.fetch(channelId);
+      if (channel?.type === ChannelType.GuildForum) {
+        sent = await channel.threads.create({ name: title, message });
+      } else if (channel?.type === ChannelType.GuildText) {
+        sent = await channel.send(message);
+      } else {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+
+    if (!pin) {
+      return { messageId: sent.id, pinned: false };
+    }
+    try {
+      await sent.pin();
+      return { messageId: sent.id, pinned: true };
+    } catch {
+      return { messageId: sent.id, pinned: false };
+    }
+  }
+
+  async unpinMirrorNotice(channelId: string, messageId: string) {
+    try {
+      const channel = await bot.channels.fetch(channelId);
+      if (channel?.type === ChannelType.GuildForum) {
+        const post = await channel.threads.fetch(messageId);
+        await post?.unpin();
+      } else if (channel?.type === ChannelType.GuildText) {
+        const message = await channel.messages.fetch(messageId);
+        await message.unpin();
+      } else {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+    } catch (error) {
       throw toMirrorError(error);
     }
   }
