@@ -1,6 +1,7 @@
 import {
   ChannelType,
   Collection,
+  EmbedType,
   Message,
   MessageFlags,
   MessageFlagsBitField,
@@ -31,10 +32,16 @@ const threadChannel = (type = ChannelType.PublicThread, cached: Message[] = []) 
   messages: { cache: new Collection(cached.map((message) => [message.id, message])) },
 });
 
+const BOT_USER = '600000000000000001';
+const OWN_WEBHOOK = '700000000000000001';
+const isOwnWebhook = (id: string) => id === OWN_WEBHOOK;
+
 const makeMessage = (overrides: Record<string, unknown> = {}) => {
   const message: Record<string, unknown> = {
     id: '300000000000000001',
     guildId,
+    client: { user: { id: BOT_USER } },
+    embeds: [],
     channel: textChannel(),
     author: { id: '400000000000000001', username: 'contrib123', displayName: 'Contrib', bot: false },
     member: { displayName: 'Alex (Immich)' },
@@ -63,20 +70,26 @@ const makeMessage = (overrides: Record<string, unknown> = {}) => {
 };
 
 describe('isMirrorCandidate', () => {
+  const otherBot = { id: '1', username: 'bot', displayName: 'bot', bot: true };
+  const self = { id: BOT_USER, username: 'Immich', displayName: 'Immich', bot: true };
+
   it.each([
     ['a message in a channel', {}],
     ['a reply', { type: MessageType.Reply }],
     ['a message in a public thread', { channel: threadChannel() }],
     ['a message in the second server', { guildId: Constants.Discord.Servers[1] }],
+    ['another bot', { author: otherBot }],
+    ['a webhook that is not the mirror', { webhookId: '500000000000000001', author: otherBot }],
+    ['a reply of the bot itself, such as a GitHub expansion', { author: self, type: MessageType.Reply }],
   ])('should accept %s', (_, overrides) => {
-    expect(isMirrorCandidate(makeMessage(overrides))).toBe(true);
+    expect(isMirrorCandidate(makeMessage(overrides), isOwnWebhook)).toBe(true);
   });
 
   it.each([
     ['another guild', { guildId: '999999999999999999' }],
     ['a direct message', { guildId: null }],
-    ['a bot', { author: { id: '1', username: 'bot', displayName: 'bot', bot: true } }],
-    ['a webhook', { webhookId: '500000000000000001' }],
+    ['a copy the mirror posted', { webhookId: OWN_WEBHOOK, author: { ...otherBot, id: OWN_WEBHOOK } }],
+    ['an announcement of the bot itself', { author: self }],
     ['a webhook whose ID is unknown', { webhookId: undefined }],
     ['a system message', { system: true }],
     ['a thread-created notice', { type: MessageType.ThreadCreated }],
@@ -84,7 +97,7 @@ describe('isMirrorCandidate', () => {
     ['a slash command response', { type: MessageType.ChatInputCommand }],
     ['a private thread', { channel: threadChannel(ChannelType.PrivateThread) }],
   ])('should reject %s', (_, overrides) => {
-    expect(isMirrorCandidate(makeMessage(overrides))).toBe(false);
+    expect(isMirrorCandidate(makeMessage(overrides), isOwnWebhook)).toBe(false);
   });
 });
 
@@ -143,6 +156,36 @@ describe('toDiscordSourceMessage', () => {
     expect(forumTagNames(post as never)).toEqual(['mobile', 'bug']);
     expect(forumTagNames({ ...post, parent: { type: ChannelType.GuildText } } as never)).toBeUndefined();
     expect(toDiscordSourceMessage(makeMessage({ channel: threadChannel() }))).not.toHaveProperty('threadTags');
+  });
+
+  it('should mark a bot or webhook and keep the embeds it wrote, leaving out link previews', () => {
+    const rich = {
+      data: { type: EmbedType.Rich },
+      title: 'Backup done',
+      url: 'https://example.com/run/1',
+      description: 'All **good**',
+      fields: [{ name: 'Size', value: '12 GB', inline: true }],
+    };
+    const preview = { data: { type: EmbedType.Link }, title: 'x', url: null, description: null, fields: [] };
+    const message = makeMessage({
+      author: { id: '1', username: 'backups', displayName: 'FutoBackupsBot', bot: true },
+      embeds: [rich, preview],
+    });
+
+    expect(toDiscordSourceMessage(message)).toMatchObject({
+      author: { id: '1', username: 'backups', displayName: 'Alex (Immich)', bot: true },
+      embeds: [
+        {
+          title: 'Backup done',
+          url: 'https://example.com/run/1',
+          description: 'All **good**',
+          fields: [{ name: 'Size', value: '12 GB' }],
+        },
+      ],
+    });
+    expect(toDiscordSourceMessage(makeMessage({ embeds: [rich] }))).not.toHaveProperty('embeds');
+    expect(toDiscordSourceMessage(makeMessage()).author).not.toHaveProperty('bot');
+    expect(toDiscordSourceMessage(makeMessage({ webhookId: '500000000000000001' })).author.bot).toBe(true);
   });
 
   it('should fall back to the user display name without a member', () => {

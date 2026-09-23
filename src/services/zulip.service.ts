@@ -67,7 +67,7 @@ const listeningStreams = () =>
 @Injectable()
 export class ZulipService implements OnModuleDestroy {
   private logger = new Logger(ZulipService.name);
-  private handlers: ZulipMessageHandler[] = [];
+  private handlers: { handler: ZulipMessageHandler; withBots: boolean }[] = [];
   private updateHandlers: ZulipUpdateHandler[] = [];
   private deletionHandlers: ZulipDeletionHandler[] = [];
   private reactionHandlers: ZulipReactionHandler[] = [];
@@ -92,8 +92,9 @@ export class ZulipService implements OnModuleDestroy {
     }
   }
 
-  onMessage(handler: ZulipMessageHandler) {
-    this.handlers.push(handler);
+  /** `withBots` hands the handler other bots' messages too; the bot's own never reach a handler. */
+  onMessage(handler: ZulipMessageHandler, { withBots = false }: { withBots?: boolean } = {}) {
+    this.handlers.push({ handler, withBots });
   }
 
   onMessageUpdate(handler: ZulipUpdateHandler) {
@@ -268,11 +269,14 @@ export class ZulipService implements OnModuleDestroy {
   private async dispatch(event: ZulipEvent) {
     if (event.message) {
       const { message } = event;
-      if (message.senderId === this.self?.userId || isBotSender(message)) {
+      if (message.senderId === this.self?.userId) {
         return;
       }
-      for (const handler of this.handlers) {
-        await this.runHandler(`message ${message.id}`, () => handler(message));
+      const bot = isBotSender(message);
+      for (const { handler, withBots } of this.handlers) {
+        if (withBots || !bot) {
+          await this.runHandler(`message ${message.id}`, () => handler(message));
+        }
       }
     } else if (event.update) {
       const { update } = event;

@@ -203,6 +203,47 @@ describe('zulipThreadContext', () => {
   });
 });
 
+describe('bot messages', () => {
+  const bot = { id: '9', username: 'backups', displayName: 'FutoBackupsBot', bot: true };
+
+  it('should name a bot or webhook as a bot, never as a team member', () => {
+    expect(zulipAuthorHeader(message({ author: bot }), ctx)).toBe('**FutoBackupsBot** (bot)');
+    expect(zulipAuthorHeader(message({ author: { ...bot, displayName: '' } }), ctx)).toBe('**backups** (bot)');
+    expect(zulipAuthorHeader(message({ author: { ...bot, id: TEAM_MEMBER } }), ctx)).toBe('**FutoBackupsBot** (bot)');
+  });
+
+  it('should quote the embeds a bot wrote after its message', () => {
+    const dto = message({
+      author: bot,
+      content: 'nightly run',
+      embeds: [
+        {
+          title: 'Backup done [ok]',
+          url: 'https://example.com/run/1',
+          description: 'All **good** <@222222222222222222>\n@everyone',
+          fields: [
+            { name: 'Size', value: '12\nGB' },
+            { name: '@all', value: '`x`' },
+          ],
+        },
+        { title: null, url: null, description: null, fields: [] },
+      ],
+    });
+
+    expect(zulipMirrorContent('**FutoBackupsBot** (bot)', toZulipMirrorBody(dto, ctx), '')).toBe(
+      `**FutoBackupsBot** (bot): nightly run\n~~~ quote\n**[Backup done &#91;ok&#93;](https://example.com/run/1)**\nAll **good** &#64;Zack\n@everyone\n**Size:** 12 GB\n**&#64;all:** \`x\`\n~~~`,
+    );
+  });
+
+  it('should hash the embeds only when there are some', () => {
+    const plain = message({ content: 'x' });
+    expect(discordSourceHash({ ...plain, embeds: [] })).toBe(discordSourceHash(plain));
+    expect(
+      discordSourceHash({ ...plain, embeds: [{ title: 'a', url: null, description: null, fields: [] }] }),
+    ).not.toBe(discordSourceHash(plain));
+  });
+});
+
 describe('toZulipMirrorBody', () => {
   describe('neutralising Zulip syntax', () => {
     it.each(['@**all**', '@_**all**', '@**everyone**', '@*team*', '@_*team*', '#**immich-alerts>x**', '#**s>t@5**'])(

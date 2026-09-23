@@ -13,7 +13,8 @@ export type DiscordSourceMessage = {
   threadTags?: string[];
   createdTimestamp: number;
   jumpUrl: string;
-  author: { id: string; username: string; displayName: string };
+  /** `bot` is set for a bot or a webhook. */
+  author: { id: string; username: string; displayName: string; bot?: boolean };
   silent: boolean;
   content: string;
   mentions: { users: Record<string, string>; roles: Record<string, string>; channels: Record<string, string> };
@@ -21,8 +22,17 @@ export type DiscordSourceMessage = {
   stickers: string[];
   poll: string | null;
   forwarded: string[];
+  /** The embeds a bot or webhook wrote itself, never link previews. */
+  embeds?: DiscordMirrorEmbed[];
   /** `authorDisplayName` and `content` are `null` when the replied-to message is not cached. */
   replyTo: { messageId: string; authorDisplayName: string | null; content: string | null } | null;
+};
+
+export type DiscordMirrorEmbed = {
+  title: string | null;
+  url: string | null;
+  description: string | null;
+  fields: { name: string; value: string }[];
 };
 
 export type DiscordMirrorChannel = {
@@ -101,6 +111,8 @@ export class DiscordMirrorError extends Error {
 
 export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmotes'> {
   isReady(): boolean;
+  /** Whether the mirror posts through this webhook, or did through one it replaced. */
+  isOwnMirrorWebhook(webhookId: string): boolean;
   getMirrorChannel(channelId: string): Promise<DiscordMirrorChannel | undefined>;
   ensureMirrorWebhook(channelId: string): Promise<void>;
   sendMirrorMessage(message: DiscordMirrorSend): Promise<DiscordMirrorSent>;

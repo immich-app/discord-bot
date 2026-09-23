@@ -902,6 +902,21 @@ describe('ZulipService', () => {
         expect(onUpdate).not.toHaveBeenCalled();
       });
 
+      it("should hand other bots' messages only to the handlers that take them, and the bot's own to none", async () => {
+        const withBots = vitest.fn();
+        sut.onMessage(withBots, { withBots: true });
+
+        polls[0].resolve([
+          messageEvent(9, { id: 9, senderId: 30, senderEmail: 'ci-bot@zulip.example.com' }),
+          messageEvent(10, { id: 10, senderId: OWN_USER_ID, senderEmail: 'immich-bot@zulip.example.com' }),
+          messageEvent(11, { id: 11 }),
+        ]);
+        await nextPoll();
+
+        expect(withBots.mock.calls.map(([message]) => message.id)).toEqual([9, 11]);
+        expect(handler.mock.calls.map(([message]) => message.id)).toEqual([11]);
+      });
+
       it("should hand every reaction but the bot's own to the reaction handlers", async () => {
         const onReaction = vitest.fn();
         sut.onReaction(onReaction);

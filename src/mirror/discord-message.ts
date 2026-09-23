@@ -2,6 +2,7 @@ import {
   AnyThreadChannel,
   Channel,
   ChannelType,
+  EmbedType,
   GuildTextBasedChannel,
   Message,
   MessageFlags,
@@ -12,11 +13,19 @@ import { DiscordSourceMessage } from 'src/interfaces/discord-mirror.interface';
 
 const mirroredTypes = new Set<MessageType>([MessageType.Default, MessageType.Reply]);
 
-export const isMirrorCandidate = (message: Message): message is Message<true> =>
+/**
+ * Other bots and webhooks are mirrored, the mirror's own webhook copies never. The bot itself is mirrored only where
+ * it answers a message (the GitHub and Twitter expansions), never its own announcements.
+ */
+export const isMirrorCandidate = (
+  message: Message,
+  isOwnWebhook: (webhookId: string) => boolean,
+): message is Message<true> =>
   message.inGuild() &&
   Constants.Discord.Servers.includes(message.guildId) &&
-  !message.author.bot &&
-  message.webhookId === null &&
+  (message.webhookId === null
+    ? message.author.id !== message.client.user.id || message.type === MessageType.Reply
+    : typeof message.webhookId === 'string' && !isOwnWebhook(message.webhookId)) &&
   !message.system &&
   mirroredTypes.has(message.type) &&
   message.channel.type !== ChannelType.PrivateThread;
@@ -66,6 +75,8 @@ export const toDiscordSourceMessage = (message: Message<true>): DiscordSourceMes
   }
 
   const threadTags = message.channel.isThread() ? forumTagNames(message.channel) : undefined;
+  const bot = message.author.bot || Boolean(message.webhookId);
+  const embeds = bot ? message.embeds.filter(({ data }) => data.type === EmbedType.Rich) : [];
   return {
     id: message.id,
     guildId: message.guildId,
@@ -73,7 +84,12 @@ export const toDiscordSourceMessage = (message: Message<true>): DiscordSourceMes
     ...(threadTags ? { threadTags } : {}),
     createdTimestamp: message.createdTimestamp,
     jumpUrl: message.url,
-    author: { id: message.author.id, username: message.author.username, displayName: displayNameOf(message) },
+    author: {
+      id: message.author.id,
+      username: message.author.username,
+      displayName: displayNameOf(message),
+      ...(bot ? { bot: true } : {}),
+    },
     silent: message.flags.has(MessageFlags.SuppressNotifications),
     content: message.content,
     mentions: {
@@ -94,6 +110,16 @@ export const toDiscordSourceMessage = (message: Message<true>): DiscordSourceMes
     stickers: message.stickers.map((sticker) => sticker.name),
     poll: message.poll?.question.text ?? null,
     forwarded: message.messageSnapshots.map((snapshot) => snapshot.content),
+    ...(embeds.length > 0
+      ? {
+          embeds: embeds.map(({ title, url, description, fields }) => ({
+            title,
+            url,
+            description,
+            fields: fields.map(({ name, value }) => ({ name, value })),
+          })),
+        }
+      : {}),
     replyTo: toReplyTo(message),
   };
 };

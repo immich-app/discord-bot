@@ -35,6 +35,7 @@ describe(DiscordMirrorEvents.name, () => {
     Pick<
       MirrorService,
       | 'handlesChannel'
+      | 'isOwnWebhook'
       | 'onDiscordMessage'
       | 'onDiscordMessageEdited'
       | 'onDiscordMessagesDeleted'
@@ -52,6 +53,7 @@ describe(DiscordMirrorEvents.name, () => {
     vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mirror = {
       handlesChannel: vitest.fn((channelId: string) => channelId === PARENT),
+      isOwnWebhook: vitest.fn((webhookId: string) => webhookId === '700000000000000001'),
       onDiscordMessage: vitest.fn(),
       onDiscordMessageEdited: vitest.fn(),
       onDiscordMessagesDeleted: vitest.fn(),
@@ -102,6 +104,8 @@ describe(DiscordMirrorEvents.name, () => {
 
     expect(mirrorLocation).toHaveBeenCalledWith(guildChannel);
     expect(mirror.onDiscordMessage).toHaveBeenCalledExactlyOnceWith(dto);
+    const isOwnWebhook = vitest.mocked(isMirrorCandidate).mock.calls[0][1];
+    expect([isOwnWebhook('700000000000000001'), isOwnWebhook('700000000000000002')]).toEqual([true, false]);
     expect(mirror.onDiscordMessageEdited).toHaveBeenCalledExactlyOnceWith(dto);
   });
 

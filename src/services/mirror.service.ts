@@ -175,8 +175,11 @@ type OutgoingZulipMessage = {
 /** Zulip's email gateway posts incoming email under its own name, without the `-bot@` every other bot address has. */
 const EMAIL_GATEWAY = 'emailgateway@zulip.com';
 
-const isHumanSender = (message: ZulipReceivedMessage) =>
-  !isBotSender(message) && message.senderEmail.toLowerCase() !== EMAIL_GATEWAY;
+const isZulipBot = (message: ZulipReceivedMessage) =>
+  isBotSender(message) || message.senderEmail.toLowerCase() === EMAIL_GATEWAY;
+
+/** Zulip's Notification Bot says what Zulip did, such as a move or a resolve, which the mirror carries over itself. */
+const isMirroredSender = (message: ZulipReceivedMessage) => !/^notification-bot@/i.test(message.senderEmail);
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -318,6 +321,8 @@ export class MirrorService implements OnModuleDestroy {
   private memberCheckedAt = new Map<string, number>();
   private identities = new Map<string, { identity: Identity; expiresAt: number }>();
   private senderNames = new Map<number, string>();
+  /** Learnt from their messages, like the names; a bot is never linked with a Discord account. */
+  private botSenders = new Set<number>();
   /** Read once per queue registration, so that a renamed stream is named anew. */
   private streamNames = new Map<number, string>();
   private verifiedConversations = new Set<string>();
@@ -355,7 +360,7 @@ export class MirrorService implements OnModuleDestroy {
     this.teamMembers = toTeamMembers(await this.database.getMirrorIdentities());
     this.pairs = (await this.database.getMirrorLinks()).map((link) => this.newPairState(toEnabledPair(link)));
     this.logger.log(`The Discord-Zulip mirror has ${plural(this.pairs.length, 'link')}`);
-    this.zulipService.onMessage((message) => this.onZulipMessage(message));
+    this.zulipService.onMessage((message) => this.onZulipMessage(message), { withBots: true });
     this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
     this.zulipService.onMessagesDeleted((deletion) => this.onZulipDeletion(deletion));
     this.zulipService.onReaction((reaction) => this.onZulipReaction(reaction));
@@ -466,6 +471,10 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  isOwnWebhook(webhookId: string) {
+    return this.discordMirror.isOwnMirrorWebhook(webhookId);
+  }
+
   handlesChannel(channelId: string) {
     return this.byChannel(channelId) !== undefined;
   }
@@ -550,7 +559,7 @@ export class MirrorService implements OnModuleDestroy {
 
   private onZulipMessage(received: ZulipReceivedMessage) {
     const state = received.type === 'stream' ? this.byStream(received.streamId) : undefined;
-    if (state && isHumanSender(received) && !this.isCommand(received.content)) {
+    if (state && isMirroredSender(received) && !this.isCommand(received.content)) {
       const message = { ...received, topic: this.fromZulipTopic(received.topic) };
       state.queue.push(`Zulip message ${message.id}`, () => this.mirrorZulipMessage(state, message));
     }
@@ -995,7 +1004,7 @@ export class MirrorService implements OnModuleDestroy {
           message.type === 'stream' &&
           message.streamId === pair.zulipStreamId &&
           message.senderId !== self &&
-          isHumanSender(message) &&
+          isMirroredSender(message) &&
           !this.isCommand(message.content) &&
           (message.movedAt === undefined || turnedAway.has(message.id)),
       );
@@ -1493,6 +1502,9 @@ export class MirrorService implements OnModuleDestroy {
       return cached.identity;
     }
 
+    if (this.botSenders.has(sender.id)) {
+      return { username: sanitiseWebhookUsername(sender.fullName, ' (Zulip bot)') };
+    }
     const fallback = { username: sanitiseWebhookUsername(sender.fullName, ' (Zulip)') };
     let identity: Identity = fallback;
     const discordId = this.teamMembers.get(sender.id);
@@ -1661,6 +1673,9 @@ export class MirrorService implements OnModuleDestroy {
         return;
       }
       this.senderNames.set(message.senderId, message.senderFullName);
+      if (isZulipBot(message)) {
+        this.botSenders.add(message.senderId);
+      }
       const conversation = await this.conversationForZulip(state, message);
       const late = message.timestamp > 0 && Date.now() - message.timestamp * 1000 > LATE_MS;
       const rendered = await this.renderForDiscord(state, message.content, late ? message.timestamp : undefined);

@@ -18,14 +18,14 @@ export class DiscordMirrorEvents {
 
   @On({ event: 'messageCreate', priority: 0 })
   onMessageCreate([message]: ArgsOf<'messageCreate'>) {
-    if (isMirrorCandidate(message) && this.mirror.handlesChannel(mirrorLocation(message.channel).channelId)) {
+    if (this.isCandidate(message) && this.mirror.handlesChannel(mirrorLocation(message.channel).channelId)) {
       this.mirror.onDiscordMessage(toDiscordSourceMessage(message));
     }
   }
 
   @On({ event: 'messageUpdate', priority: 0 })
   onMessageUpdate([, message]: ArgsOf<'messageUpdate'>) {
-    if (isMirrorCandidate(message) && this.mirror.handlesChannel(mirrorLocation(message.channel).channelId)) {
+    if (this.isCandidate(message) && this.mirror.handlesChannel(mirrorLocation(message.channel).channelId)) {
       this.mirror.onDiscordMessageEdited(toDiscordSourceMessage(message));
     }
   }
@@ -87,6 +87,10 @@ export class DiscordMirrorEvents {
     if (thread.parentId && this.mirror.handlesChannel(thread.parentId)) {
       this.mirror.onDiscordThreadDeleted({ channelId: thread.parentId, threadId: thread.id });
     }
+  }
+
+  private isCandidate(message: Message): message is Message<true> {
+    return isMirrorCandidate(message, (webhookId) => this.mirror.isOwnWebhook(webhookId));
   }
 
   /** The bot's own reactions are the mirror's, never mirrored back. */

@@ -196,6 +196,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
    */
   private mirrorWebhooks = new Map<string, WebhookClient>();
   private mirrorWebhookFailures = new Map<string, { error: DiscordMirrorError; until: number }>();
+  private ownMirrorWebhooks = new Set<string>();
 
   constructor() {
     bot
@@ -223,6 +224,10 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
   isReady() {
     return bot.isReady();
+  }
+
+  isOwnMirrorWebhook(webhookId: string) {
+    return this.ownMirrorWebhooks.has(webhookId);
   }
 
   onHandlerError(handler: DiscordErrorHandler) {
@@ -657,7 +662,9 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       const page = await channel.messages.fetch(beforeId === undefined ? { limit } : { before: beforeId, limit });
       const messages = [...page.values()].sort(bySnowflake);
       return {
-        messages: messages.filter(isMirrorCandidate).map(toDiscordSourceMessage),
+        messages: messages
+          .filter((message) => isMirrorCandidate(message, (id) => this.isOwnMirrorWebhook(id)))
+          .map(toDiscordSourceMessage),
         oldestId: messages[0]?.id ?? null,
         full: messages.length === limit,
       };
@@ -677,18 +684,20 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       throw new DiscordMirrorError('other', undefined, 'Discord is not ready');
     }
 
-    const [existing] = [...(await channel.fetchWebhooks()).values()]
-      .filter((webhook) => webhook.owner?.id === user.id && webhook.token)
-      .sort(bySnowflake);
-
-    return (
+    const owned = [...(await channel.fetchWebhooks()).values()].filter((webhook) => webhook.owner?.id === user.id);
+    for (const { id } of owned) {
+      this.ownMirrorWebhooks.add(id);
+    }
+    const [existing] = owned.filter(({ token }) => token).sort(bySnowflake);
+    const webhook =
       existing ??
       (await channel.createWebhook({
         name: 'Zulip mirror',
         avatar: await fetchAvatar(user.displayAvatarURL({ extension: 'png', size: 256 })),
         reason: 'Discord-Zulip mirror',
-      }))
-    );
+      }));
+    this.ownMirrorWebhooks.add(webhook.id);
+    return webhook;
   }
 
   private getMirrorWebhook(channelId: string): WebhookClient {

@@ -239,6 +239,22 @@ describe(DiscordRepository.name, () => {
   });
 
   describe('ensureMirrorWebhook', () => {
+    it('should know every webhook the bot owns in the channel, and the one it creates, as its own', async () => {
+      channel.fetchWebhooks.mockResolvedValue(
+        webhooks(
+          makeWebhook('700000000000000005', { token: null }),
+          makeWebhook('700000000000000006', { owner: { id: '1' } }),
+        ),
+      );
+      channel.createWebhook.mockResolvedValue(makeWebhook('700000000000000007'));
+
+      await sut.ensureMirrorWebhook(channelId);
+
+      expect(sut.isOwnMirrorWebhook('700000000000000005')).toBe(true);
+      expect(sut.isOwnMirrorWebhook('700000000000000007')).toBe(true);
+      expect(sut.isOwnMirrorWebhook('700000000000000006')).toBe(false);
+    });
+
     it('should reuse the oldest webhook the bot owns, whatever its name', async () => {
       const newer = makeWebhook('700000000000000009');
       const older = makeWebhook('70000000000000002', { name: 'Renamed by an admin' });
@@ -778,6 +794,8 @@ describe(DiscordRepository.name, () => {
     const makeMessage = (id: string, overrides: Record<string, unknown> = {}) => ({
       id,
       guildId,
+      client: bot,
+      embeds: [],
       inGuild: () => true,
       channel,
       author: { id: '400000000000000001', username: 'contrib123', displayName: 'Contrib', bot: false },
@@ -804,20 +822,24 @@ describe(DiscordRepository.name, () => {
     });
 
     it('should return the candidates before the anchor, oldest first, and the oldest message of any kind', async () => {
+      await resolveWebhook();
+      const hook = { id: '700000000000000009', username: 'GitHub', displayName: 'GitHub', bot: true };
       channel.messages.fetch.mockResolvedValue(
         new Collection([
+          ['1000000000000000004', makeMessage('1000000000000000004', { webhookId: hook.id, author: hook })],
           ['1000000000000000003', makeMessage('1000000000000000003')],
           ['1000000000000000002', makeMessage('1000000000000000002')],
           ['999999999999999999', makeMessage('999999999999999999', { webhookId: '700000000000000001' })],
         ]),
       );
 
-      const page = await sut.fetchMirrorMessagesBefore(channelId, '1000000000000000009', 3);
+      const page = await sut.fetchMirrorMessagesBefore(channelId, '1000000000000000009', 4);
 
-      expect(channel.messages.fetch).toHaveBeenCalledWith({ before: '1000000000000000009', limit: 3 });
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ before: '1000000000000000009', limit: 4 });
       expect(page.messages.map(({ id, content }) => [id, content])).toEqual([
         ['1000000000000000002', 'message 1000000000000000002'],
         ['1000000000000000003', 'message 1000000000000000003'],
+        ['1000000000000000004', 'message 1000000000000000004'],
       ]);
       expect(page).toMatchObject({ oldestId: '999999999999999999', full: true });
     });

@@ -266,6 +266,33 @@ export const toZulipMirrorBody = (dto: DiscordSourceMessage, ctx: DiscordRenderC
   if (dto.poll !== null) {
     parts.push(`*[poll: ${escapeZulipInline(dto.poll)}]*`);
   }
+  for (const embed of dto.embeds ?? []) {
+    const inline = (content: string) =>
+      translateMessage({ content, mentions: dto.mentions, pills: 'text' }, ctx)
+        .replaceAll(/\s*\n\s*/g, ' ')
+        .trim();
+    const lines: string[] = [];
+    if (embed.title) {
+      lines.push(
+        embed.url && /^https?:\/\//i.test(embed.url)
+          ? `**${zulipLink(embed.title, embed.url)}**`
+          : `**${escapeZulipInline(embed.title)}**`,
+      );
+    }
+    if (embed.description) {
+      lines.push(
+        closeFences(
+          translateMessage({ content: embed.description, mentions: dto.mentions, pills: 'text' }, ctx).trimEnd(),
+        ),
+      );
+    }
+    for (const { name, value } of embed.fields) {
+      lines.push(`**${escapeZulipInline(name)}:** ${inline(value)}`);
+    }
+    if (lines.length > 0) {
+      parts.push(toZulipQuote(lines.join('\n')));
+    }
+  }
   for (const content of dto.forwarded) {
     const forwarded = translateMessage({ content, mentions: dto.mentions, pills: 'silent' }, ctx).trimEnd();
     parts.push(forwarded.trim() ? `*[forwarded message]*\n${toZulipQuote(forwarded)}` : '*[forwarded message]*');
@@ -302,7 +329,9 @@ const replySuffix = (reply: ZulipReplyTarget, ctx: DiscordRenderContext, silent:
 export const zulipAuthorHeader = (dto: DiscordSourceMessage, ctx: ZulipHeaderContext) => {
   const zulipUserId = ctx.zulipUserByDiscordId.get(dto.author.id);
   let author: string;
-  if (zulipUserId === undefined) {
+  if (dto.author.bot) {
+    author = `**${escapeZulipInline(dto.author.displayName) || escapeZulipInline(dto.author.username) || 'unknown-bot'}** (bot)`;
+  } else if (zulipUserId === undefined) {
     const username = escapeZulipInline(dto.author.username) || 'unknown-user';
     const displayName = escapeZulipInline(dto.author.displayName);
     author =
@@ -403,7 +432,12 @@ export const zulipMirrorContent = (lead: string, body: string, attachments: stri
   }
 };
 
-export const discordSourceHash = (dto: Pick<DiscordSourceMessage, 'content' | 'stickers' | 'poll' | 'forwarded'>) =>
+/** Embeds count only when there are some, so the hash of every message without them stays what it was. */
+export const discordSourceHash = (
+  dto: Pick<DiscordSourceMessage, 'content' | 'stickers' | 'poll' | 'forwarded' | 'embeds'>,
+) =>
   createHash('sha256')
-    .update(JSON.stringify([dto.content, dto.stickers, dto.poll, dto.forwarded]))
+    .update(
+      JSON.stringify([dto.content, dto.stickers, dto.poll, dto.forwarded, ...(dto.embeds?.length ? [dto.embeds] : [])]),
+    )
     .digest('hex');

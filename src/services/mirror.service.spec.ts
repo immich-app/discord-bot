@@ -294,6 +294,7 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
   return {
     getEmotes: vitest.fn().mockResolvedValue([]),
     isReady: vitest.fn().mockReturnValue(true),
+    isOwnMirrorWebhook: vitest.fn().mockReturnValue(false),
     getMirrorChannel: vitest.fn(async (channelId: string) => mirrorChannel(channelId)),
     ensureMirrorWebhook: vitest.fn().mockResolvedValue(undefined),
     sendMirrorMessage: vitest.fn(async ({ channelId, threadId, threadName }: DiscordMirrorSend) => {
@@ -1785,12 +1786,35 @@ describe(MirrorService.name, () => {
       ['a stream without a pair', { streamId: 107 }],
       ['a direct message', { type: 'private' as const, streamId: undefined }],
       ['a command to the bot', { content: `@**${BOT.fullName}** help` }],
-      ['an email Zulip received', { senderEmail: 'EmailGateway@zulip.com', senderFullName: 'Email Gateway' }],
+      ['a notice of Zulip itself', { senderEmail: 'notification-bot@zulip.com', senderFullName: 'Notification Bot' }],
     ])('should ignore %s', async (_, overrides) => {
       await fromZulip(zulipMessage(overrides));
 
       expect(db.repository.getMirrorMessagesByZulipIds).not.toHaveBeenCalled();
       expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another bot', { senderEmail: 'ci-bot@zulip.example.com', senderFullName: 'CI' }, 'CI (Zulip bot)'],
+      [
+        'an email Zulip received',
+        { senderEmail: 'EmailGateway@zulip.com', senderFullName: 'Email Gateway' },
+        'Email Gateway (Zulip bot)',
+      ],
+    ])('should mirror %s, named as a bot', async (_, overrides, username) => {
+      await fromZulip(zulipMessage({ senderId: 30, ...overrides }));
+      await fromZulip(zulipMessage({ id: 1002, senderId: 30, ...overrides, content: paragraphs('a', 'b') }));
+
+      expect(discord.sendMirrorMessage.mock.calls.map(([{ username: name }]) => name)).toEqual([
+        username,
+        username,
+        username,
+      ]);
+      expect(warn()).not.toHaveBeenCalledWith(expect.stringContaining('has not linked a Discord account'));
+    });
+
+    it("should take the messages of other bots from the event loop, which drops the bot's own", () => {
+      expect(stub.service.onMessage).toHaveBeenCalledWith(expect.any(Function), { withBots: true });
     });
 
     it('should mirror a Zulip message only once', async () => {
@@ -1891,6 +1915,29 @@ describe(MirrorService.name, () => {
       );
 
       expect(sentMessages().map(({ topic }) => topic)).toEqual(['Bug', 'Bug (2)']);
+    });
+
+    it('should mirror a bot or webhook, named as a bot', async () => {
+      await fromDiscord(
+        discordMessage({
+          author: { id: '700000000000000009', username: 'GitHub', displayName: 'GitHub', bot: true },
+          content: 'expanded',
+          embeds: [
+            { title: 'Issue #1', url: 'https://github.com/immich-app/immich/issues/1', description: null, fields: [] },
+          ],
+        }),
+      );
+
+      expect(sentMessages()[0].content).toBe(
+        '**GitHub** (bot): expanded\n~~~ quote\n**[Issue #1](https://github.com/immich-app/immich/issues/1)**\n~~~',
+      );
+    });
+
+    it('should ask the Discord repository whether a webhook is its own', () => {
+      discord.isOwnMirrorWebhook.mockReturnValueOnce(true);
+
+      expect(sut.isOwnWebhook(WEBHOOK)).toBe(true);
+      expect(discord.isOwnMirrorWebhook).toHaveBeenCalledWith(WEBHOOK);
     });
 
     it('should never give a thread the main topic', async () => {
@@ -4776,15 +4823,15 @@ describe(MirrorService.name, () => {
       );
     });
 
-    it('should leave out moved messages, the bot, other bots and commands', async () => {
+    it("should leave out moved messages, the bot, Zulip's notices and commands", async () => {
       seedHighWaters();
       zulip.getStreamMessagesBefore.mockImplementation(async ({ stream }) =>
         stream === DEV_STREAM
           ? [
               missedOnZulip({ id: 1001, movedAt: Math.floor(Date.now() / 1000) }),
               missedOnZulip({ id: 1002, senderId: BOT.userId }),
-              missedOnZulip({ id: 1003, senderEmail: 'ci-bot@zulip.example.com' }),
-              missedOnZulip({ id: 1007, senderEmail: 'emailgateway@zulip.com' }),
+              missedOnZulip({ id: 1003, senderEmail: 'notification-bot@zulip.com' }),
+              missedOnZulip({ id: 1007, senderEmail: 'ci-bot@zulip.example.com', content: 'by a bot' }),
               missedOnZulip({ id: 1004, content: `@**${BOT.fullName}** help` }),
               missedOnZulip({ id: 1005, streamId: FORUM_STREAM }),
               missedOnZulip({ id: 1006, content: 'kept' }),
@@ -4794,7 +4841,7 @@ describe(MirrorService.name, () => {
 
       await start();
 
-      expect(discord.sendMirrorMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content: 'kept' }));
+      expect(discord.sendMirrorMessage.mock.calls.map(([{ content }]) => content)).toEqual(['by a bot', 'kept']);
     });
 
     it('should mark a message it catches up late', async () => {
