@@ -856,6 +856,38 @@ describe(DiscordRepository.name, () => {
     });
   });
 
+  describe('listMirrorThreads', () => {
+    it('should list the active and recently archived public threads, with when they were made', async () => {
+      const fetchActive = vitest.fn().mockResolvedValue({
+        threads: new Collection([
+          ['1', { id: '1', type: ChannelType.PublicThread, createdTimestamp: 1_700_000_000_000 }],
+          ['2', { id: '2', type: ChannelType.PrivateThread, createdTimestamp: 1_700_000_000_000 }],
+        ]),
+      });
+      const fetchArchived = vitest.fn().mockResolvedValue({
+        threads: new Collection([
+          ['1', { id: '1', type: ChannelType.PublicThread, createdTimestamp: 1_700_000_000_000 }],
+          ['4194304', { id: '4194304', type: ChannelType.PublicThread, createdTimestamp: null }],
+        ]),
+      });
+      bot.channels.fetch.mockResolvedValue(
+        makeChannel({ type: ChannelType.GuildForum, threads: { fetchActive, fetchArchived } }),
+      );
+
+      await expect(sut.listMirrorThreads(channelId)).resolves.toEqual([
+        { id: '1', createdTimestamp: 1_700_000_000_000 },
+        { id: '4194304', createdTimestamp: 1_420_070_400_001 },
+      ]);
+      expect(fetchArchived).toHaveBeenCalledWith({ type: 'public', limit: 50 });
+    });
+
+    it('should refuse a channel that holds no threads', async () => {
+      bot.channels.fetch.mockResolvedValue(makeChannel({ type: ChannelType.GuildVoice }));
+
+      await expect(sut.listMirrorThreads(channelId)).rejects.toMatchObject({ kind: 'unknown-channel' });
+    });
+  });
+
   describe('sendMirrorNotice', () => {
     const notice = { title: 'Mirrored with Zulip', content: 'This channel is now mirrored' };
     const expected = { content: notice.content, allowedMentions: { parse: [] }, flags: [MessageFlags.SuppressEmbeds] };

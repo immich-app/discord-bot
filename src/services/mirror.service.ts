@@ -96,6 +96,7 @@ const CHANNEL_CHECK_MS = 10 * MINUTE;
 const DISCORD_EPOCH = 1_420_070_400_000n;
 const ACTIVE_THREAD_DAYS = 7;
 const ACTIVE_THREAD_LIMIT = 20;
+const NEW_THREAD_LIMIT = 20;
 const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const FILE_TRANSFER_BUDGET_MS = 120_000;
@@ -853,9 +854,18 @@ export class MirrorService implements OnModuleDestroy {
       read(channelId, first - 1n, thread);
     }
 
+    let complete = true;
+    try {
+      for (const threadId of await this.newThreads(state, since, locations)) {
+        read(threadId, BigInt(threadId) - 1n);
+      }
+    } catch (error) {
+      complete = !isTransient(error);
+      this.fail(`${pair.key}: catch-up could not list the threads of Discord channel ${pair.discordChannelId}`, error);
+    }
+
     const windowStart = snowflakeAt(since);
     const missed: DiscordSourceMessage[] = [];
-    let complete = true;
     for (const [channelId, { after: highWater, thread }] of locations) {
       const stop = highWater > windowStart ? highWater : windowStart;
       try {
@@ -891,6 +901,26 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     return { messages: missed, complete };
+  }
+
+  /** Threads made within the window that have no conversation: the mirror never saw them start. */
+  private async newThreads(state: PairState, since: number, known: Map<string, unknown>) {
+    const { pair } = state;
+    const fresh = (await this.discordMirror.listMirrorThreads(pair.discordChannelId))
+      .filter(({ id, createdTimestamp }) => createdTimestamp >= since && !known.has(id))
+      .toSorted((a, b) => b.createdTimestamp - a.createdTimestamp);
+    const unseen: string[] = [];
+    for (const { id } of fresh) {
+      if (!(await this.database.getMirrorConversationByDiscord(pair.discordChannelId, id))) {
+        unseen.push(id);
+      }
+    }
+    if (unseen.length > NEW_THREAD_LIMIT) {
+      this.logger.warn(
+        `${pair.key}: catch-up found ${unseen.length} new Discord threads and reads the newest ${NEW_THREAD_LIMIT}; the messages of the others (${unseen.slice(NEW_THREAD_LIMIT).join(', ')}) are not mirrored`,
+      );
+    }
+    return unseen.slice(0, NEW_THREAD_LIMIT);
   }
 
   /**

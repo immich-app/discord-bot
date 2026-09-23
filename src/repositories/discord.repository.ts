@@ -27,6 +27,7 @@ import {
   DiscordMirrorSend,
   DiscordMirrorSent,
   DiscordMirrorTarget,
+  DiscordMirrorThread,
   DiscordReactionEmoji,
   DiscordTeamMember,
   IDiscordMirrorInterface,
@@ -105,6 +106,8 @@ const mirrorErrorKinds: Partial<Record<number, DiscordMirrorErrorKind>> = {
 };
 
 const WEBHOOK_FAILURE_MS = 10 * 60 * 1000;
+const ARCHIVED_THREADS = 50;
+const DISCORD_EPOCH = 1_420_070_400_000;
 const AVATAR_TIMEOUT_MS = 10_000;
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
 
@@ -588,6 +591,28 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       await bot.rest.delete(
         Routes.channelMessageOwnReaction(target.threadId ?? target.channelId, target.messageId, emojiRoute(emoji)),
       );
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async listMirrorThreads(channelId: string): Promise<DiscordMirrorThread[]> {
+    try {
+      const channel = await bot.channels.fetch(channelId);
+      if (channel?.type !== ChannelType.GuildText && channel?.type !== ChannelType.GuildForum) {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+      const [active, archived] = await Promise.all([
+        channel.threads.fetchActive(),
+        channel.threads.fetchArchived({ type: 'public', limit: ARCHIVED_THREADS }),
+      ]);
+      const threads = new Map([...active.threads, ...archived.threads]);
+      return [...threads.values()]
+        .filter(({ type }) => type !== ChannelType.PrivateThread)
+        .map(({ id, createdTimestamp }) => ({
+          id,
+          createdTimestamp: createdTimestamp ?? Number(BigInt(id) >> 22n) + DISCORD_EPOCH,
+        }));
     } catch (error) {
       throw toMirrorError(error);
     }

@@ -298,6 +298,7 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     getTeamMember: vitest.fn().mockResolvedValue(TEAM_MEMBER),
     fetchMirrorMessagesBefore: vitest.fn().mockResolvedValue({ messages: [], oldestId: null, full: false }),
     fetchMirrorMessage: vitest.fn().mockResolvedValue(undefined),
+    listMirrorThreads: vitest.fn().mockResolvedValue([]),
     sendMirrorNotice: vitest.fn(),
     unpinMirrorNotice: vitest.fn(),
     getMirrorReactions: vitest.fn().mockResolvedValue([]),
@@ -3576,6 +3577,100 @@ describe(MirrorService.name, () => {
           .sort((a, b) => a.id - b.id)
           .slice(-count),
       );
+    });
+
+    describe('threads made while the bot was away', () => {
+      it('should find a new thread and forum post in the window and mirror them from their first message', async () => {
+        const thread = snowflake(Date.now() - 2 * HOUR);
+        const post = snowflake(Date.now() - HOUR);
+        const old = snowflake(Date.now() - 7 * HOUR);
+        discord.listMirrorThreads.mockImplementation(async (channelId) =>
+          channelId === DEV_CHANNEL
+            ? [
+                { id: thread, createdTimestamp: Date.now() - 2 * HOUR },
+                { id: old, createdTimestamp: Date.now() - 7 * HOUR },
+              ]
+            : channelId === FORUM
+              ? [{ id: post, createdTimestamp: Date.now() - HOUR }]
+              : [],
+        );
+        onDiscord(
+          thread,
+          missedOnDiscord({
+            id: snowflake(Date.now() - 2 * HOUR, 1),
+            threadId: thread,
+            threadName: 'Crash',
+            content: 'first',
+          }),
+          missedOnDiscord({
+            id: snowflake(Date.now() - HOUR, 1),
+            threadId: thread,
+            threadName: 'Crash',
+            content: 'second',
+          }),
+        );
+        onDiscord(
+          post,
+          missedOnDiscord({ id: post, channelId: FORUM, threadId: post, threadName: 'Idea', content: 'the post' }),
+        );
+
+        await start();
+
+        expect(discord.fetchMirrorMessagesBefore).not.toHaveBeenCalledWith(old, undefined, 100);
+        expect(
+          sentMessages().map(({ topic, content }) => [
+            topic,
+            content.replace(/^\*\*Contrib\*\* \(&#64;contrib123\)(?: · <time:[^>]+>)?: /, ''),
+          ]),
+        ).toEqual(expect.arrayContaining([['Idea', 'the post']]));
+        expect(sentMessages().filter(({ topic }) => topic === 'Crash')).toEqual([
+          expect.objectContaining({ content: expect.stringMatching(/: first$/) }),
+          expect.objectContaining({ content: expect.stringMatching(/: second$/) }),
+        ]);
+        expect(db.conversations.map(({ discordThreadId }) => discordThreadId).sort()).toEqual([thread, post].sort());
+      });
+
+      it('should leave a thread that has a conversation to its high-water mark', async () => {
+        const known = seedThread({ discordThreadId: snowflake(Date.now() - HOUR) });
+        discord.listMirrorThreads.mockImplementation(async (channelId) =>
+          channelId === DEV_CHANNEL ? [{ id: known.discordThreadId!, createdTimestamp: Date.now() - HOUR }] : [],
+        );
+
+        await start();
+
+        expect(discord.fetchMirrorMessagesBefore).not.toHaveBeenCalled();
+      });
+
+      it('should read the newest twenty and say which it leaves out', async () => {
+        const threads = Array.from({ length: 22 }, (_, index) => ({
+          id: snowflake(Date.now() - HOUR - index * 60_000),
+          createdTimestamp: Date.now() - HOUR - index * 60_000,
+        }));
+        discord.listMirrorThreads.mockImplementation(async (channelId) => (channelId === DEV_CHANNEL ? threads : []));
+
+        await start();
+
+        expect(discord.fetchMirrorMessagesBefore).toHaveBeenCalledTimes(20);
+        expect(warn()).toHaveBeenCalledWith(
+          `${DEV_CHANNEL}: catch-up found 22 new Discord threads and reads the newest 20; the messages of the others (${threads[20].id}, ${threads[21].id}) are not mirrored`,
+        );
+      });
+
+      it('should catch up again when the threads cannot be listed for now', async () => {
+        discord.listMirrorThreads.mockImplementation(async (channelId) => {
+          if (channelId === DEV_CHANNEL) {
+            throw new DiscordMirrorError('unavailable');
+          }
+          return [];
+        });
+
+        await start();
+
+        expect(error()).toHaveBeenCalledWith(
+          `${DEV_CHANNEL}: catch-up could not list the threads of Discord channel ${DEV_CHANNEL}: unavailable`,
+        );
+        expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up again in 30 seconds`);
+      });
     });
 
     it('should fetch nothing without a high-water mark', async () => {

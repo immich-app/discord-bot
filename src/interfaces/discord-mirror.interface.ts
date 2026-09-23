@@ -64,6 +64,9 @@ export type DiscordMirrorReaction = { emoji: DiscordReactionEmoji; count: number
 
 export type DiscordTeamMember = { displayName: string; avatarUrl: string; roleIds: string[] };
 
+/** `createdTimestamp` is when the thread was made, which for a thread started from a message is not its ID's time. */
+export type DiscordMirrorThread = { id: string; createdTimestamp: number };
+
 /** `messages` holds the mirror candidates of the page, oldest first; `oldestId` is the oldest message of any kind. */
 export type DiscordMirrorPage = { messages: DiscordSourceMessage[]; oldestId: string | null; full: boolean };
 
@@ -121,6 +124,8 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   /** As the bot; adding a reaction it has, or removing one it has not, changes nothing. */
   addMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji): Promise<void>;
   removeMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji): Promise<void>;
+  /** The public threads of a channel or posts of a forum that are active, and the most recently archived ones. */
+  listMirrorThreads(channelId: string): Promise<DiscordMirrorThread[]>;
   /** Any message, whoever sent it; `undefined` when there is none. `channelId` may be a thread. */
   fetchMirrorMessage(channelId: string, messageId: string): Promise<DiscordSourceMessage | undefined>;
   /** `channelId` may be a thread. */
