@@ -75,6 +75,7 @@ describe('ZulipRepository', () => {
       { method: 'registerQueue', call: () => sut.registerQueue() },
       { method: 'getEvents', call: () => sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live()) },
       { method: 'deleteQueue', call: () => sut.deleteQueue('q1') },
+      { method: 'getEmojiCodes', call: () => sut.getEmojiCodes() },
     ])('should throw a clear error from $method', async ({ call }) => {
       await expect(call()).rejects.toThrow('Zulip client not initialised');
       expect(fetchMock).not.toHaveBeenCalled();
@@ -668,6 +669,58 @@ describe('ZulipRepository', () => {
 
       await expect(sut.deleteQueue('q1')).rejects.toMatchObject({ code: 'BAD_EVENT_QUEUE_ID' });
     });
+  });
+
+  describe('getEmojiCodes', () => {
+    beforeEach(async () => {
+      await sut.init({ ...config, realm: 'https://zulip.example.com/api/' });
+    });
+
+    it("should read the realm's static emoji table without credentials, joining multi-codepoint emoji", async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          names: ['+1'],
+          name_to_codepoint: { '+1': '1f44d', smile: '1f604', hash: '0023-20e3', flag_gb: '1f1ec-1f1e7' },
+          codepoint_to_name: {},
+        }),
+      );
+
+      await expect(sut.getEmojiCodes()).resolves.toEqual({
+        '+1': '👍',
+        smile: '😄',
+        hash: '#⃣',
+        flag_gb: '🇬🇧',
+      });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(request(0).url).toBe('https://zulip.example.com/static/generated/emoji/emoji_codes.json');
+      expect(request(0).headers.get('authorization')).toBeNull();
+    });
+
+    it('should skip an entry that is not a codepoint sequence', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          name_to_codepoint: { ok: '1f44d', text: 'smile', number: 128_077, empty: '', huge: '110000', gap: '1f44d-' },
+        }),
+      );
+
+      await expect(sut.getEmojiCodes()).resolves.toEqual({ ok: '👍' });
+    });
+
+    it('should throw when the table cannot be fetched', async () => {
+      fetchMock.mockResolvedValue(new Response('not found', { status: 404 }));
+
+      await expect(sut.getEmojiCodes()).rejects.toThrow('Could not fetch the Zulip emoji codes: 404');
+    });
+
+    it.each([{}, { name_to_codepoint: ['1f44d'] }, { name_to_codepoint: 'x' }, null])(
+      'should throw when the answer %j has no table',
+      async (body) => {
+        fetchMock.mockResolvedValue(json(body));
+
+        await expect(sut.getEmojiCodes()).rejects.toThrow('The Zulip emoji codes have no name_to_codepoint table');
+      },
+    );
   });
 
   describe('createEmote', () => {

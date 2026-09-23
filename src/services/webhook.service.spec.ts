@@ -145,6 +145,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
+  getEmojiCodes: vitest.fn(),
 });
 
 // --- fixtures -------------------------------------------------------------------------------
