@@ -934,6 +934,20 @@ describe(MirrorService.name, () => {
       expect(db.conversations[0].zulipTopic).toBe('new name');
     });
 
+    it('should start a new thread when the anchor of the conversation found again is gone', async () => {
+      const thread = seedThread({ zulipTopic: 'old name', zulipTopicKey: 'old name', zulipAnchorMessageId: 60 });
+      seedRow({ zulipMessageId: 70, conversationId: thread.id, discordThreadId: thread.discordThreadId });
+      zulip.getMessages.mockResolvedValue([zulipMessage({ id: 70, topic: 'new name' })]);
+      zulip.getMessage.mockRejectedValue(
+        new ZulipApiError(400, 'BAD_REQUEST', 'Invalid message(s)', 'GET /messages/60'),
+      );
+
+      await fromZulip(zulipMessage({ topic: 'new name' }));
+
+      expect(discord.startMirrorThread).toHaveBeenCalledOnce();
+      expect(db.conversations.map(({ zulipTopic }) => zulipTopic)).toEqual(['old name', 'new name']);
+    });
+
     it('should find a topic moved to the empty topic again through its anchor', async () => {
       const thread = seedThread({ zulipTopic: 'Foo', zulipTopicKey: 'foo', zulipAnchorMessageId: 60 });
       seedRow({ zulipMessageId: 70, conversationId: thread.id, discordThreadId: thread.discordThreadId });
@@ -1082,6 +1096,21 @@ describe(MirrorService.name, () => {
       );
     });
 
+    it('should jump to the first part of a Zulip message mirrored in several parts', async () => {
+      seedRow({ discordMessageId: '800000000000000001', zulipMessageId: 77, part: 0 });
+      seedRow({ discordMessageId: '800000000000000002', zulipMessageId: 77, part: 1 });
+
+      await fromZulip(
+        zulipMessage({
+          content: `@_**Bea|20** [said](#narrow/channel/${DEV_STREAM}/topic/.23dev/near/77):\n\`\`\`quote\nhi\n\`\`\`\nthanks`,
+        }),
+      );
+
+      expect(sent(0).content).toBe(
+        `-# ↩ replying to Bea · [jump](https://discord.com/channels/${GUILD}/${DEV_CHANNEL}/800000000000000001)\nthanks`,
+      );
+    });
+
     it('should ping and attach on the first part only', async () => {
       seedRow({
         discordMessageId: '300000000000000005',
@@ -1194,6 +1223,33 @@ describe(MirrorService.name, () => {
       );
       expect(sent(0).content).toBe('look\n*(attachment not mirrored: big.zip)*');
       expect(sent(0).files?.map(({ name }) => name)).toEqual(['shot.png']);
+    });
+
+    it('should attach at most ten files and note the rest', async () => {
+      const names = Array.from({ length: 11 }, (_, index) => `f${index + 1}.png`);
+
+      await fromZulip(
+        zulipMessage({ content: names.map((name) => `[${name}](/user_uploads/2/ab/cdef/${name})`).join('\n') }),
+      );
+
+      expect(zulip.downloadUpload).toHaveBeenCalledTimes(10);
+      expect(sent(0).files?.map(({ name }) => name)).toEqual(names.slice(0, 10));
+      expect(sent(0).content).toBe('*(attachment not mirrored: f11.png)*');
+    });
+
+    it('should attach files up to 24 MiB together and note the ones past that', async () => {
+      zulip.downloadUpload.mockImplementation(
+        async (path) => new File([new Uint8Array(10 * 1024 * 1024)], path.slice(path.lastIndexOf('/') + 1)),
+      );
+
+      await fromZulip(
+        zulipMessage({
+          content: ['a.bin', 'b.bin', 'c.bin'].map((name) => `[${name}](/user_uploads/2/ab/cdef/${name})`).join('\n'),
+        }),
+      );
+
+      expect(sent(0).files?.map(({ name }) => name)).toEqual(['a.bin', 'b.bin']);
+      expect(sent(0).content).toBe('*(attachment not mirrored: c.bin)*');
     });
 
     it('should note the uploads it has no time left for, well before the queue gives up on the message', async () => {
@@ -2759,7 +2815,12 @@ describe(MirrorService.name, () => {
         missedOnDiscord(),
         missedOnDiscord({ id: snowflake(Date.now() - 30_000), content: 'second' }),
       );
-      zulipHistory.push(missedOnZulip(), missedOnZulip({ id: 1002, content: 'later' }));
+      zulipHistory.push(
+        missedOnZulip({ id: 999, content: 'before the mark' }),
+        missedOnZulip({ id: 1000, content: 'the mark' }),
+        missedOnZulip(),
+        missedOnZulip({ id: 1002, content: 'later' }),
+      );
 
       await start();
 
@@ -3215,6 +3276,38 @@ describe(MirrorService.name, () => {
       await sut.whenIdle();
 
       expect(posted()).toEqual(['post', 'post']);
+      expect(sent(0)).toEqual(expect.objectContaining({ channelId: FORUM, threadName: 'Roadmap', content: 'team' }));
+    });
+
+    it('should read a Zulip message it turned away again when that read fails on the way', async () => {
+      await start();
+      vitest.useFakeTimers();
+      zulip.sendMessage.mockRejectedValueOnce(new TypeError('fetch failed', { cause: refused() }));
+      const postId = snowflake(Date.now() - 1000);
+      const post = discordMessage({
+        id: postId,
+        channelId: FORUM,
+        threadId: postId,
+        threadName: 'Plugins',
+        content: 'post',
+      });
+      onDiscord(postId, post);
+      await fromDiscord(post);
+      const team = zulipMessage({ id: 2001, streamId: FORUM_STREAM, topic: 'Roadmap', content: 'team' });
+      zulipHistory.push(team);
+      await fromZulip(team);
+      const unavailable = new ZulipApiError(503, 'UNKNOWN_ERROR', 'Service Unavailable', 'GET /messages');
+      zulip.getStreamMessagesBefore
+        .mockRejectedValueOnce(unavailable)
+        .mockRejectedValueOnce(unavailable)
+        .mockRejectedValueOnce(unavailable);
+
+      await vitest.advanceTimersByTimeAsync(36_000);
+      await sut.whenIdle();
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(60_000);
+      await sut.whenIdle();
       expect(sent(0)).toEqual(expect.objectContaining({ channelId: FORUM, threadName: 'Roadmap', content: 'team' }));
     });
 
