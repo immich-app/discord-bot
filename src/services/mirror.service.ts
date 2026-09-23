@@ -496,18 +496,26 @@ export class MirrorService implements OnModuleDestroy {
     return this.pairs.find(({ pair, status }) => pair.zulipStreamId === streamId && status !== 'disabled');
   }
 
-  private onZulipMessage(message: ZulipReceivedMessage) {
-    const state = message.type === 'stream' ? this.byStream(message.streamId) : undefined;
-    if (state && isHumanSender(message) && !this.isCommand(message.content)) {
+  /** Events and `GET /messages` name the empty topic by the realm's display name; the mirror keeps it as `''`. */
+  private fromZulipTopic(topic: string) {
+    return topic === (this.zulipService.emptyTopicName ?? EMPTY_TOPIC_NAME) ? '' : topic;
+  }
+
+  private onZulipMessage(received: ZulipReceivedMessage) {
+    const state = received.type === 'stream' ? this.byStream(received.streamId) : undefined;
+    if (state && isHumanSender(received) && !this.isCommand(received.content)) {
+      const message = { ...received, topic: this.fromZulipTopic(received.topic) };
       state.queue.push(`Zulip message ${message.id}`, () => this.mirrorZulipMessage(state, message));
     }
   }
 
-  private onZulipUpdate(update: ZulipMessageUpdated) {
-    const state = this.byStream(update.streamId);
+  private onZulipUpdate(received: ZulipMessageUpdated) {
+    const state = this.byStream(received.streamId);
     if (!state) {
       return;
     }
+    const update =
+      received.topic === undefined ? received : { ...received, topic: this.fromZulipTopic(received.topic) };
     const { content, messageId } = update;
     if (content !== undefined) {
       state.queue.push(`edit of Zulip message ${messageId}`, () => this.editFromZulip(state, messageId, content));
@@ -875,15 +883,17 @@ export class MirrorService implements OnModuleDestroy {
       this.fail(`${pair.key}: catch-up could not read Zulip stream ${pair.zulipStreamId}`, error);
       return { messages: [], complete: !isTransient(error) };
     }
-    const messages = found.filter(
-      (message) =>
-        message.type === 'stream' &&
-        message.streamId === pair.zulipStreamId &&
-        message.senderId !== self &&
-        isHumanSender(message) &&
-        !this.isCommand(message.content) &&
-        (message.movedAt === undefined || turnedAway.has(message.id)),
-    );
+    const messages = found
+      .map((message) => ({ ...message, topic: this.fromZulipTopic(message.topic) }))
+      .filter(
+        (message) =>
+          message.type === 'stream' &&
+          message.streamId === pair.zulipStreamId &&
+          message.senderId !== self &&
+          isHumanSender(message) &&
+          !this.isCommand(message.content) &&
+          (message.movedAt === undefined || turnedAway.has(message.id)),
+      );
     return { messages, complete: true };
   }
 
@@ -1934,7 +1944,7 @@ export class MirrorService implements OnModuleDestroy {
       await this.detach(state, conversation, 'its Zulip topic was moved to another stream');
       return undefined;
     }
-    const topic = found.topic || EMPTY_TOPIC_NAME;
+    const { topic } = found;
     if (topic !== conversation.zulipTopic) {
       const zulipTopicKey = topicKey(topic);
       if (await this.isTakenByAnother(state, conversation, zulipTopicKey)) {

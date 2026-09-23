@@ -967,6 +967,26 @@ describe('ZulipService', () => {
         expect(second.mock.invocationCallOrder[0]).toBeLessThan(zulipMock.getEvents.mock.invocationCallOrder[0]);
       });
 
+      it('should keep the name the realm gives the empty topic, known once a queue is registered', async () => {
+        const seen: (string | undefined)[] = [];
+        sut.onQueueRegistered(() => seen.push(sut.emptyTopicName));
+        zulipMock.registerQueue
+          .mockResolvedValueOnce({
+            queue: { queueId: 'q1', lastEventId: -1 },
+            subscribedStreamIds: [],
+            emptyTopicName: 'allgemein',
+          })
+          .mockResolvedValueOnce({ queue: { queueId: 'q2', lastEventId: -1 }, subscribedStreamIds: [] });
+        expect(sut.emptyTopicName).toBeUndefined();
+
+        await sut.init();
+        await flush();
+        polls[0].reject(badQueue());
+        await nextPoll();
+
+        expect(seen).toEqual(['allgemein', 'allgemein']);
+      });
+
       it('should tell them again at every registration, a dead queue included', async () => {
         const onRegistered = vitest.fn();
         sut.onQueueRegistered(onRegistered);

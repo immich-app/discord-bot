@@ -8,6 +8,7 @@ import {
   shortenCodePoints,
 } from 'src/format';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { topicKey } from 'src/mirror/names';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mirror-link.service';
@@ -176,7 +177,7 @@ export class ZulipCommandService {
     'mirror-link': {
       usage: 'mirror-link [topic=<main topic>]',
       description:
-        "start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, `#channel-name` by default) holds the channel's own messages",
+        "start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
       positionals: 0,
       options: ['topic'],
       administrators: true,
@@ -347,7 +348,8 @@ export class ZulipCommandService {
 
   /** The announcement says it all in its own topic, so a command given there is answered with the rest only. */
   private linkReply(message: StreamMessage, { summary, details, zulipAnnouncement }: MirrorLinkReply) {
-    const announcedHere = zulipAnnouncement?.streamId === message.streamId && zulipAnnouncement.topic === message.topic;
+    const announcedHere =
+      zulipAnnouncement?.streamId === message.streamId && topicKey(zulipAnnouncement.topic) === topicKey(message.topic);
     const lines = announcedHere ? details : [summary, ...details];
     return lines.length > 0 ? lines.join('\n') : undefined;
   }

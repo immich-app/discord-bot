@@ -337,6 +337,7 @@ const newZulipServiceStub = () => {
   };
   const service = {
     ownUser: BOT,
+    emptyTopicName: 'general chat',
     onMessage: vitest.fn((handler: ZulipMessageHandler) => handlers.message.push(handler)),
     onMessageUpdate: vitest.fn((handler: ZulipUpdateHandler) => handlers.update.push(handler)),
     onMessagesDeleted: vitest.fn((handler: ZulipDeletionHandler) => handlers.deletion.push(handler)),
@@ -1122,7 +1123,7 @@ describe(MirrorService.name, () => {
       await fromZulip(zulipMessage({ topic: 'general chat' }));
 
       expect(sent(0).threadId).toBe(thread.discordThreadId);
-      expect(db.conversations[0]).toEqual(expect.objectContaining({ zulipTopic: 'general chat', zulipTopicKey: '' }));
+      expect(db.conversations[0]).toEqual(expect.objectContaining({ zulipTopic: '', zulipTopicKey: '' }));
     });
 
     it('should leave a new topic for catch-up when its anchor cannot be read for now', async () => {
@@ -1668,6 +1669,66 @@ describe(MirrorService.name, () => {
     });
   });
 
+  describe('the general chat main topic', () => {
+    beforeEach(async () => {
+      db.links[0].mainTopic = '';
+      await start();
+    });
+
+    it('should post the channel messages to the empty topic', async () => {
+      await fromDiscord(discordMessage());
+
+      expect(sentMessages()).toEqual([
+        { stream: DEV_STREAM, topic: '', content: '**Contrib** (&#64;contrib123): hello' },
+      ]);
+      expect(db.conversations).toEqual([
+        expect.objectContaining({ discordThreadId: null, zulipTopic: '', zulipTopicKey: '' }),
+      ]);
+    });
+
+    it('should take a message in the topic events call general chat into the channel, not a thread', async () => {
+      await fromZulip(zulipMessage({ topic: 'general chat' }));
+      await fromDiscord(discordMessage());
+
+      expect(sent(0)).toEqual(expect.objectContaining({ channelId: DEV_CHANNEL, content: 'hello' }));
+      expect(sent(0).threadId).toBeUndefined();
+      expect(discord.startMirrorThread).not.toHaveBeenCalled();
+      expect(db.conversations).toHaveLength(1);
+    });
+
+    it('should know the empty topic by the name the realm gave at registration', async () => {
+      stub.service.emptyTopicName = 'allgemein';
+
+      await fromZulip(zulipMessage({ topic: 'allgemein' }));
+
+      expect(discord.startMirrorThread).not.toHaveBeenCalled();
+      expect(db.conversations).toEqual([expect.objectContaining({ zulipTopic: '', discordThreadId: null })]);
+    });
+
+    it('should give a topic really named General Chat a thread of its own', async () => {
+      await fromZulip(zulipMessage({ topic: 'General Chat' }));
+
+      expect(discord.startMirrorThread).toHaveBeenCalledExactlyOnceWith(
+        DEV_CHANNEL,
+        expect.any(String),
+        'General Chat',
+      );
+      expect(db.conversations).toEqual([
+        expect.objectContaining({ zulipTopic: 'General Chat', zulipTopicKey: 'general chat' }),
+      ]);
+    });
+
+    it('should catch up the empty topic into the channel', async () => {
+      seedRow({ zulipMessageId: 900, createdAt: new Date() });
+      zulip.getStreamMessagesBefore.mockResolvedValue([zulipMessage({ id: 1001, topic: 'general chat' })]);
+
+      await register();
+
+      expect(sent(0)).toEqual(expect.objectContaining({ channelId: DEV_CHANNEL, content: 'hello' }));
+      expect(discord.startMirrorThread).not.toHaveBeenCalled();
+    });
+  });
+
   describe('filters', () => {
     beforeEach(start);
 
@@ -1831,12 +1892,12 @@ describe(MirrorService.name, () => {
     });
 
     it('should keep the stored topic when the anchor is in the empty topic', async () => {
-      const thread = seedThread({ zulipTopic: 'general chat', zulipTopicKey: '' });
+      const thread = seedThread({ zulipTopic: '', zulipTopicKey: '' });
       zulip.getMessage.mockResolvedValue({ id: 70, topic: '', streamId: DEV_STREAM });
 
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId }));
 
-      expect(sentMessages()[0].topic).toBe('general chat');
+      expect(sentMessages()[0].topic).toBe('');
       expect(db.repository.updateMirrorConversation).not.toHaveBeenCalled();
     });
 
@@ -1846,8 +1907,8 @@ describe(MirrorService.name, () => {
 
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId }));
 
-      expect(sentMessages()[0].topic).toBe('general chat');
-      expect(db.conversations[0]).toEqual(expect.objectContaining({ zulipTopic: 'general chat', zulipTopicKey: '' }));
+      expect(sentMessages()[0].topic).toBe('');
+      expect(db.conversations[0]).toEqual(expect.objectContaining({ zulipTopic: '', zulipTopicKey: '' }));
     });
 
     it('should re-anchor a conversation whose anchor is gone', async () => {

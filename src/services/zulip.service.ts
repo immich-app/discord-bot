@@ -72,6 +72,7 @@ export class ZulipService implements OnModuleDestroy {
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
   private self?: ZulipUser;
+  private emptyTopic?: string;
   private loop?: { promise: Promise<void>; controller: AbortController };
 
   constructor(
@@ -106,6 +107,11 @@ export class ZulipService implements OnModuleDestroy {
 
   get ownUser(): ZulipUser | undefined {
     return this.self;
+  }
+
+  /** The realm's name for the empty topic in the messages handlers receive, known once a queue is registered. */
+  get emptyTopicName(): string | undefined {
+    return this.emptyTopic;
   }
 
   /** An in-flight registration is awaited: the server creates its queue even if the client never reads the answer. */
@@ -212,9 +218,10 @@ export class ZulipService implements OnModuleDestroy {
   }
 
   private async registerQueueNow() {
-    const { queue, subscribedStreamIds } = await this.zulip.registerQueue();
+    const { queue, subscribedStreamIds, emptyTopicName } = await this.zulip.registerQueue();
     // Set here, not only by the loop's own assignment, so that a shutdown waiting on this registration finds it.
     this.queue = queue;
+    this.emptyTopic = emptyTopicName ?? this.emptyTopic;
     this.logger.log(`Registered Zulip event queue ${queue.queueId}`);
     const subscribed = new Set(subscribedStreamIds);
     for (const streamId of listeningStreams()) {

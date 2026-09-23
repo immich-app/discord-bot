@@ -9,7 +9,8 @@ import {
   IDiscordMirrorInterface,
 } from 'src/interfaces/discord-mirror.interface';
 import { IZulipInterface, ZulipStream } from 'src/interfaces/zulip.interface';
-import { defaultMainTopic, holdsIdentityRole, mainTopicProblem } from 'src/mirror/pairs';
+import { EMPTY_TOPIC_NAME, topicKey } from 'src/mirror/names';
+import { holdsIdentityRole, mainTopicProblem } from 'src/mirror/pairs';
 import { escapeDiscordInline } from 'src/mirror/zulip-to-discord';
 import { MirrorLink } from 'src/schema';
 import { MirrorService } from 'src/services/mirror.service';
@@ -109,6 +110,9 @@ export class MirrorLinkService {
     if (problem) {
       return `Could not use ${code('zulip', mainTopic!)}: ${problem}.`;
     }
+    if (mainTopic !== undefined && (topicKey(mainTopic) === '' || mainTopic === this.generalChat())) {
+      mainTopic = '';
+    }
     const taken = (await this.database.getMirrorLinks()).find((link) => link.zulipStreamId === zulipStreamId);
     if (taken) {
       const names = await this.names(taken);
@@ -134,9 +138,7 @@ export class MirrorLinkService {
 
     return [
       `To mirror this stream with a Discord channel, run ${code('zulip', `/mirror-link id:${linkId}`)} in that channel on the Immich Discord server (for a forum, in any of its posts); it takes a member with the Administrator permission there. The ID expires in 1 hour and works once. Nothing is mirrored until then.`,
-      mainTopic === undefined
-        ? "A text channel's own messages will go to the topic named after it (`#channel-name`); a forum has no main topic, each post gets a topic of its own."
-        : `A text channel's own messages will go to the topic ${code('zulip', mainTopic)}; a forum has no main topic, each post gets a topic of its own.`,
+      `A text channel's own messages will go to ${this.describeMainTopic('zulip', mainTopic ?? '')}${mainTopic === undefined ? ` (${code('zulip', 'mirror-link topic=<name>')} names another)` : ''}; a forum has no main topic, each post gets a topic of its own.`,
       ...(replaced ? ['This replaces the earlier request for this stream, whose ID no longer works.'] : []),
     ].join('\n');
   }
@@ -194,7 +196,7 @@ export class MirrorLinkService {
     const details: string[] = [];
     let topic: string | null = null;
     if (channel.kind === 'text') {
-      topic = pending.mainTopic ?? defaultMainTopic(channel.name);
+      topic = pending.mainTopic ?? '';
     } else if (pending.mainTopic !== undefined) {
       details.push(`The main topic ${code(p, pending.mainTopic)} is not used: a forum has none.`);
     }
@@ -250,7 +252,7 @@ export class MirrorLinkService {
         `🔗 This stream is now mirrored with the Discord channel ${channelName('zulip', discordChannelId, channel)}, ${linkedBy('zulip')}. Everything posted here is copied to Discord, and everything posted there is copied here.`,
         topic === null
           ? 'Each topic here is a post in the Discord forum, and each post there is a topic here.'
-          : `Messages in the topic ${code('zulip', topic)} go to the Discord channel itself; every other topic becomes a thread there, and every thread there a topic here.`,
+          : `Messages in ${this.describeMainTopic('zulip', topic)} go to the Discord channel itself; every other topic becomes a thread there, and every thread there a topic here.`,
       ].join(' '),
       details,
     );
@@ -261,7 +263,7 @@ export class MirrorLinkService {
         `🔗 This channel is now mirrored with the Zulip stream ${streamName('discord', zulipStreamId, stream)}, ${linkedBy('discord')}. Everything posted here is copied to Zulip, and everything posted there is copied here.`,
         topic === null
           ? 'Each post here is a topic in the Zulip stream, and each topic there is a post here.'
-          : `Messages in this channel go to the Zulip topic ${code('discord', topic)}; each thread gets a topic of its own.`,
+          : `Messages in this channel go to ${this.describeMainTopic('discord', topic, 'Zulip ')}; each thread gets a topic of its own.`,
       ].join(' '),
       true,
       details,
@@ -274,7 +276,7 @@ export class MirrorLinkService {
       summary: `Linked Discord channel ${channelName(p, discordChannelId, channel)} with Zulip stream ${streamName(p, zulipStreamId, stream)}: everything posted on either side is now copied to the other. ${
         topic === null
           ? 'Each forum post is a topic of its own.'
-          : `The channel's own messages go to the topic ${code(p, topic)}, and each thread gets a topic of its own.`
+          : `The channel's own messages go to ${this.describeMainTopic(p, topic)}, and each thread gets a topic of its own.`
       }`,
       details,
     };
@@ -340,7 +342,9 @@ export class MirrorLinkService {
       links.map(async (link) => {
         const { channel, stream } = await this.names(link);
         const layout =
-          link.mainTopic === null ? 'forum, one topic per post' : `text channel, main topic ${code(p, link.mainTopic)}`;
+          link.mainTopic === null
+            ? 'forum, one topic per post'
+            : `text channel, main topic ${link.mainTopic ? code(p, link.mainTopic) : this.generalChat()}`;
         const state = this.mirror.handlesChannel(link.discordChannelId) ? '' : ' (off: see the log)';
         return `- Discord channel ${channelName(p, link.discordChannelId, channel)} ↔ Zulip stream ${streamName(p, link.zulipStreamId, stream)}${state}: ${layout}; linked by ${text(p, link.createdBy)} on ${link.createdAt.toISOString().slice(0, 10)}`;
       }),
@@ -432,6 +436,14 @@ export class MirrorLinkService {
     await this.mirror.refreshIdentities();
     this.logger.log(`Zulip user ${removed.zulipUserId} is no longer linked with Discord user ${removed.discordUserId}`);
     return `Unlinked Zulip user ${removed.zulipUserId} from Discord user ${removed.discordUserId}: those Zulip messages appear on Discord as "Name (Zulip)" again.`;
+  }
+
+  private generalChat() {
+    return this.zulipService.emptyTopicName ?? EMPTY_TOPIC_NAME;
+  }
+
+  private describeMainTopic(platform: MirrorPlatform, topic: string, where = '') {
+    return topic ? `the ${where}topic ${code(platform, topic)}` : `the ${where}${this.generalChat()} topic`;
   }
 
   private visibility(platform: MirrorPlatform, channel: DiscordMirrorChannel, stream: ZulipStream) {

@@ -543,7 +543,7 @@ describe('ZulipRepository', () => {
       await sut.init(config);
     });
 
-    it('should register a queue for messages, their edits and bulk deletions, as raw markdown, and return its ID, cursor and subscribed streams', async () => {
+    it('should register a queue for messages, their edits and bulk deletions, as raw markdown, and return its ID, cursor, subscribed streams and name for the empty topic', async () => {
       fetchMock.mockResolvedValue(
         json({
           result: 'success',
@@ -555,12 +555,14 @@ describe('ZulipRepository', () => {
             { stream_id: 107, name: 'immich-general', invite_only: true },
             { stream_id: 54, name: 'immich', invite_only: false },
           ],
+          realm_empty_topic_display_name: 'general chat',
         }),
       );
 
       await expect(sut.registerQueue()).resolves.toEqual({
         queue: { queueId: 'q1', lastEventId: -1 },
         subscribedStreamIds: [107, 54],
+        emptyTopicName: 'general chat',
       });
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -569,7 +571,7 @@ describe('ZulipRepository', () => {
       expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
       expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
       expect(await request(0).text()).toBe(
-        'event_types=%5B%22message%22%2C%22update_message%22%2C%22delete_message%22%5D&apply_markdown=false&client_capabilities=%7B%22notification_settings_null%22%3Afalse%2C%22bulk_message_deletion%22%3Atrue%7D&fetch_event_types=%5B%22subscription%22%5D',
+        'event_types=%5B%22message%22%2C%22update_message%22%2C%22delete_message%22%5D&apply_markdown=false&client_capabilities=%7B%22notification_settings_null%22%3Afalse%2C%22bulk_message_deletion%22%3Atrue%7D&fetch_event_types=%5B%22subscription%22%2C%22realm%22%5D',
       );
     });
 

@@ -329,7 +329,7 @@ export class ZulipRepository implements IZulipInterface {
         event_types: ['message', 'update_message', 'delete_message'],
         apply_markdown: false,
         client_capabilities: CLIENT_CAPABILITIES as Record<string, never>,
-        fetch_event_types: ['subscription'],
+        fetch_event_types: ['subscription', 'realm'],
       },
     });
     if (!data?.queue_id) {
@@ -346,6 +346,7 @@ export class ZulipRepository implements IZulipInterface {
       subscribedStreamIds: (data.subscriptions ?? []).flatMap(({ stream_id }) =>
         stream_id === undefined ? [] : [stream_id],
       ),
+      emptyTopicName: data.realm_empty_topic_display_name,
     };
   }
 

@@ -36,7 +36,8 @@ export type ZulipStreamPageQuery = { stream: number; before?: number; count: num
 
 export type ZulipEventQueue = { queueId: string; lastEventId: number };
 
-export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[] };
+/** `emptyTopicName` is how events and `GET /messages` name the empty topic, since the bot does not ask for `''`. */
+export type ZulipQueueRegistration = { queue: ZulipEventQueue; subscribedStreamIds: number[]; emptyTopicName?: string };
 
 export type ZulipReceivedMessage = {
   id: number;
