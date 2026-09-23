@@ -98,32 +98,76 @@ const expandTabs = (line: string) => {
   return expanded;
 };
 
-type Fence = { fence: string; code: boolean; line: number };
-type LineKind = 'text' | 'code' | 'markdown-fence' | 'markdown-close';
+export type ZulipFence = {
+  /** The run that opens the fence; only a line equal to it closes the fence. */
+  fence: string;
+  /** The info word after the run, lower-cased: `quote`, `spoiler`, a code language, or `''`. */
+  lang: string;
+  /** `false` for the fences whose content Zulip renders as Markdown. */
+  code: boolean;
+  open: number;
+  /** `null` when no line closes it, so Zulip closes it at the end of the message. */
+  close: number | null;
+  parent: ZulipFence | null;
+};
 
-const classifyLines = (lines: string[]) => {
-  const kinds: LineKind[] = [];
-  const open: Fence[] = [];
+/**
+ * Zulip's fenced blocks, by line index, nested as Zulip's fence handlers nest them. `lineFences[i]` is the innermost
+ * fence that line `i` opens, closes or lies in, or `null` outside every fence.
+ */
+export const scanZulipFences = (lines: string[]) => {
+  const fences: ZulipFence[] = [];
+  const lineFences: (ZulipFence | null)[] = [];
+  const open: ZulipFence[] = [];
   for (const [index, line] of lines.entries()) {
-    const top = open.at(-1);
+    const top = open.at(-1) ?? null;
     if (top && pythonRstrip(line) === top.fence) {
       open.pop();
-      kinds.push(top.code ? 'code' : 'markdown-close');
+      top.close = index;
+      lineFences.push(top);
       continue;
     }
     const match = top?.code ? null : ZULIP_FENCE.exec(expandTabs(line));
     if (match) {
-      const code = !ZULIP_MARKDOWN_FENCES.has(match[2]?.toLowerCase() ?? '');
-      open.push({ fence: match[1], code, line: index });
-      kinds.push(code ? 'code' : 'markdown-fence');
+      const lang = match[2]?.toLowerCase() ?? '';
+      const fence = {
+        fence: match[1],
+        lang,
+        code: !ZULIP_MARKDOWN_FENCES.has(lang),
+        open: index,
+        close: null,
+        parent: top,
+      };
+      open.push(fence);
+      fences.push(fence);
+      lineFences.push(fence);
       continue;
     }
-    kinds.push(top?.code ? 'code' : 'text');
+    lineFences.push(top);
   }
+  return { fences, lineFences };
+};
 
-  const unclosed = open.find(({ code }) => code);
+type LineKind = 'text' | 'code' | 'markdown-fence' | 'markdown-close';
+
+const classifyLines = (lines: string[]) => {
+  const { fences, lineFences } = scanZulipFences(lines);
+  const kinds = lineFences.map((fence, index): LineKind => {
+    if (!fence) {
+      return 'text';
+    }
+    if (fence.code) {
+      return 'code';
+    }
+    if (index === fence.open) {
+      return 'markdown-fence';
+    }
+    return index === fence.close ? 'markdown-close' : 'text';
+  });
+
+  const unclosed = fences.find(({ code, close }) => code && close === null);
   if (unclosed) {
-    kinds.fill('text', unclosed.line);
+    kinds.fill('text', unclosed.open);
   }
   return kinds;
 };
@@ -153,20 +197,28 @@ const nextCodeSpan = (text: string, from: number) => {
   return null;
 };
 
+export type CodeSegment = { text: string; code: boolean };
+
 /**
- * Applies `fn` to every part of Zulip Markdown that Zulip does not render as code, leaving code byte-identical.
+ * Splits Zulip Markdown into the parts Zulip renders as code and the parts it does not, in order, so that joining the
+ * parts gives the text back.
  *
  * Code is what Zulip's own parser takes for it: a fenced block (other than `quote` and `spoiler`, whose content is
  * Markdown) closed by a line equal to its opening fence, and an inline span closed on the same line. Wherever the two
  * parsers could disagree, the text counts as text, since treating code as text only over-neutralises it, whereas
  * treating text as code would let it through untouched: an unclosed fence, and every backtick after one that is
- * escaped, unmatched or matched on a later line. `fn` must not add or remove backticks, tildes or line breaks, or the
- * structure it was given no longer holds.
+ * escaped, unmatched or matched on a later line.
  */
-export const mapOutsideCode = (text: string, fn: (text: string) => string) => {
-  const apply = (part: string) => (part ? fn(part) : part);
+export const splitOutsideCode = (text: string) => {
+  const segments: CodeSegment[] = [];
+  const push = (part: string, code: boolean) => {
+    if (part) {
+      segments.push({ text: part, code });
+    }
+  };
   if (text.includes('\x02') || text.includes('\x03')) {
-    return apply(text);
+    push(text, false);
+    return segments;
   }
 
   const parts = text.split(/(\r\n|\r|\n)/);
@@ -174,8 +226,7 @@ export const mapOutsideCode = (text: string, fn: (text: string) => string) => {
   const kinds = classifyLines(lines);
 
   let inlineCode = true;
-  const mapText = (segment: string) => {
-    let output = '';
+  const pushText = (segment: string) => {
     let from = 0;
     while (inlineCode) {
       const span = nextCodeSpan(segment, from);
@@ -186,13 +237,13 @@ export const mapOutsideCode = (text: string, fn: (text: string) => string) => {
         inlineCode = false;
         break;
       }
-      output += apply(segment.slice(from, span.start)) + segment.slice(span.start, span.end);
+      push(segment.slice(from, span.start), false);
+      push(segment.slice(span.start, span.end), true);
       from = span.end;
     }
-    return output + apply(segment.slice(from));
+    push(segment.slice(from), false);
   };
 
-  let output = '';
   let segment = '';
   for (const [index, line] of lines.entries()) {
     const withBreak = line + (parts[index * 2 + 1] ?? '');
@@ -200,14 +251,27 @@ export const mapOutsideCode = (text: string, fn: (text: string) => string) => {
       segment += withBreak;
       continue;
     }
-    output += mapText(segment);
+    pushText(segment);
     segment = '';
     if (kinds[index] === 'markdown-fence') {
       const fence = /^(`+|~+)/.exec(line)![0];
-      output += fence + apply(line.slice(fence.length)) + withBreak.slice(line.length);
+      push(fence, true);
+      push(line.slice(fence.length), false);
+      push(withBreak.slice(line.length), true);
     } else {
-      output += withBreak;
+      push(withBreak, true);
     }
   }
-  return output + mapText(segment);
+  pushText(segment);
+  return segments;
 };
+
+/**
+ * Applies `fn` to every part of Zulip Markdown that Zulip does not render as code (see `splitOutsideCode`), leaving
+ * code byte-identical. `fn` must not add or remove backticks, tildes or line breaks, or the structure it was given no
+ * longer holds.
+ */
+export const mapOutsideCode = (text: string, fn: (text: string) => string) =>
+  splitOutsideCode(text)
+    .map(({ text: part, code }) => (code ? part : fn(part)))
+    .join('');

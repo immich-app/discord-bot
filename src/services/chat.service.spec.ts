@@ -13,8 +13,7 @@ import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
-import { NotificationService } from 'src/services/notification.service';
+import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -1305,6 +1304,31 @@ describe('Bot test', () => {
         expect(report).toMatch(/\.\.\.$/);
         expect(report).toHaveLength(2000);
       });
+    });
+  });
+
+  describe('hasBlacklistedUrl', () => {
+    it('should flag GitHub, my.immich.app and docs links, whose previews are suppressed', () => {
+      expect(hasBlacklistedUrl(['https://example.com', 'https://github.com/immich-app/immich/pull/1'])).toBe(true);
+      expect(hasBlacklistedUrl(['https://my.immich.app/photos'])).toBe(true);
+      expect(hasBlacklistedUrl(['https://docs.immich.app/install'])).toBe(true);
+    });
+
+    it('should let other links keep their previews', () => {
+      expect(hasBlacklistedUrl([])).toBe(false);
+      expect(hasBlacklistedUrl(['https://example.com/https://github.com'])).toBe(false);
+      expect(sut.hasBlacklistUrl(['https://immich.app'])).toBe(false);
+    });
+  });
+
+  describe('toZulipEmojiName', () => {
+    it.each([
+      { name: 'catJam', expected: 'catjam' },
+      { name: 'party.parrot', expected: 'party_parrot' },
+      { name: 'wave_-', expected: 'wave' },
+      { name: '__', expected: 'emote' },
+    ])('should turn $name into $expected', ({ name, expected }) => {
+      expect(toZulipEmojiName(name)).toBe(expected);
     });
   });
 

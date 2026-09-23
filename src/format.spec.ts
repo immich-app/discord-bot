@@ -6,8 +6,10 @@ import {
   neutraliseZulipMentions,
   plural,
   resolveTopic,
+  scanZulipFences,
   shorten,
   shortenCodePoints,
+  splitOutsideCode,
   toZulipQuote,
   unresolveTopic,
   ZULIP_MAX_MESSAGE_LENGTH,
@@ -274,5 +276,49 @@ describe('mapOutsideCode', () => {
 
     expect(mapOutsideCode('```\nx\n```', (text) => (calls.push(text), text))).toBe('```\nx\n```');
     expect(calls).toEqual([]);
+  });
+});
+
+describe('splitOutsideCode', () => {
+  it('should split text into code and text parts that join back into it', () => {
+    const text = 'a `b` c\n```quote\nd\n```\n```\ne\n```';
+    const segments = splitOutsideCode(text);
+    expect(segments).toEqual([
+      { text: 'a ', code: false },
+      { text: '`b`', code: true },
+      { text: ' c\n', code: false },
+      { text: '```', code: true },
+      { text: 'quote', code: false },
+      { text: '\n', code: true },
+      { text: 'd\n', code: false },
+      { text: '```\n', code: true },
+      { text: '```\n', code: true },
+      { text: 'e\n', code: true },
+      { text: '```', code: true },
+    ]);
+    expect(segments.map(({ text }) => text).join('')).toBe(text);
+  });
+
+  it('should return nothing for empty text', () => {
+    expect(splitOutsideCode('')).toEqual([]);
+  });
+});
+
+describe('scanZulipFences', () => {
+  it('should nest fences as Zulip does and find the line that closes each', () => {
+    const lines = ['a', '````quote', 'b', '```py', 'c', '```', '````', '~~~ Spoiler x', 'd'];
+    const { fences, lineFences } = scanZulipFences(lines);
+    const [quote, code, spoiler] = fences;
+    expect(fences).toHaveLength(3);
+    expect(quote).toMatchObject({ fence: '````', lang: 'quote', code: false, open: 1, close: 6, parent: null });
+    expect(code).toMatchObject({ fence: '```', lang: 'py', code: true, open: 3, close: 5, parent: quote });
+    expect(spoiler).toMatchObject({ fence: '~~~', lang: 'spoiler', code: false, open: 7, close: null, parent: null });
+    expect(lineFences).toEqual([null, quote, quote, code, code, code, quote, spoiler, spoiler]);
+  });
+
+  it('should not open a fence inside code', () => {
+    const { fences } = scanZulipFences(['```', '~~~quote', '```']);
+    expect(fences).toHaveLength(1);
+    expect(fences[0]).toMatchObject({ lang: '', code: true, open: 0, close: 2 });
   });
 });
