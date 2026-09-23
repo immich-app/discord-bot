@@ -10,7 +10,14 @@ import semver from 'semver';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
-import { neutraliseZulipMentions, plural, shorten, shortenCodePoints, toZulipQuote } from 'src/format';
+import {
+  neutraliseZulipLabel,
+  neutraliseZulipMentions,
+  plural,
+  shorten,
+  shortenCodePoints,
+  toZulipQuote,
+} from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import {
@@ -43,7 +50,7 @@ const getActionName = (action: string, pullRequest: { merged: boolean | null }) 
   if (action === 'closed' && pullRequest.merged) {
     return 'merged';
   }
-  return action;
+  return action.replaceAll('_', ' ');
 };
 
 type PullRequestEvent = EmitterWebhookEvent<
@@ -201,9 +208,19 @@ const resolveTopic = (topic: string) =>
 const toZulipTopicName = ({ number, title }: { number: number; title: string }) =>
   shortenCodePoints(`#${number}: ${title}`, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH).trim();
 
-const toZulipPullRequestMessage = ({ html_url, body }: { html_url: string; body: string | null }) => {
+/** Carries the full title, which the topic name may have cut. */
+const toZulipPullRequestMessage = ({
+  title,
+  html_url,
+  body,
+}: {
+  title: string;
+  html_url: string;
+  body: string | null;
+}) => {
+  const heading = `**[${neutraliseZulipLabel(title)}](${html_url})**`;
   const text = body?.trim();
-  return text ? `${html_url}\n\n${toZulipQuote(neutraliseZulipMentions(shortenCodePoints(text, 2000)))}` : html_url;
+  return text ? `${heading}\n\n${toZulipQuote(neutraliseZulipMentions(shortenCodePoints(text, 2000)))}` : heading;
 };
 
 const ZULIP_TOPIC_NOTICE_ACTIONS = new Set(['closed', 'converted_to_draft', 'reopened']);
@@ -1058,15 +1075,14 @@ Read only for Nicholas: ${share.url}
         }
         if (dto.changes.title) {
           const name = toZulipTopicName(pull_request);
-          // Unlike a topic name, message content can mention, so the title is neutralised here.
+          // Unlike a topic name, message content can mention and link, so the title is neutralised here.
           await rename(
             isResolvedTopic(topic) ? resolveTopic(name) : name,
-            () => `Pull request has been renamed to: ${neutraliseZulipMentions(name)}`,
+            () => `Pull request has been renamed to: ${neutraliseZulipLabel(pull_request.title)}`,
           );
         }
-        if (dto.changes.body) {
-          await this.editZulipMessage(messageId, toZulipPullRequestMessage(pull_request));
-        }
+        // The first message carries the title as well as the body, so either change rewrites it.
+        await this.editZulipMessage(messageId, toZulipPullRequestMessage(pull_request));
         return;
       }
     }

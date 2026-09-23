@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Constants } from 'src/constants';
-import { neutraliseZulipLabel, neutraliseZulipMentions, plural, shorten, shortenCodePoints } from 'src/format';
+import { neutraliseZulipLabel, neutraliseZulipMentions, shorten, shortenCodePoints } from 'src/format';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
@@ -10,7 +10,7 @@ import { ZulipService, isBotSender } from 'src/services/zulip.service';
 /** Zulip's default `max_message_length`, in code points: the server refuses a longer message. */
 const MAX_MESSAGE_LENGTH = 10_000;
 const SIMILAR_LOOKBACK = 10;
-const SIMILAR_ECHO_LENGTH = 80;
+const ECHO_LENGTH = 80;
 const ERROR_LENGTH = 300;
 
 /** Straight and curly double quotes: a phone keyboard curls the quotes around `text="two words"`. */
@@ -147,17 +147,17 @@ export class ZulipCommandService {
     },
     'emote-sync': {
       usage: 'emote-sync',
-      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip, skipping a name Zulip already has, and to Mattermost, which is sent every one`,
+      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
       positionals: 0,
       options: [],
       run: (context) =>
-        this.inBackground('emote-sync', context, () => ({
+        this.inBackground('emote-sync', context, {
           ack: `Syncing the emotes of ${EMOTE_SYNC_SERVER} to Zulip and Mattermost, this can take a few minutes…`,
           work: async () => {
             const report = await this.chatService.syncEmotes(Constants.Discord.EmoteSyncServer.id);
             return neutraliseZulipMentions(formatEmoteSyncReport(report, `the emotes of ${EMOTE_SYNC_SERVER}`));
           },
-        })),
+        }),
     },
     'backfill-pull-requests': {
       usage: 'backfill-pull-requests <number|all>',
@@ -235,7 +235,7 @@ export class ZulipCommandService {
     }
     const command = this.commands[name];
     if (!command) {
-      return `Unknown command ${code(name)}. Mention me with ${code('help')} for the list.`;
+      return `Unknown command ${code(shorten(name, ECHO_LENGTH))}. Mention me with ${code('help')} for the list.`;
     }
     // With no autocomplete, an argument the command does not take must be answered, never dropped: a typo in `number=` would otherwise backfill every PR.
     const { args, options } = splitArguments(tokens, command.options);
@@ -286,21 +286,14 @@ export class ZulipCommandService {
     }
   }
 
-  /** The loop waits at most 30s on a handler and polls nothing meanwhile, so a slow command is acknowledged at once and its outcome posted when done. */
-  private async inBackground(
-    name: string,
-    { message }: CommandContext,
-    start: () => BackgroundJob | Promise<BackgroundJob>,
-  ) {
+  /** The loop waits at most 30s on a handler and polls nothing meanwhile, so a slow command is acknowledged before any of its work starts and its outcome posted when done. */
+  private async inBackground(name: string, { message }: CommandContext, { ack, work }: BackgroundJob) {
     if (this.running.has(name)) {
       return this.alreadyRunning(name);
     }
     this.running.add(name);
-    let work: BackgroundJob['work'];
     try {
-      const job = await start();
-      work = job.work;
-      await this.reply(message, job.ack);
+      await this.reply(message, ack);
     } catch (error) {
       this.running.delete(name);
       throw error;
@@ -338,13 +331,13 @@ export class ZulipCommandService {
         return formatBackfillReport(report, `pull request #${number}`);
       });
     }
-    return this.inBackground('backfill-pull-requests', context, async () => {
-      const pullRequests = await this.githubService.getOpenPullRequests();
-      return {
-        ack: `Going through ${plural(pullRequests.length, 'open pull request')}, creating the Discord thread and the Zulip topic each one lacks; this can take a while…`,
-        work: async () =>
-          formatBackfillReport(await this.webhookService.backfillPullRequests(pullRequests, BOTH_PLATFORMS)),
-      };
+    // Listing the pull requests is part of the work: a rate-limited GitHub client can wait an hour before it answers.
+    return this.inBackground('backfill-pull-requests', context, {
+      ack: 'Going through every open pull request, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
+      work: async () => {
+        const pullRequests = await this.githubService.getOpenPullRequests();
+        return formatBackfillReport(await this.webhookService.backfillPullRequests(pullRequests, BOTH_PLATFORMS));
+      },
     });
   }
 
@@ -369,13 +362,13 @@ export class ZulipCommandService {
         return `Updated Fourthwall order ${code(id)}.`;
       });
     }
-    return this.inBackground('fourthwall', context, () => ({
+    return this.inBackground('fourthwall', context, {
       ack: 'Updating every Fourthwall order, this can take a while…',
       work: async () => {
         await this.chatService.updateFourthwallOrders();
         return 'Updated every Fourthwall order.';
       },
-    }));
+    });
   }
 
   private async similar({ message, args, options }: CommandContext) {
@@ -388,7 +381,7 @@ export class ZulipCommandService {
       return `There is no message in this topic to compare; pass the text instead: ${code('similar text="…"')}.`;
     }
     const result = await this.chatService.handleFindSimilarIssuesOrDiscussions(subject.content, neutraliseZulipLabel);
-    const echo = code(shorten(subject.content.replaceAll(/\s+/g, ' ').trim(), SIMILAR_ECHO_LENGTH));
+    const echo = code(shorten(subject.content.replaceAll(/\s+/g, ' ').trim(), ECHO_LENGTH));
     return result ? `Similar to ${echo}:\n${neutraliseZulipMentions(result)}` : `Nothing similar to ${echo} was found.`;
   }
 

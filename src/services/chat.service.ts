@@ -1,4 +1,4 @@
-import { WebSocketEvents } from '@mattermost/client';
+import { ClientError, WebSocketEvents } from '@mattermost/client';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { CommandInteraction, GuildMember, Message, OmitPartialGroupDMChannel, SendableChannels } from 'discord.js';
@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo } from 'src/constants';
-import { neutraliseZulipMentions, shorten } from 'src/format';
+import { neutraliseZulipMentions, plural, shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -16,6 +16,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
@@ -108,26 +109,55 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
   return candidate;
 };
 
+const MATTERMOST_DUPLICATE_EMOJI = 'api.emoji.create.duplicate.app_error';
+
+type ZulipSkipReason = 'unlisted' | 'refused';
+
+const ZULIP_SKIP_REASONS: Record<ZulipSkipReason, string> = {
+  unlisted: 'its emoji could not be listed',
+  refused: 'Zulip refused the credentials of the user account that uploads emoji',
+};
+
 export type EmoteSyncReport = {
-  zulipSkipped: boolean;
+  total: number;
+  zulipUploaded: number;
+  mattermostUploaded: number;
+  zulipSkipped?: ZulipSkipReason;
   failed: string[];
   renamed: string[];
-  alreadySynced: string[];
+  alreadyOnZulip: string[];
+  alreadyOnMattermost: string[];
 };
 
 export const formatEmoteSyncReport = (
-  { zulipSkipped, failed, renamed, alreadySynced }: EmoteSyncReport,
+  {
+    total,
+    zulipUploaded,
+    mattermostUploaded,
+    zulipSkipped,
+    failed,
+    renamed,
+    alreadyOnZulip,
+    alreadyOnMattermost,
+  }: EmoteSyncReport,
   subject?: string,
-) =>
-  [
-    subject ? `Done syncing ${subject}` : 'Done syncing',
-    zulipSkipped && 'Zulip skipped: its emoji could not be listed',
+) => {
+  const done = subject ? `Done syncing ${subject}` : 'Done syncing';
+  if (total === 0) {
+    return `${done}: the Discord server has no emotes, so nothing was uploaded`;
+  }
+  const outcome = [
+    plural(total, 'emote'),
+    `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ` (skipped: ${ZULIP_SKIP_REASONS[zulipSkipped]})` : ''}`,
+    `${mattermostUploaded} uploaded to Mattermost`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
-    alreadySynced.length > 0 && `${alreadySynced.length} already on Zulip: ${alreadySynced.join(', ')}`,
-  ]
-    .filter(Boolean)
-    .join(', ');
+    alreadyOnZulip.length > 0 && `${alreadyOnZulip.length} already on Zulip: ${alreadyOnZulip.join(', ')}`,
+    alreadyOnMattermost.length > 0 &&
+      `${alreadyOnMattermost.length} already on Mattermost: ${alreadyOnMattermost.join(', ')}`,
+  ];
+  return `${done}: ${outcome.filter(Boolean).join(', ')}`;
+};
 
 @Injectable()
 export class ChatService {
@@ -747,39 +777,93 @@ ${formattedCode}
 
   async syncEmotes(guildId: string): Promise<EmoteSyncReport> {
     const emotes = await this.discord.getEmotes(guildId);
+    if (!emotes) {
+      throw new Error(
+        `Cannot read the emotes of Discord server ${guildId}: the bot is not logged in to Discord, or not a member of that server`,
+      );
+    }
     const existing = await this.listZulipEmoji();
+    const onMattermost = await this.listMattermostEmoji();
     const claimed = new Set<string>();
 
+    let zulipSkipped: ZulipSkipReason | undefined = existing ? undefined : 'unlisted';
+    let zulipUploaded = 0;
+    let mattermostUploaded = 0;
     const failed: string[] = [];
     const renamed: string[] = [];
-    const alreadySynced: string[] = [];
+    const alreadyOnZulip: string[] = [];
+    const alreadyOnMattermost: string[] = [];
     for (const emote of emotes) {
       const name = emote.name ?? emote.identifier;
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
 
       // One bad emote, or one platform being down, must not abort the rest of the sync.
       let zulipFailed = false;
-      if (existing) {
+      if (existing && !zulipSkipped) {
         const zulipName = claimZulipEmojiName(name, claimed);
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
         if (existing.has(zulipName)) {
-          alreadySynced.push(asZulip);
+          alreadyOnZulip.push(asZulip);
         } else {
-          if (asZulip !== name) {
-            renamed.push(asZulip);
+          const zulip = await this.uploadToZulip(name, zulipName, url);
+          if (zulip === 'refused') {
+            zulipSkipped = 'refused';
+          } else {
+            if (asZulip !== name) {
+              renamed.push(asZulip);
+            }
+            zulipUploaded += zulip === 'uploaded' ? 1 : 0;
+            zulipFailed = zulip === 'failed';
           }
-          zulipFailed = !(await this.syncEmote('Zulip', name, url, () => this.zulip.createEmote(zulipName, url)));
         }
       }
-      const mattermostFailed = !(await this.syncEmote('Mattermost', name, url, () =>
-        this.mattermost.createEmote(name, url),
-      ));
-      if (zulipFailed || mattermostFailed) {
+      const mattermost = onMattermost?.has(name) ? 'exists' : await this.uploadToMattermost(name, url);
+      if (mattermost === 'uploaded') {
+        mattermostUploaded++;
+      } else if (mattermost === 'exists') {
+        alreadyOnMattermost.push(name);
+      }
+      if (zulipFailed || mattermost === 'failed') {
         failed.push(name);
       }
     }
 
-    return { zulipSkipped: !existing, failed, renamed, alreadySynced };
+    return {
+      total: emotes.length,
+      zulipUploaded,
+      mattermostUploaded,
+      zulipSkipped,
+      failed,
+      renamed,
+      alreadyOnZulip,
+      alreadyOnMattermost,
+    };
+  }
+
+  private async listMattermostEmoji() {
+    try {
+      return new Set(await this.mattermost.listEmoji());
+    } catch (error) {
+      this.logger.error(
+        'Could not list the Mattermost emoji, so every emote is uploaded and a name Mattermost already has counts as already there',
+        error,
+      );
+      return undefined;
+    }
+  }
+
+  /** Checked on the upload too, not only against the listing: the listing may have failed, or the name been taken since. */
+  private async uploadToMattermost(name: string, url: string): Promise<'uploaded' | 'exists' | 'failed'> {
+    try {
+      await this.mattermost.createEmote(name, url);
+      return 'uploaded';
+    } catch (error) {
+      if (error instanceof ClientError && error.server_error_id === MATTERMOST_DUPLICATE_EMOJI) {
+        return 'exists';
+      }
+      this.logger.error(`Could not sync emote ${name} - ${url} to Mattermost`, error);
+      return 'failed';
+    }
   }
 
   private async listZulipEmoji() {
@@ -793,13 +877,24 @@ ${formattedCode}
     }
   }
 
-  private async syncEmote(platform: string, name: string, url: string, upload: () => Promise<void>) {
+  /** A refused key refuses every upload, so it is reported once, by Zulip's reason (never the key), rather than per emote. */
+  private async uploadToZulip(
+    name: string,
+    zulipName: string,
+    url: string,
+  ): Promise<'uploaded' | 'refused' | 'failed'> {
     try {
-      await upload();
-      return true;
+      await this.zulip.createEmote(zulipName, url);
+      return 'uploaded';
     } catch (error) {
-      this.logger.error(`Could not sync emote ${name} - ${url} to ${platform}`, error);
-      return false;
+      if (error instanceof ZulipApiError && error.status === 401) {
+        this.logger.error(
+          `Zulip refused the credentials of the user account that uploads emoji (${error.msg}), so no more emotes are uploaded to Zulip in this sync; check ZULIP_USER_USERNAME and ZULIP_USER_API_KEY`,
+        );
+        return 'refused';
+      }
+      this.logger.error(`Could not sync emote ${name} - ${url} to Zulip`, error);
+      return 'failed';
     }
   }
 
@@ -856,7 +951,13 @@ ${formattedCode}
   }
 
   private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {
+    // The repository hands back whatever JSON Fourthwall answered, an error body included.
     const order = await this.fourthwall.getOrder({ id, user, password });
+    if (!order?.totalPrice || !order.profit || !order.currentAmounts) {
+      throw new Error(
+        `Fourthwall did not return order ${id}: the ID may be wrong, or Fourthwall refused the request or is down`,
+      );
+    }
 
     await this.database.updateFourthwallOrder({
       id,

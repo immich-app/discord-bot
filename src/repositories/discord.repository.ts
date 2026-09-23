@@ -108,13 +108,18 @@ export class DiscordRepository implements IDiscordInterface {
   }
 
   async getEmotes(guildId: string) {
-    const emotes = await bot.guilds.cache.get(guildId)?.emojis.fetch();
-    const result = [];
-
-    for (const emote of emotes?.values() ?? []) {
-      result.push({ identifier: emote.identifier, name: emote.name, url: emote.imageURL(), animated: emote.animated });
+    const guild = bot.guilds.cache.get(guildId);
+    if (!guild) {
+      return undefined;
     }
-    return result;
+
+    const emotes = await guild.emojis.fetch();
+    return emotes.map((emote) => ({
+      identifier: emote.identifier,
+      name: emote.name,
+      url: emote.imageURL(),
+      animated: emote.animated,
+    }));
   }
 
   async createThread(

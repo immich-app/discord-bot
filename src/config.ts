@@ -1,11 +1,12 @@
 export const getConfig = () => {
   const databaseUri = process.env.uri;
   const botToken = process.env.BOT_TOKEN;
-  const zulipBotUsername = process.env.ZULIP_BOT_USERNAME;
-  const zulipBotApiKey = process.env.ZULIP_BOT_API_KEY;
-  const zulipUserUsername = process.env.ZULIP_USER_USERNAME;
-  const zulipUserApiKey = process.env.ZULIP_USER_API_KEY;
-  const zulipDomain = process.env.ZULIP_DOMAIN;
+  // A secret pasted with its trailing newline is otherwise sent as it is, and Zulip answers `Malformed API key`.
+  const zulipBotUsername = process.env.ZULIP_BOT_USERNAME?.trim();
+  const zulipBotApiKey = process.env.ZULIP_BOT_API_KEY?.trim();
+  const zulipUserUsername = process.env.ZULIP_USER_USERNAME?.trim();
+  const zulipUserApiKey = process.env.ZULIP_USER_API_KEY?.trim();
+  const zulipDomain = process.env.ZULIP_DOMAIN?.trim();
   const githubWebhookSlug = process.env.GITHUB_SLUG;
   const githubStatusWebhookSlug = process.env.GITHUB_STATUS_SLUG;
   const githubAppId = process.env.GITHUB_APP_ID;

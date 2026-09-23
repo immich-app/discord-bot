@@ -39,7 +39,10 @@ export interface IDiscordInterface {
     pin?: boolean;
   }): Promise<void>;
   createEmote(name: string, emote: string | Buffer, guildId: string): Promise<GuildEmoji | undefined>;
-  getEmotes(guildId: string): Promise<{ identifier: string; name: string | null; url: string; animated: boolean }[]>;
+  /** `undefined` when the bot cannot see that guild: not logged in to Discord, or not a member of it. */
+  getEmotes(
+    guildId: string,
+  ): Promise<{ identifier: string; name: string | null; url: string; animated: boolean }[] | undefined>;
   createThread(
     channelId: string,
     dto: { name: string; message: string; appliedTags?: string[] },

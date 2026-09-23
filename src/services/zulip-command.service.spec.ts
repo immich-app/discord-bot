@@ -94,7 +94,7 @@ const SERVER = 'the Immich Discord server (979116623879368755)';
 const HELP = [
   'Mention me at the start of a message in a team stream, then one of:',
   '- `help`: this list',
-  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has, and to Mattermost, which is sent every one`,
+  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
   '- `backfill-pull-requests <number|all>`: create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
   '- `fourthwall update <id|all>`: fetch that Fourthwall order again and update its row in the database, or with `all` every order',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
@@ -339,10 +339,12 @@ describe('ZulipCommandService', () => {
     });
 
     it('should close an inline-code span the cut fell inside, within the limit', async () => {
-      await send(`@**Immich** ${'y'.repeat(50_000)}`);
+      chatServiceMock.handleFindSimilarIssuesOrDiscussions.mockResolvedValue(`\`${'y'.repeat(50_000)}\``);
+
+      await send('@**Immich** similar text="hello"');
 
       const [content] = replies().map(({ content }) => content);
-      expect(content).toMatch(/^Unknown command `y+\.\.\.`$/);
+      expect(content).toMatch(/^Similar to `hello`:\n`y+\.\.\.`$/);
       expect(content).toHaveLength(10_000);
     });
 
@@ -410,6 +412,14 @@ describe('ZulipCommandService', () => {
       ]);
     });
 
+    it('should echo an unknown command shortened, as it echoes the text `similar` compared', async () => {
+      await send(`@**Immich** ${'y'.repeat(9000)}`);
+
+      expect(replies().map(({ content }) => content)).toEqual([
+        `Unknown command \`${'y'.repeat(77)}...\`. Mention me with \`help\` for the list.`,
+      ]);
+    });
+
     it('should answer a command it cannot parse with what went wrong', async () => {
       await send('@**Immich** similar text="two words');
 
@@ -444,11 +454,15 @@ describe('ZulipCommandService', () => {
 
   describe('emote-sync', () => {
     const report: EmoteSyncReport = {
-      zulipSkipped: false,
+      total: 3,
+      zulipUploaded: 3,
+      mattermostUploaded: 3,
       failed: [],
       renamed: ['nameless:3 → nameless_3'],
-      alreadySynced: [],
+      alreadyOnZulip: [],
+      alreadyOnMattermost: [],
     };
+    const DONE = `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 renamed: nameless:3 → nameless_3`;
 
     it('should acknowledge at once, naming the server, sync it in the background and post the report when done', async () => {
       let finish!: (report: EmoteSyncReport) => void;
@@ -467,48 +481,51 @@ describe('ZulipCommandService', () => {
 
       expect(replies().map(({ content }) => content)).toEqual([
         `Syncing the emotes of ${SERVER} to Zulip and Mattermost, this can take a few minutes…`,
-        `Done syncing the emotes of ${SERVER}, 1 renamed: nameless:3 → nameless_3`,
+        DONE,
       ]);
     });
 
     it('should report the same outcome as Discord does, naming the server', async () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
-        zulipSkipped: true,
+        total: 3,
+        zulipUploaded: 0,
+        mattermostUploaded: 2,
+        zulipSkipped: 'unlisted',
         failed: ['pepeD'],
         renamed: [],
-        alreadySynced: ['catJAM', 'CatJam → catjam2'],
+        alreadyOnZulip: ['catJAM', 'CatJam → catjam2'],
+        alreadyOnMattermost: ['kekw'],
       });
 
       await send('@**Immich** emote-sync');
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, Zulip skipped: its emoji could not be listed, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2, 1 already on Mattermost: kekw`,
       );
     });
 
     it('should mention nobody through an emote name', async () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
-        zulipSkipped: false,
+        ...report,
         failed: ['@**all**'],
         renamed: ['#**general** → general'],
-        alreadySynced: [],
       });
 
       await send('@**Immich** emote-sync');
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, 1 failed: @\u200B**all**, 1 renamed: #\u200B**general** → general`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 failed: @\u200B**all**, 1 renamed: #\u200B**general** → general`,
       );
     });
 
     it("should keep the report within Zulip's message limit", async () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
-        zulipSkipped: false,
+        ...report,
+        total: 1000,
         failed: Array.from({ length: 1000 }, (_, index) => `emote_number_${index}`),
         renamed: [],
-        alreadySynced: [],
       });
 
       await send('@**Immich** emote-sync');
@@ -516,7 +533,7 @@ describe('ZulipCommandService', () => {
 
       const outcome = replies().at(-1)!.content;
       expect(outcome).toMatch(
-        /^Done syncing the emotes of the Immich Discord server \(979116623879368755\), 1000 failed: emote_number_0, /,
+        /^Done syncing the emotes of the Immich Discord server \(979116623879368755\): 1000 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1000 failed: emote_number_0, /,
       );
       expect(outcome).toMatch(/\.\.\.$/);
       expect(outcome).toHaveLength(10_000);
@@ -554,8 +571,21 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** emote-sync', { id: 501 });
       await flush();
 
+      expect(replies().at(-1)?.content).toBe(DONE);
+    });
+
+    it('should say the sync failed when the bot cannot read the server, rather than report it done', async () => {
+      chatServiceMock.syncEmotes.mockRejectedValue(
+        new Error(
+          'Cannot read the emotes of Discord server 979116623879368755: the bot is not logged in to Discord, or not a member of that server',
+        ),
+      );
+
+      await send('@**Immich** emote-sync');
+      await flush();
+
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, 1 renamed: nameless:3 → nameless_3`,
+        '`emote-sync` failed: `Cannot read the emotes of Discord server 979116623879368755: the bot is not logged in to Discord, or not a member of that server`',
       );
     });
 
@@ -575,9 +605,7 @@ describe('ZulipCommandService', () => {
       await flush();
 
       expect(chatServiceMock.syncEmotes).toHaveBeenCalledTimes(2);
-      expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}, 1 renamed: nameless:3 → nameless_3`,
-      );
+      expect(replies().at(-1)?.content).toBe(DONE);
     });
 
     it('should not start the sync when the acknowledgement cannot be posted, and not stay locked', async () => {
@@ -600,16 +628,21 @@ describe('ZulipCommandService', () => {
   });
 
   describe('backfill-pull-requests', () => {
-    it('should list the open pull requests, say how many it is about to go through, then backfill them on both platforms in the background', async () => {
+    const ACK =
+      'Going through every open pull request, creating the Discord thread and the Zulip topic each one lacks; this can take a while…';
+
+    it('should acknowledge, then list the open pull requests and backfill them on both platforms in the background', async () => {
       let finish!: (report: BackfillReport) => void;
       githubServiceMock.getOpenPullRequests.mockResolvedValue([pullRequest(1), pullRequest(2)]);
       webhookServiceMock.backfillPullRequests.mockReturnValue(new Promise((resolve) => (finish = resolve)));
 
       await send('@**Immich** backfill-pull-requests all');
+      await flush();
 
-      expect(replies().map(({ content }) => content)).toEqual([
-        'Going through 2 open pull requests, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
-      ]);
+      expect(replies().map(({ content }) => content)).toEqual([ACK]);
+      expect(zulipMock.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        githubServiceMock.getOpenPullRequests.mock.invocationCallOrder[0],
+      );
       expect(webhookServiceMock.backfillPullRequests).toHaveBeenCalledExactlyOnceWith(
         [pullRequest(1), pullRequest(2)],
         BOTH_PLATFORMS,
@@ -658,20 +691,47 @@ describe('ZulipCommandService', () => {
       await flush();
 
       expect(replies().map(({ content }) => content)).toEqual([
-        'Going through 1 open pull request, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
+        ACK,
         'Backfill of 1 open pull request done: created 1 Discord thread and 1 Zulip topic; skipped 0; failed 0.',
-        'Going through 0 open pull requests, creating the Discord thread and the Zulip topic each one lacks; this can take a while…',
+        ACK,
         'Backfill of 0 open pull requests done: created 0 Discord threads and 0 Zulip topics; skipped 0; failed 0.',
       ]);
     });
 
-    it('should say so in the topic when the pull requests cannot be listed, before any acknowledgement, and not stay locked', async () => {
+    it('should acknowledge at once and hold the lock while GitHub keeps the list waiting, as a rate limit does', async () => {
+      let list!: (pullRequests: PullRequestBaseEvent[]) => void;
+      githubServiceMock.getOpenPullRequests.mockReturnValueOnce(new Promise((resolve) => (list = resolve)));
+
+      await send('@**Immich** backfill-pull-requests all');
+      await flush();
+
+      expect(replies().map(({ content }) => content)).toEqual([ACK]);
+      expect(webhookServiceMock.backfillPullRequests).not.toHaveBeenCalled();
+
+      await send('@**Immich** backfill-pull-requests all', { id: 501 });
+
+      expect(githubServiceMock.getOpenPullRequests).toHaveBeenCalledOnce();
+      expect(replies().at(-1)?.content).toBe('`backfill-pull-requests` is already running; wait for it to finish.');
+
+      list([pullRequest(1)]);
+      await flush();
+
+      expect(replies().at(-1)?.content).toBe(
+        'Backfill of 1 open pull request done: created 1 Discord thread and 1 Zulip topic; skipped 0; failed 0.',
+      );
+    });
+
+    it('should say so in the topic when the pull requests cannot be listed, after the acknowledgement, and not stay locked', async () => {
       githubServiceMock.getOpenPullRequests.mockRejectedValueOnce(new Error('GitHub is down')).mockResolvedValue([]);
 
       await send('@**Immich** backfill-pull-requests all');
       await flush();
 
-      expect(replies().map(({ content }) => content)).toEqual(['`backfill-pull-requests` failed: `GitHub is down`']);
+      expect(replies().map(({ content }) => content)).toEqual([
+        ACK,
+        '`backfill-pull-requests` failed: `GitHub is down`',
+      ]);
+      expect(webhookServiceMock.backfillPullRequests).not.toHaveBeenCalled();
       expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
         'The Zulip command backfill-pull-requests failed on message 500',
         expect.any(Error),
