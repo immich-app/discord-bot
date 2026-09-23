@@ -951,7 +951,13 @@ ${formattedCode}
   }
 
   private async updateOrder({ id, user, password }: { id: string; user: string; password: string }) {
+    // The repository hands back whatever JSON Fourthwall answered, an error body included.
     const order = await this.fourthwall.getOrder({ id, user, password });
+    if (!order?.totalPrice || !order.profit || !order.currentAmounts) {
+      throw new Error(
+        `Fourthwall did not return order ${id}: the ID may be wrong, or Fourthwall refused the request or is down`,
+      );
+    }
 
     await this.database.updateFourthwallOrder({
       id,

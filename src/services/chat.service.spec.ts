@@ -20,6 +20,7 @@ import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vit
 vitest.mock('src/config', () => ({
   getConfig: () => ({
     bot: { token: 'dev' },
+    fourthwall: { user: 'fw-user', password: 'fw-password' },
     zulip: {
       bot: { username: 'bot@example.com', apiKey: 'bot-key' },
       user: { username: 'human@example.com', apiKey: 'user-key' },
@@ -1208,6 +1209,51 @@ describe('Bot test', () => {
       expect(formatEmoteSyncReport(empty)).toBe(
         'Done syncing: the Discord server has no emotes, so nothing was uploaded',
       );
+    });
+  });
+
+  describe('updateFourthwallOrders', () => {
+    const price = (value: number) => ({ value, currency: 'USD' });
+    const order = {
+      status: 'SHIPPED',
+      discount: null,
+      totalPrice: price(30),
+      profit: price(10),
+      currentAmounts: { shipping: price(5), tax: price(2) },
+    };
+
+    it('should fetch the order again and update its row', async () => {
+      fourthwallMock.getOrder.mockResolvedValue(order as never);
+
+      await sut.updateFourthwallOrders('ORD-1');
+
+      expect(fourthwallMock.getOrder).toHaveBeenCalledExactlyOnceWith({
+        id: 'ORD-1',
+        user: 'fw-user',
+        password: 'fw-password',
+      });
+      expect(databaseMock.updateFourthwallOrder).toHaveBeenCalledExactlyOnceWith({
+        id: 'ORD-1',
+        discount: undefined,
+        status: 'SHIPPED',
+        total: 30,
+        profit: 10,
+        shipping: 5,
+        tax: 2,
+      });
+    });
+
+    it.each([
+      { what: 'an error body', answer: { status: 401, message: 'Unauthorized' } },
+      { what: 'an order without its prices', answer: { ...order, totalPrice: undefined } },
+      { what: 'nothing', answer: null },
+    ])('should fail saying which order, and write nothing, when Fourthwall answers $what', async ({ answer }) => {
+      fourthwallMock.getOrder.mockResolvedValue(answer as never);
+
+      await expect(sut.updateFourthwallOrders('ORD-404')).rejects.toThrow(
+        'Fourthwall did not return order ORD-404: the ID may be wrong, or Fourthwall refused the request or is down',
+      );
+      expect(databaseMock.updateFourthwallOrder).not.toHaveBeenCalled();
     });
   });
 
