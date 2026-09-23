@@ -1,4 +1,4 @@
-import { ZULIP_MAX_MESSAGE_LENGTH } from 'src/format';
+import { scanZulipFences, ZULIP_MAX_MESSAGE_LENGTH } from 'src/format';
 import { DiscordSourceMessage } from 'src/interfaces/discord-mirror.interface';
 import {
   DiscordRenderContext,
@@ -141,6 +141,18 @@ describe('zulipAuthorHeader', () => {
       );
     });
 
+    it.each([
+      ['a code block', `\`\`\`\n${'log line\n'.repeat(40)}\`\`\``],
+      ['a spoiler', `||${'secret '.repeat(40)}||`],
+      ['a >>> quote', `>>> ${'quoted '.repeat(40)}`],
+      ['a spoiler around a code block', `||\`\`\`\n${'log line\n'.repeat(40)}\`\`\`||`],
+    ])('should close what the cut leaves open of %s, so the reply comes after the quote', (_, content) => {
+      const lead = zulipMirrorLead('**contrib123**', toZulipReplySnippet(content, ctx));
+      const lines = zulipMirrorContent(lead, toZulipMirrorBody(message({ content: 'my reply' }), ctx), '').split('\n');
+      expect(lines.at(-1)).toBe('my reply');
+      expect(scanZulipFences(lines).lineFences.at(-1)).toBeNull();
+    });
+
     it('should cut the quote to 200 code points without exposing what was code', () => {
       const snippet = toZulipReplySnippet(`${'x'.repeat(185)} \`a @**all** b\` and more`, ctx);
       expect(snippet).toBe(`${'x'.repeat(185)} \`a @**all**...`);
@@ -187,10 +199,19 @@ describe('toZulipMirrorBody', () => {
     it.each([
       { content: '<@222222222222222222>', silent: false, expected: '@**|8**' },
       { content: '<@!222222222222222222>', silent: false, expected: '@**|8**' },
-      { content: '<@222222222222222222>', silent: true, expected: '@_**|8**' },
+      { content: '<@222222222222222222>', silent: true, expected: '&#64;Zack' },
     ])('should mention a verified team member for $content, silent: $silent', ({ content, silent, expected }) => {
       expect(body(`hi ${content} ok`, { silent })).toBe(`hi ${expected} ok`);
     });
+
+    it.each([false, true])(
+      'should never start a line with the silent pill that names a team member in the header, silent: %s',
+      (silent) => {
+        const content = 'ok\n\n<@222222222222222222>: go ahead\n>>> <@222222222222222222>: publish it';
+        const lines = mirror(message({ content, silent })).split('\n');
+        expect(lines.slice(1).filter((line) => line.startsWith('@_**'))).toEqual([]);
+      },
+    );
 
     it('should write other mentions as escaped text', () => {
       expect(body('<@333333333333333333> <@666666666666666666> <@&444444444444444444> <@&777777777777777777>')).toBe(
@@ -244,6 +265,15 @@ describe('toZulipMirrorBody', () => {
       ).toBe('[github.com/immich-app](https://www.github.com/immich-app) [the docs](https://docs.immich.app)');
     });
 
+    it.each(['docs\uFF0Eimmich\uFF0Eapp', 'docs\u3002immich\uFF61app', '\uFF44ocs.immich.app'])(
+      'should read other full stops and full-width letters in a label as a browser does: %s',
+      (label) => {
+        expect(body(`[${label}/install](https://evil.example/x)`)).toBe(
+          `[${label}/install](https://evil.example/x) (evil.example)`,
+        );
+      },
+    );
+
     it('should leave a link whose label holds code to the final pass, which defuses it', () => {
       expect(body('[`c`](https://ex.com/@**all**)')).toBe(`&#91;\`c\`&#93;(https://ex.com/@${ZWSP}**all**)`);
     });
@@ -270,6 +300,27 @@ describe('toZulipMirrorBody', () => {
       expect(body('> -# quoted')).toBe('> quoted');
       expect(body('not >>> quoted')).toBe('not >>> quoted');
       expect(body('```\n>>> code\n```')).toBe('```\n>>> code\n```');
+    });
+
+    it('should close a fence the message leaves open before anything that follows it', () => {
+      expect(body('```\ncode')).toBe('```\ncode\n```');
+      expect(body('```\ncode\n>>> quoted')).toBe('```\ncode\n```\n~~~ quote\nquoted\n~~~');
+      expect(body('mine\n>>> ~~~\nquoted')).toBe('mine\n~~~~ quote\n~~~\nquoted\n~~~\n~~~~');
+      expect(body('||```\ncode||')).toBe('~~~ spoiler Spoiler\n```\ncode\n```\n~~~');
+      const attachments = toZulipAttachmentLines(
+        [{ name: 'a.png', spoiler: false, url: '/user_uploads/1/a/b/a.png' }],
+        '',
+      );
+      expect(mirror(message({ content: 'fwd', forwarded: ['```\ncode'] }), {}, attachments).split('\n')).toEqual([
+        '**contrib123**: fwd',
+        '*&#91;forwarded message&#93;*',
+        '~~~ quote',
+        '```',
+        'code',
+        '```',
+        '~~~',
+        '[a.png](/user_uploads/1/a/b/a.png)',
+      ]);
     });
 
     it('should translate inside the >>> quote and the spoiler together', () => {

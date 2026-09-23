@@ -1561,15 +1561,16 @@ describe(MirrorService.name, () => {
       expect(sentMessages()[0].topic).toBe('Crash on upload');
     });
 
-    it('should translate a verified team member mention, silently when the message is silent', async () => {
-      await fromDiscord(discordMessage({ content: `<@${TEAM_DISCORD_ID}> look` }));
+    it('should translate a verified team member mention, or name them as text when the message is silent', async () => {
+      const mentions = { users: { [TEAM_DISCORD_ID]: 'Alex' }, roles: {}, channels: {} };
+      await fromDiscord(discordMessage({ content: `<@${TEAM_DISCORD_ID}> look`, mentions }));
       await fromDiscord(
-        discordMessage({ id: '300000000000000002', content: `<@${TEAM_DISCORD_ID}> look`, silent: true }),
+        discordMessage({ id: '300000000000000002', content: `<@${TEAM_DISCORD_ID}> look`, mentions, silent: true }),
       );
 
       expect(sentMessages().map(({ content }) => content)).toEqual([
         `**Contrib** (&#64;contrib123): @**|${TEAM_ZULIP_ID}** look`,
-        `**Contrib** (&#64;contrib123): @_**|${TEAM_ZULIP_ID}** look`,
+        `**Contrib** (&#64;contrib123): &#64;Alex look`,
       ]);
     });
 

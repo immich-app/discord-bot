@@ -3,6 +3,7 @@ import {
   mapOutsideCode,
   neutraliseZulipLabel,
   neutraliseZulipMentions,
+  scanZulipFences,
   shortenCodePoints,
   splitOutsideCode,
   toZulipQuote,
@@ -26,7 +27,13 @@ export type ZulipHeaderContext = DiscordRenderContext & { reply?: ZulipReplyTarg
 
 export type ZulipAttachmentResult = { name: string; spoiler: boolean; url: string | null };
 
-type TranslatedMessage = Pick<DiscordSourceMessage, 'content' | 'mentions' | 'silent'>;
+/**
+ * How a verified team member mention renders. The silent pill is what the header names a team member with, so outside a
+ * quote a mention never takes that form: in a silent message it is the name as text.
+ */
+type Pills = 'notify' | 'silent' | 'text';
+
+type TranslatedMessage = Pick<DiscordSourceMessage, 'content' | 'mentions'> & { pills: Pills };
 
 /*
  * Everything the mirror means Zulip to render as syntax (its own mentions and links) travels between these two markers
@@ -83,6 +90,9 @@ const zulipLink = (label: string, url: string) => protect(`[${safeLabel(label)}]
 
 const DOMAIN = /(?:[a-z][\w+.-]*:\/\/)?((?:[a-z\d-]+\.)+[a-z]{2,})/gi;
 
+/** Full stops other than `.` that browsers also read as one in a host name. */
+const FULL_STOPS = /[\u3002\uFF0E\uFF61]/g;
+
 const bareHost = (host: string) => host.toLowerCase().replace(/^www\./, '');
 
 /** Zulip opens a link without asking first, so a label that names another site is followed by the real one. */
@@ -94,8 +104,16 @@ const maskedLink = (label: string, url: string) => {
   } catch {
     return link;
   }
-  const named = [...label.matchAll(DOMAIN)].map(([, domain]) => bareHost(domain));
+  const named = [...label.normalize('NFKC').replaceAll(FULL_STOPS, '.').matchAll(DOMAIN)].map(([, domain]) =>
+    bareHost(domain),
+  );
   return named.some((domain) => domain !== bareHost(host)) ? `${link} (${escapeZulipInline(host)})` : link;
+};
+
+/** Zulip runs an unclosed fence to the end of the message, over whatever the mirror puts after it. */
+const closeFences = (text: string) => {
+  const open = scanZulipFences(text.split('\n')).fences.filter(({ close }) => close === null);
+  return [text, ...open.toReversed().map(({ fence }) => fence)].join('\n');
 };
 
 const zulipFence = (kind: string, content: string) => {
@@ -141,9 +159,9 @@ const translateInline = (part: string, message: TranslatedMessage, ctx: DiscordR
     }
     if (groups.user !== undefined) {
       const zulipUserId = ctx.zulipUserByDiscordId.get(groups.user);
-      return zulipUserId === undefined
+      return zulipUserId === undefined || message.pills === 'text'
         ? `&#64;${escapeZulipInline(message.mentions.users[groups.user] ?? 'unknown-user')}`
-        : zulipMention(zulipUserId, message.silent);
+        : zulipMention(zulipUserId, message.pills === 'silent');
     }
     if (groups.role !== undefined) {
       return `&#64;${escapeZulipInline(message.mentions.roles[groups.role] ?? 'unknown-role')}`;
@@ -205,8 +223,11 @@ const translateMessage = (message: TranslatedMessage, ctx: DiscordRenderContext)
 
   const body =
     quoteAt < 0
-      ? translateRange(0, text.length)
-      : [translateRange(0, quoteAt).trimEnd(), toZulipQuote(translateRange(quoteAt + 4, text.length))]
+      ? closeFences(translateRange(0, text.length))
+      : [
+          closeFences(translateRange(0, quoteAt).trimEnd()),
+          toZulipQuote(closeFences(translateRange(quoteAt + 4, text.length))),
+        ]
           .filter(Boolean)
           .join('\n');
   return spoiler ? zulipFence('spoiler Spoiler', body) : body;
@@ -217,7 +238,7 @@ const translateMessage = (message: TranslatedMessage, ctx: DiscordRenderContext)
  * ever passed on to that.
  */
 export const toZulipMirrorBody = (dto: DiscordSourceMessage, ctx: DiscordRenderContext) => {
-  const parts = [translateMessage(dto, ctx).trimEnd()];
+  const parts = [translateMessage({ ...dto, pills: dto.silent ? 'text' : 'notify' }, ctx).trimEnd()];
   for (const sticker of dto.stickers) {
     parts.push(`*[sticker: ${escapeZulipInline(sticker)}]*`);
   }
@@ -225,17 +246,18 @@ export const toZulipMirrorBody = (dto: DiscordSourceMessage, ctx: DiscordRenderC
     parts.push(`*[poll: ${escapeZulipInline(dto.poll)}]*`);
   }
   for (const content of dto.forwarded) {
-    const forwarded = translateMessage({ content, mentions: dto.mentions, silent: true }, ctx).trimEnd();
+    const forwarded = translateMessage({ content, mentions: dto.mentions, pills: 'silent' }, ctx).trimEnd();
     parts.push(forwarded.trim() ? `*[forwarded message]*\n${toZulipQuote(forwarded)}` : '*[forwarded message]*');
   }
   return parts.filter((part) => part.trim() !== '').join('\n');
 };
 
-/** The quoted part of the message a Discord reply answers. */
 export const toZulipReplySnippet = (content: string, ctx: DiscordRenderContext) =>
-  shortenCodePoints(
-    translateMessage({ content, mentions: { users: {}, roles: {}, channels: {} }, silent: true }, ctx).trim(),
-    200,
+  closeFences(
+    shortenCodePoints(
+      translateMessage({ content, mentions: { users: {}, roles: {}, channels: {} }, pills: 'silent' }, ctx).trim(),
+      200,
+    ),
   );
 
 const bold = (name: string | null) => `**${escapeZulipInline(name ?? '') || 'someone'}**`;
