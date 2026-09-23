@@ -48,11 +48,11 @@ export interface IDatabaseRepository {
   getTotalFourthwallOrders(options?: ReportOptions): Promise<{ revenue: number; profit: number }>;
   streamFourthwallOrders(): AsyncIterableIterator<{ id: string }>;
   createRSSFeed(entity: NewRSSFeed): Promise<void>;
-  getRSSFeeds(channelId?: string): Promise<RSSFeed[]>;
-  removeRSSFeed(url: string, channelId: string): Promise<void>;
+  getRSSFeeds(channel?: Pick<RSSFeed, 'channelId' | 'service'>): Promise<RSSFeed[]>;
+  removeRSSFeed(url: string, channelId: string, service: RSSFeed['service']): Promise<boolean>;
   updateRSSFeed(entity: UpdateRSSFeed): Promise<void>;
-  getScheduledMessages(service?: 'discord' | 'mattermost'): Promise<ScheduledMessage[]>;
-  getScheduledMessage(name: string, service: 'discord' | 'mattermost'): Promise<ScheduledMessage | undefined>;
+  getScheduledMessages(service?: ScheduledMessage['service']): Promise<ScheduledMessage[]>;
+  getScheduledMessage(name: string, service: ScheduledMessage['service']): Promise<ScheduledMessage | undefined>;
   createScheduledMessage(entity: NewScheduledMessage): Promise<ScheduledMessage>;
   updateScheduledMessage(entity: UpdateScheduledMessage & { name: string }): Promise<ScheduledMessage | undefined>;
   removeScheduledMessage(id: string): Promise<void>;

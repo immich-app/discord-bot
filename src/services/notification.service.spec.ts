@@ -6,7 +6,7 @@ import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { Notification, NotificationKind } from 'src/interfaces/notification.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { toZulipMessage } from 'src/renderers/zulip.renderer';
-import { NotificationService } from 'src/services/notification.service';
+import { NotificationService, toNotificationTarget } from 'src/services/notification.service';
 import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 vitest.mock('src/renderers/zulip.renderer', async (importOriginal) => {
@@ -462,6 +462,120 @@ describe(NotificationService.name, () => {
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       expect(loggerMock).not.toHaveBeenCalled();
       expect(fatalMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notifyTarget', () => {
+    const rss: Notification = { kind: 'rss', title: 'Post', url: 'https://example.com/post', body: 'Summary' };
+
+    it('should send the rendered embed to the Discord channel, and resolve true', async () => {
+      await expect(sut.notifyTarget({ platform: 'discord', channelId: '123' }, rss)).resolves.toBe(true);
+
+      expect(discordMock.sendMessage).toHaveBeenCalledOnce();
+      const [dto] = discordMock.sendMessage.mock.calls[0];
+      expect(dto).toStrictEqual({ channelId: '123', message: { embeds: [expect.any(EmbedBuilder)] } });
+      expect((dto.message as { embeds: EmbedBuilder[] }).embeds[0].toJSON()).toMatchObject({
+        title: 'Post',
+        url: 'https://example.com/post',
+        description: 'Summary',
+      });
+      expect(mattermostMock.send).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should send the rendered block tree to the Mattermost channel, and resolve true', async () => {
+      await expect(sut.notifyTarget({ platform: 'mattermost', channelId: 'town-square' }, rss)).resolves.toBe(true);
+
+      expect(mattermostMock.send).toHaveBeenCalledExactlyOnceWith({
+        channelId: 'town-square',
+        message: '',
+        props: { mm_blocks: [expect.objectContaining({ type: 'container' })] },
+      });
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should send the rendered markdown to the Zulip stream and topic, and resolve true', async () => {
+      await expect(sut.notifyTarget({ platform: 'zulip', stream: 107, topic: 'blog' }, rss)).resolves.toBe(true);
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 107,
+        topic: 'blog',
+        content: '**[Post](https://example.com/post)**\n~~~ quote\nSummary\n~~~',
+      });
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(mattermostMock.send).not.toHaveBeenCalled();
+    });
+
+    it('should skip Zulip without rendering or logging when it is not initialised, and resolve false', async () => {
+      zulipMock.isInitialised.mockReturnValue(false);
+
+      await expect(sut.notifyTarget({ platform: 'zulip', stream: 107, topic: 'blog' }, rss)).resolves.toBe(false);
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(toZulipMessage).not.toHaveBeenCalled();
+      expect(loggerMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['discord', { platform: 'discord', channelId: '123' }, 'channel 123', () => discordMock.sendMessage],
+      ['mattermost', { platform: 'mattermost', channelId: 'c1' }, 'channel c1', () => mattermostMock.send],
+      [
+        'zulip',
+        { platform: 'zulip', stream: 107, topic: 'blog' },
+        'stream 107, topic "blog"',
+        () => zulipMock.sendMessage,
+      ],
+    ] as const)(
+      'should log a failed %s send with its target, resolve false and never reject',
+      async (platform, target, label, send) => {
+        send().mockRejectedValue(new Error('down'));
+
+        await expect(sut.notifyTarget(target, rss)).resolves.toBe(false);
+
+        expect(loggerMock).toHaveBeenCalledOnce();
+        expect(loggerMock.mock.calls[0][0]).toBe(`Could not notify ${label} on ${platform}: Error: down`);
+        expect(fatalMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should let a renderer error propagate rather than log it as a platform failure', async () => {
+      vitest.mocked(toZulipMessage).mockImplementationOnce(() => {
+        throw new TypeError('zulip renderer bug');
+      });
+
+      await expect(sut.notifyTarget({ platform: 'zulip', stream: 107, topic: 'blog' }, rss)).rejects.toThrow(
+        'zulip renderer bug',
+      );
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(loggerMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('toNotificationTarget', () => {
+    it('should address a Discord or Mattermost row by its channel', () => {
+      expect(toNotificationTarget({ service: 'discord', channelId: '123', topic: null })).toStrictEqual({
+        platform: 'discord',
+        channelId: '123',
+      });
+      expect(toNotificationTarget({ service: 'mattermost', channelId: 'c1', topic: null })).toStrictEqual({
+        platform: 'mattermost',
+        channelId: 'c1',
+      });
+    });
+
+    it('should read a Zulip row channel as the stream ID, and a missing topic as the empty one', () => {
+      expect(toNotificationTarget({ service: 'zulip', channelId: '107', topic: 'blog' })).toStrictEqual({
+        platform: 'zulip',
+        stream: 107,
+        topic: 'blog',
+      });
+      expect(toNotificationTarget({ service: 'zulip', channelId: '107', topic: null })).toStrictEqual({
+        platform: 'zulip',
+        stream: 107,
+        topic: '',
+      });
     });
   });
 });

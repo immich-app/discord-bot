@@ -16,7 +16,7 @@ type DiscordLayout = {
   bodySlot: boolean;
 };
 
-const Layouts: Record<NotificationKind, DiscordLayout> = {
+const Layouts: Record<Exclude<NotificationKind, 'rss'>, DiscordLayout> = {
   feed: { authorIcon: true, titleLink: true, bodySlot: true },
   release: { authorIcon: true, titleLink: true, bodySlot: true },
   incident: { authorIcon: false, titleLink: true, bodySlot: false },
@@ -33,8 +33,20 @@ const TitleSuffix: Partial<Record<NotificationKind, string>> = {
   alert: ' <a:peepoAlert:1367804942638776423>',
 };
 
+const toRSSEmbed = ({ author, title, body, timestamp, url }: Notification) =>
+  new EmbedBuilder({
+    ...(author && { author: { name: author.name, url: author.url, icon_url: author.iconUrl } }),
+    ...(title && { title }),
+    ...(body && { description: body }),
+    ...(timestamp && { timestamp }),
+    ...(url && { url }),
+  });
+
 export const toDiscordEmbed = (notification: Notification) => {
   const { kind, accent, author, title, url, body, fields } = notification;
+  if (kind === 'rss') {
+    return toRSSEmbed(notification);
+  }
   const { authorIcon, titleLink, bodySlot } = Layouts[kind];
   const data: APIEmbed = { title: `${title}${TitleSuffix[kind] ?? ''}` };
 

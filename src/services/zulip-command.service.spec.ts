@@ -1,10 +1,18 @@
 import { Logger } from '@nestjs/common';
 import { Constants } from 'src/constants';
 import { neutraliseZulipLabel } from 'src/format';
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { PullRequestBaseEvent } from 'src/interfaces/github.interface';
+import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
+import { IRSSInterface } from 'src/interfaces/rss.interface';
 import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
+import { NewRSSFeed, NewScheduledMessage, RSSFeed, ScheduledMessage, UpdateRSSFeed } from 'src/schema';
 import { ChatService, EmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
+import { NotificationService } from 'src/services/notification.service';
+import { RSSService } from 'src/services/rss.service';
+import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, BackfillReport, WebhookService } from 'src/services/webhook.service';
 import { ZulipCommandService, parseCommand, splitArguments, tokenize } from 'src/services/zulip-command.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
@@ -63,6 +71,76 @@ const newWebhookServiceMock = () => ({
 
 const BOTH_PLATFORMS: BackfillPlatforms = { discord: true, zulip: true };
 
+const definedOnly = <T extends object>(values: T) =>
+  Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
+
+const newFakeDatabase = () => {
+  const scheduled: ScheduledMessage[] = [];
+  const feeds: RSSFeed[] = [];
+  const findFeed = (url: string, channelId: string, service: RSSFeed['service']) =>
+    feeds.findIndex((feed) => feed.url === url && feed.channelId === channelId && feed.service === service);
+  return {
+    scheduled,
+    feeds,
+    getScheduledMessages: (service?: ScheduledMessage['service']) =>
+      Promise.resolve(scheduled.filter((row) => service === undefined || row.service === service)),
+    getScheduledMessage: (name: string, service: ScheduledMessage['service']) =>
+      Promise.resolve(scheduled.find((row) => row.name === name && row.service === service)),
+    createScheduledMessage: (entity: NewScheduledMessage) => {
+      if (scheduled.some(({ name }) => name === entity.name)) {
+        return Promise.reject(new Error('duplicate key value violates unique constraint "scheduled_message_name_uq"'));
+      }
+      const row: ScheduledMessage = {
+        id: `id-${scheduled.length + 1}`,
+        suppressEmbeds: true,
+        createdAt: new Date(),
+        topic: null,
+        ...entity,
+      } as ScheduledMessage;
+      scheduled.push(row);
+      return Promise.resolve({ ...row });
+    },
+    updateScheduledMessage: ({ name, ...changes }: Partial<ScheduledMessage> & { name: string }) => {
+      const row = scheduled.find((candidate) => candidate.name === name);
+      return Promise.resolve(row && { ...Object.assign(row, definedOnly(changes)) });
+    },
+    removeScheduledMessage: (id: string) => {
+      scheduled.splice(
+        scheduled.findIndex((row) => row.id === id),
+        1,
+      );
+      return Promise.resolve();
+    },
+    createRSSFeed: (entity: NewRSSFeed) => {
+      if (findFeed(entity.url, entity.channelId, entity.service ?? 'discord') !== -1) {
+        return Promise.reject(new Error('duplicate key value violates unique constraint "rss_feed_pkey"'));
+      }
+      feeds.push({ service: 'discord', topic: null, lastId: null, title: null, profileImageUrl: null, ...entity });
+      return Promise.resolve();
+    },
+    getRSSFeeds: (channel?: Pick<RSSFeed, 'channelId' | 'service'>) =>
+      Promise.resolve(
+        channel
+          ? feeds.filter((feed) => feed.channelId === channel.channelId && feed.service === channel.service)
+          : feeds,
+      ),
+    removeRSSFeed: (url: string, channelId: string, service: RSSFeed['service']) => {
+      const index = findFeed(url, channelId, service);
+      if (index !== -1) {
+        feeds.splice(index, 1);
+      }
+      return Promise.resolve(index !== -1);
+    },
+    updateRSSFeed: ({ url, channelId, service, ...changes }: UpdateRSSFeed) => {
+      const feed = feeds[findFeed(url, channelId, service)];
+      if (feed) {
+        Object.assign(feed, definedOnly(changes));
+      }
+      return Promise.resolve();
+    },
+  };
+};
+
 const message = (overrides: Partial<ZulipReceivedMessage> = {}): ZulipReceivedMessage => ({
   id: 500,
   senderId: 12,
@@ -97,6 +175,13 @@ const HELP = [
   `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
   '- `backfill-pull-requests <number|all>`: create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
   '- `fourthwall update <id|all>`: fetch that Fourthwall order again and update its row in the database, or with `all` every order',
+  '- `schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]`: post the message in this stream on that cron schedule, in the topic given or this one; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
+  '- `schedule-list`: list every scheduled message on Zulip, with its schedule, stream, topic and the start of its text',
+  '- `schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]`: change the schedule, text or topic of a scheduled message on Zulip, from its next post on; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
+  '- `schedule-remove <name>`: delete a scheduled message on Zulip, which stops it',
+  '- `rss-subscribe <url> [topic=<topic>]`: post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
+  '- `rss-unsubscribe <url>`: stop posting that RSS feed in this stream',
+  '- `rss-list`: list the RSS feeds this stream is subscribed to, with their topics',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
   'Arguments are positional or `key=value`; quote a value with spaces (`text="two words"`). Every reply is posted here, in the topic.',
@@ -231,6 +316,9 @@ describe('ZulipCommandService', () => {
   let chatServiceMock: ReturnType<typeof newChatServiceMock>;
   let githubServiceMock: ReturnType<typeof newGithubServiceMock>;
   let webhookServiceMock: ReturnType<typeof newWebhookServiceMock>;
+  let database: ReturnType<typeof newFakeDatabase>;
+  let discordMock: Mocked<Pick<IDiscordInterface, 'sendMessage'>>;
+  let rssMock: Mocked<IRSSInterface>;
 
   const replies = () => zulipMock.sendMessage.mock.calls.map(([payload]) => payload);
   const send = (content: string, overrides: Partial<ZulipReceivedMessage> = {}) =>
@@ -244,12 +332,20 @@ describe('ZulipCommandService', () => {
     chatServiceMock = newChatServiceMock();
     githubServiceMock = newGithubServiceMock();
     webhookServiceMock = newWebhookServiceMock();
+    database = newFakeDatabase();
+    discordMock = { sendMessage: vitest.fn() };
+    rssMock = { getFeed: vitest.fn() };
+    const discord = discordMock as unknown as IDiscordInterface;
+    const mattermost = {} as IMattermostInterface;
+    const db = database as unknown as IDatabaseRepository;
     sut = new ZulipCommandService(
       zulipMock,
       zulipServiceMock as unknown as ZulipService,
       chatServiceMock as unknown as ChatService,
       githubServiceMock as unknown as GithubService,
       webhookServiceMock as unknown as WebhookService,
+      new ScheduledMessageService(db, discord, mattermost, zulipMock),
+      new RSSService(db, new NotificationService(discord, mattermost, zulipMock), rssMock),
     );
   });
 
@@ -1086,6 +1182,298 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** fourthwall update 1');
 
       expect(replies().map(({ content }) => content)).toEqual(['`fourthwall` failed: `nope`']);
+    });
+  });
+
+  describe('scheduled messages', () => {
+    const everyMinute = '* * * * *';
+    const nextMinute = () => vitest.advanceTimersByTimeAsync(60_000);
+    const contents = () => replies().map(({ content }) => content);
+    const posts = (topic: string) =>
+      replies()
+        .filter((reply) => reply.topic === topic)
+        .map(({ stream, content }) => [stream, content]);
+
+    beforeEach(() => {
+      vitest.useFakeTimers();
+      vitest.setSystemTime(new Date('2026-01-05T08:59:30.000Z'));
+    });
+
+    afterEach(() => {
+      vitest.clearAllTimers();
+      vitest.useRealTimers();
+    });
+
+    it('should create, list, edit and remove a scheduled message, posting it on its schedule in between', async () => {
+      await send(`@**Immich** schedule-add standup cron="${everyMinute}" message="@*mobile* Standup in **5 minutes**"`);
+      expect(database.scheduled).toMatchObject([
+        {
+          name: 'standup',
+          cronExpression: everyMinute,
+          message: '@*mobile* Standup in **5 minutes**',
+          channelId: '107',
+          topic: 'deploy',
+          createdBy: '12',
+          service: 'zulip',
+        },
+      ]);
+
+      await nextMinute();
+      await send('@**Immich** schedule-list');
+      await send('@**Immich** schedule-edit standup message="Standup now" topic=daily');
+      await nextMinute();
+      await send('@**Immich** schedule-remove name=standup');
+      await nextMinute();
+      await send('@**Immich** schedule-list');
+
+      expect(contents()).toEqual([
+        'Scheduled message `standup` created with cron `* * * * *`, posting in topic `deploy` of this stream.',
+        '@*mobile* Standup in **5 minutes**',
+        'Scheduled messages on Zulip:\n- `standup`: `* * * * *` in stream 107 (ImmichGeneral), topic `deploy`: `@\u200B*mobile* Standup in **5 minutes**`',
+        'Updated scheduled message `standup`: it posts with cron `* * * * *` in topic `daily` of stream 107 (ImmichGeneral).',
+        'Standup now',
+        'Removed scheduled message `standup`.',
+        'There are no scheduled messages on Zulip.',
+      ]);
+      expect(posts('daily')).toEqual([[107, 'Standup now']]);
+      expect(database.scheduled).toEqual([]);
+    });
+
+    it('should move a scheduled message to a new schedule', async () => {
+      await send('@**Immich** schedule-add yearly cron="0 0 1 1 *" message=Hi');
+      await nextMinute();
+      await send(`@**Immich** schedule-edit yearly cron="${everyMinute}"`);
+      await nextMinute();
+
+      expect(contents().filter((content) => content === 'Hi')).toHaveLength(1);
+    });
+
+    it('should post to the topic given, and say that suppress-embeds is ignored on Zulip', async () => {
+      await send(
+        `@**Immich** schedule-add weekly cron="${everyMinute}" message=Hi topic="weekly sync" suppress-embeds=false`,
+      );
+      await nextMinute();
+
+      expect(contents()[0]).toBe(
+        'Scheduled message `weekly` created with cron `* * * * *`, posting in topic `weekly sync` of this stream. `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message.',
+      );
+      expect(posts('weekly sync')).toEqual([[107, 'Hi']]);
+      expect(database.scheduled[0]).toMatchObject({ topic: 'weekly sync', suppressEmbeds: true });
+    });
+
+    it('should post in the general chat topic when the command was given there', async () => {
+      await send(`@**Immich** schedule-add weekly cron="${everyMinute}" message=Hi`, { topic: '' });
+      await nextMinute();
+
+      expect(contents()[0]).toBe(
+        'Scheduled message `weekly` created with cron `* * * * *`, posting in the general chat topic of this stream.',
+      );
+      expect(posts('')).toEqual([
+        [107, contents()[0]],
+        [107, 'Hi'],
+      ]);
+    });
+
+    it.each([
+      ['@**Immich** schedule-add standup message=Hi', 'schedule-add'],
+      ['@**Immich** schedule-add cron="* * * * *" message=Hi', 'schedule-add'],
+      ['@**Immich** schedule-add standup cron="* * * * *"', 'schedule-add'],
+      ['@**Immich** schedule-add standup cron="* * * * *" message=Hi suppress-embeds=maybe', 'schedule-add'],
+      ['@**Immich** schedule-add standup "* * * * *" Hi', 'schedule-add'],
+      ['@**Immich** schedule-edit standup', 'schedule-edit'],
+      ['@**Immich** schedule-edit standup message=""', 'schedule-edit'],
+      ['@**Immich** schedule-edit message=Hi', 'schedule-edit'],
+      ['@**Immich** schedule-remove', 'schedule-remove'],
+      ['@**Immich** schedule-list all', 'schedule-list'],
+    ])('should answer %j with the usage of %s and change nothing', async (content, name) => {
+      await send(content);
+
+      expect(contents()).toEqual([expect.stringMatching(new RegExp(`^Usage: \`${name}( |\`)`))]);
+      expect(database.scheduled).toEqual([]);
+    });
+
+    it('should answer an invalid cron expression with the error, storing nothing', async () => {
+      await send('@**Immich** schedule-add standup cron="not a cron" message=Hi');
+
+      expect(contents()).toEqual([
+        '`schedule-add` failed: `Invalid cron expression not a cron: Error: Unknown alias: not`',
+      ]);
+      expect(database.scheduled).toEqual([]);
+    });
+
+    it('should answer a name already taken, on any platform, with the error', async () => {
+      await database.createScheduledMessage({
+        name: 'standup',
+        cronExpression: '0 9 * * 1',
+        message: 'Discord standup',
+        channelId: '991930592843272342',
+        createdBy: 'user-1',
+        service: 'discord',
+      });
+
+      await send(`@**Immich** schedule-add standup cron="${everyMinute}" message=Hi`);
+
+      expect(contents()).toEqual([
+        '`schedule-add` failed: `duplicate key value violates unique constraint "scheduled_message_name_uq"`',
+      ]);
+    });
+
+    it('should neither list, edit nor remove a scheduled message of another platform', async () => {
+      await database.createScheduledMessage({
+        name: 'standup',
+        cronExpression: '0 9 * * 1',
+        message: 'Discord standup',
+        channelId: '991930592843272342',
+        createdBy: 'user-1',
+        service: 'discord',
+      });
+
+      await send('@**Immich** schedule-list');
+      await send('@**Immich** schedule-edit standup message=Hijacked');
+      await send('@**Immich** schedule-remove standup');
+
+      const notFound = 'There is no scheduled message `standup` on Zulip; `schedule-list` lists them.';
+      expect(contents()).toEqual(['There are no scheduled messages on Zulip.', notFound, notFound]);
+      expect(database.scheduled).toMatchObject([{ name: 'standup', message: 'Discord standup', service: 'discord' }]);
+    });
+
+    it('should list a message on one line, shortened, mentioning nobody', async () => {
+      const message = `@**all** line one\nline \`two\` ${'x'.repeat(100)}`;
+      await database.createScheduledMessage({
+        name: 'long',
+        cronExpression: '0 9 * * 1',
+        message,
+        channelId: '999',
+        topic: null,
+        createdBy: '12',
+        service: 'zulip',
+      });
+
+      await send('@**Immich** schedule-list');
+
+      expect(contents()).toEqual([
+        `Scheduled messages on Zulip:\n- \`long\`: \`0 9 * * 1\` in stream 999, the general chat topic: \`@\u200B**all** line one line two ${'x'.repeat(48)}...\``,
+      ]);
+    });
+  });
+
+  describe('rss', () => {
+    const feedUrl = 'https://immich.app/blog/rss.xml';
+    const newestPost = {
+      id: 'p2',
+      title: 'Immich v2.0.0',
+      summary: 'Stable at last',
+      link: 'https://immich.app/blog/v2',
+      pubDate: '2025-06-10T09:30:00Z',
+    };
+    const contents = () => replies().map(({ content }) => content);
+
+    beforeEach(() => {
+      zulipMock.isInitialised.mockReturnValue(true);
+      rssMock.getFeed.mockResolvedValue({ feed: { title: 'Immich Blog' }, posts: [newestPost, { id: 'p1' }] });
+    });
+
+    it('should subscribe, list and unsubscribe a feed, posting its newest post in the topic given', async () => {
+      await send(`@**Immich** rss-subscribe ${feedUrl} topic=blog`);
+      await flush();
+      await send('@**Immich** rss-list', { id: 501 });
+      await send(`@**Immich** rss-subscribe url=${feedUrl}`, { id: 502 });
+      await send(`@**Immich** rss-unsubscribe ${feedUrl}`, { id: 503 });
+      await send('@**Immich** rss-list', { id: 504 });
+      await send(`@**Immich** rss-unsubscribe ${feedUrl}`, { id: 505 });
+
+      expect(replies()).toEqual([
+        {
+          stream: 107,
+          topic: 'deploy',
+          content: `Subscribing this stream to \`${feedUrl}\`: fetching the feed to post its newest post in topic \`blog\`…`,
+        },
+        {
+          stream: 107,
+          topic: 'blog',
+          content: `**[Immich v2.0.0](https://immich.app/blog/v2)** — [Immich Blog](${feedUrl}) · <time:2025-06-10T09:30:00.000Z>\n~~~ quote\nStable at last\n~~~`,
+        },
+        {
+          stream: 107,
+          topic: 'deploy',
+          content: `Subscribed this stream to \`${feedUrl}\`: its new posts go to topic \`blog\`.`,
+        },
+        { stream: 107, topic: 'deploy', content: `RSS feeds of this stream:\n- \`${feedUrl}\` in topic \`blog\`` },
+        {
+          stream: 107,
+          topic: 'deploy',
+          content: `This stream is already subscribed to \`${feedUrl}\`, in topic \`blog\`.`,
+        },
+        { stream: 107, topic: 'deploy', content: `Unsubscribed this stream from \`${feedUrl}\`.` },
+        { stream: 107, topic: 'deploy', content: 'This stream is not subscribed to any RSS feed.' },
+        {
+          stream: 107,
+          topic: 'deploy',
+          content: `This stream is not subscribed to \`${feedUrl}\`; \`rss-list\` lists the feeds it is.`,
+        },
+      ]);
+      expect(rssMock.getFeed).toHaveBeenCalledExactlyOnceWith(feedUrl, null);
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(database.feeds).toEqual([]);
+    });
+
+    it('should store the feed as a Zulip row for this stream and topic, at its newest post', async () => {
+      await send(`@**Immich** rss-subscribe ${feedUrl}`, { streamId: 109, topic: 'ios build' });
+      await flush();
+
+      expect(database.feeds).toEqual([
+        {
+          url: feedUrl,
+          channelId: '109',
+          service: 'zulip',
+          topic: 'ios build',
+          lastId: 'p2',
+          title: 'Immich Blog',
+          profileImageUrl: null,
+        },
+      ]);
+    });
+
+    it('should list and remove only the feeds of the stream it is run in, and never a Discord one', async () => {
+      await database.createRSSFeed({ url: feedUrl, channelId: '109', service: 'zulip', topic: 'blog' });
+      await database.createRSSFeed({ url: feedUrl, channelId: '107' });
+
+      await send('@**Immich** rss-list');
+      await send(`@**Immich** rss-unsubscribe ${feedUrl}`);
+
+      expect(contents()).toEqual([
+        'This stream is not subscribed to any RSS feed.',
+        `This stream is not subscribed to \`${feedUrl}\`; \`rss-list\` lists the feeds it is.`,
+      ]);
+      expect(database.feeds).toHaveLength(2);
+    });
+
+    it('should answer a feed that cannot be subscribed to with the error, keeping no row', async () => {
+      rssMock.getFeed.mockResolvedValue({ feed: {}, posts: [] });
+
+      await send(`@**Immich** rss-subscribe ${feedUrl}`);
+      await flush();
+      await send(`@**Immich** rss-subscribe ${feedUrl}`, { id: 501 });
+
+      expect(contents().slice(0, 2)).toEqual([
+        `Subscribing this stream to \`${feedUrl}\`: fetching the feed to post its newest post in topic \`deploy\`…`,
+        `\`rss-subscribe\` failed: \`Could not fetch posts from ${feedUrl}\``,
+      ]);
+      expect(contents()[2]).toMatch(/^Subscribing this stream/);
+      expect(database.feeds).toEqual([]);
+    });
+
+    it.each([
+      ['@**Immich** rss-subscribe', 'rss-subscribe <url> [topic=<topic>]'],
+      [`@**Immich** rss-subscribe ${feedUrl} blog`, 'rss-subscribe <url> [topic=<topic>]'],
+      [`@**Immich** rss-subscribe ${feedUrl} url=${feedUrl}`, 'rss-subscribe <url> [topic=<topic>]'],
+      ['@**Immich** rss-unsubscribe', 'rss-unsubscribe <url>'],
+      ['@**Immich** rss-list all', 'rss-list'],
+    ])('should answer %j with its usage and subscribe nothing', async (content, usage) => {
+      await send(content);
+
+      expect(contents()).toEqual([`Usage: \`${usage}\``]);
+      expect(rssMock.getFeed).not.toHaveBeenCalled();
     });
   });
 });

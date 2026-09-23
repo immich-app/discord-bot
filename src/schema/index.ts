@@ -44,7 +44,7 @@ export type UpdateFourthwallOrder = Updateable<FourthwallOrderTable> & { id: str
 
 export type RSSFeed = Selectable<RSSFeedTable>;
 export type NewRSSFeed = Insertable<RSSFeedTable>;
-export type UpdateRSSFeed = Updateable<RSSFeedTable> & { url: string; channelId: string };
+export type UpdateRSSFeed = Updateable<RSSFeedTable> & Pick<RSSFeed, 'url' | 'channelId' | 'service'>;
 
 export type ScheduledMessage = Selectable<ScheduledMessageTable>;
 export type NewScheduledMessage = Insertable<ScheduledMessageTable>;

@@ -18,7 +18,10 @@ import { shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
-import { NewScheduledMessage } from 'src/schema';
+import { IZulipInterface } from 'src/interfaces/zulip.interface';
+import { NewScheduledMessage, ScheduledMessage, UpdateScheduledMessage } from 'src/schema';
+
+type Service = ScheduledMessage['service'];
 
 @Discord()
 @Injectable()
@@ -30,7 +33,24 @@ export class ScheduledMessageService {
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
+    @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
+
+  private senders: Record<Service, (message: ScheduledMessage) => Promise<unknown>> = {
+    discord: ({ channelId, message, suppressEmbeds }) =>
+      this.discord.sendMessage({
+        channelId,
+        message: { content: message, flags: suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [] },
+      }),
+    mattermost: ({ channelId, message, suppressEmbeds }) =>
+      this.mattermost.send({
+        channelId,
+        message,
+        props: suppressEmbeds ? { remove_link_preview: 'true' } : undefined,
+      }),
+    zulip: ({ channelId, topic, message }) =>
+      this.zulip.sendMessage({ stream: Number(channelId), topic: topic ?? '', content: message }),
+  };
 
   async init() {
     const messages = await this.database.getScheduledMessages();
@@ -158,61 +178,51 @@ export class ScheduledMessageService {
             return;
           }
 
-          await this.database.updateScheduledMessage({ name, ...response });
-        })();
+          const { cronExpression, message: text, suppressEmbeds } = response;
+          await this.updateScheduledMessage(name, 'mattermost', { cronExpression, message: text, suppressEmbeds });
+        })().catch((error) => this.logger.error(`Failed to edit scheduled message ${name}: ${error}`));
       },
     );
   }
 
-  private registerJob({
-    id,
-    cronExpression,
-    channelId,
-    message,
-    suppressEmbeds,
-    service,
-  }: {
-    id: string;
-    cronExpression: string;
-    channelId: string;
-    message: string;
-    suppressEmbeds: boolean;
-    service: 'discord' | 'mattermost';
-  }) {
+  private registerJob(scheduledMessage: ScheduledMessage) {
     const job = CronJob.from({
-      cronTime: cronExpression,
+      cronTime: scheduledMessage.cronExpression,
       onTick: async () => {
         try {
-          if (service === 'discord') {
-            await this.discord.sendMessage({
-              channelId,
-              message: { content: message, flags: suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [] },
-            });
-          } else {
-            await this.mattermost.send({
-              channelId,
-              message,
-              props: suppressEmbeds ? { remove_link_preview: 'true' } : undefined,
-            });
-          }
+          await this.senders[scheduledMessage.service](scheduledMessage);
         } catch (error) {
-          this.logger.error(`Failed to send scheduled message ${id}: ${error}`);
+          this.logger.error(`Failed to send scheduled message ${scheduledMessage.id}: ${error}`);
         }
       },
       start: true,
     });
-    this.jobs.set(id, job);
+    this.jobs.set(scheduledMessage.id, job);
+  }
+
+  private async reschedule(scheduledMessage: ScheduledMessage) {
+    await this.jobs.get(scheduledMessage.id)?.stop();
+    this.registerJob(scheduledMessage);
   }
 
   async createScheduledMessage(entity: NewScheduledMessage) {
-    try {
-      new CronJob(entity.cronExpression, () => {});
-    } catch (error) {
-      throw new Error(`Invalid cron expression ${entity.cronExpression}: ${error}`, { cause: error });
-    }
-
+    validateCronExpression(entity.cronExpression);
     const message = await this.database.createScheduledMessage(entity);
     this.registerJob(message);
+  }
+
+  async updateScheduledMessage(name: string, service: Service, changes: UpdateScheduledMessage) {
+    if (changes.cronExpression !== undefined) {
+      validateCronExpression(changes.cronExpression);
+    }
+    if (!(await this.database.getScheduledMessage(name, service))) {
+      return;
+    }
+    const updated = await this.database.updateScheduledMessage({ name, ...changes });
+    if (updated) {
+      await this.reschedule(updated);
+    }
+    return updated;
   }
 
   async editScheduledMessage(name: string) {
@@ -268,16 +278,20 @@ export class ScheduledMessageService {
       return;
     }
 
-    await this.jobs.get(updatedMessage.id)?.stop();
-    this.registerJob(updatedMessage);
+    await this.reschedule(updatedMessage);
 
     await interaction.reply(`Successfully updated scheduled message ${inlineCode(updatedMessage.name)}`);
   }
 
-  async removeScheduledMessage(name: string, service: 'discord' | 'mattermost') {
+  async removeScheduledMessage(name: string, service: Service) {
+    const message = await this.deleteScheduledMessage(name, service);
+    return message ? `Removed scheduled message ${inlineCode(message.name)}` : 'Scheduled message not found';
+  }
+
+  async deleteScheduledMessage(name: string, service: Service) {
     const message = await this.database.getScheduledMessage(name, service);
     if (!message) {
-      return 'Scheduled message not found';
+      return;
     }
 
     const job = this.jobs.get(message.id);
@@ -287,7 +301,7 @@ export class ScheduledMessageService {
     }
 
     await this.database.removeScheduledMessage(message.id);
-    return `Removed scheduled message ${inlineCode(message.name)}`;
+    return message;
   }
 
   async getScheduledMessages(value?: string) {
@@ -305,7 +319,15 @@ export class ScheduledMessageService {
       .slice(0, 25);
   }
 
-  async listScheduledMessages(service: 'discord' | 'mattermost') {
+  async listScheduledMessages(service: Service) {
     return this.database.getScheduledMessages(service);
   }
 }
+
+const validateCronExpression = (cronExpression: string) => {
+  try {
+    new CronJob(cronExpression, () => {});
+  } catch (error) {
+    throw new Error(`Invalid cron expression ${cronExpression}: ${error}`, { cause: error });
+  }
+};

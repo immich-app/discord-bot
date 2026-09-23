@@ -22,6 +22,7 @@ type MattermostLayout = {
   titleLink: boolean;
   /** Render the title with `size: 'small'`. */
   titleSize?: 'small';
+  optionalTitleAndLink?: boolean;
   /** Whether a body slot is emitted. An empty slot leaves an `undefined` entry in `content`. */
   bodySlot: boolean;
   /** Shorten the body to this many characters. Mattermost-only truncation lives here, not in the service. */
@@ -46,6 +47,14 @@ const Layouts: Record<NotificationKind, MattermostLayout> = {
   purchase: { author: 'text', titleLink: true, bodySlot: true, fieldsLayout: 'columns' },
   report: { author: 'text', titleLink: false, bodySlot: true, fieldsLayout: 'columns' },
   alert: { author: 'text', titleLink: false, bodySlot: true, fieldsLayout: 'columns' },
+  rss: {
+    author: 'avatar',
+    titleLink: true,
+    titleSize: 'small',
+    optionalTitleAndLink: true,
+    bodySlot: true,
+    fieldsLayout: 'columns',
+  },
 };
 
 const toAuthorBlock = (
@@ -101,6 +110,14 @@ const toFieldBlocks = (fields: NotificationField[], layout: MattermostLayout['fi
   ];
 };
 
+const toOptionalTitle = (title: string, url: string | undefined) => {
+  const label = title || url;
+  if (!label) {
+    return;
+  }
+  return url ? `##### [${label}](${url})` : `##### ${label}`;
+};
+
 export const toMattermostBlock = (notification: Notification): MattermostBlock => {
   const { kind, accent, author, title, url, body, fields } = notification;
   const layout = Layouts[kind];
@@ -112,11 +129,14 @@ export const toMattermostBlock = (notification: Notification): MattermostBlock =
     content.push(toAuthorBlock(author, layout.author));
   }
 
-  content.push({
-    type: 'text',
-    text: titleLink ? `##### [${title}](${url})` : title,
-    ...(titleSize ? { size: titleSize } : {}),
-  });
+  const titleText = layout.optionalTitleAndLink
+    ? toOptionalTitle(title, url)
+    : titleLink
+      ? `##### [${title}](${url})`
+      : title;
+  if (titleText !== undefined) {
+    content.push({ type: 'text', text: titleText, ...(titleSize ? { size: titleSize } : {}) });
+  }
 
   if (bodySlot) {
     content.push(

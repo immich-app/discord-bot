@@ -13,6 +13,8 @@ type ZulipLayout = {
   bodyMaxLength?: number;
   bodyStyle: 'quote' | 'inline';
   fieldsLayout: 'line' | 'block';
+  timestampSlot?: boolean;
+  optionalTitleAndLink?: boolean;
 };
 
 const Layouts: Record<NotificationKind, ZulipLayout> = {
@@ -22,6 +24,14 @@ const Layouts: Record<NotificationKind, ZulipLayout> = {
   purchase: { titleLink: true, bodySlot: true, bodyStyle: 'inline', fieldsLayout: 'line' },
   report: { titleLink: false, bodySlot: true, bodyStyle: 'inline', fieldsLayout: 'line' },
   alert: { titleLink: false, bodySlot: true, bodyStyle: 'inline', fieldsLayout: 'line' },
+  rss: {
+    titleLink: true,
+    bodySlot: true,
+    bodyStyle: 'quote',
+    fieldsLayout: 'line',
+    timestampSlot: true,
+    optionalTitleAndLink: true,
+  },
 };
 
 /** Unicode rather than `:names:`, because Zulip shows an unknown `:name:` as literal text. */
@@ -55,18 +65,34 @@ export const neutraliseMentions = neutraliseZulipMentions;
 
 export const neutraliseLabel = neutraliseZulipLabel;
 
-const toAuthorLink = ({ name, url }: NotificationAuthor) => `— [${neutraliseLabel(name)}](${url})`;
+/**
+ * A link target cannot end its link early: Python-Markdown ends it at a `)` or whitespace, and a feed post's link
+ * is written by anyone, so `https://x/)@**all**` would otherwise mention the whole stream after a broken link.
+ */
+const toLinkTarget = (url?: string) =>
+  url?.replaceAll(/[()\s]/g, (char) => ({ '(': '%28', ')': '%29' })[char] ?? encodeURIComponent(char));
 
-const toHeading = ({ accent, author, title, url }: Notification, titleLink: ZulipLayout['titleLink']) => {
+const toAuthorLink = ({ name, url }: NotificationAuthor) => `— [${neutraliseLabel(name)}](${toLinkTarget(url)})`;
+
+const toTitle = (title: string, url: string | undefined, titleLink: ZulipLayout['titleLink']) => {
   const safeTitle = neutraliseLabel(title);
-  return [
+  return titleLink ? `**[${safeTitle}](${toLinkTarget(url)})**` : `**${safeTitle}**`;
+};
+
+const toOptionalTitle = (title: string, url: string | undefined) => {
+  const label = title || toLinkTarget(url);
+  return label && toTitle(label, url, !!url);
+};
+
+const toHeading = ({ accent, author, title, url, timestamp }: Notification, layout: ZulipLayout) =>
+  [
     accent && Emoji[accent],
-    titleLink ? `**[${safeTitle}](${url})**` : `**${safeTitle}**`,
+    layout.optionalTitleAndLink ? toOptionalTitle(title, url) : toTitle(title, url, layout.titleLink),
     author && toAuthorLink(author),
+    layout.timestampSlot && timestamp && `· <time:${timestamp}>`,
   ]
     .filter(Boolean)
     .join(' ');
-};
 
 const toQuote = toZulipQuote;
 
@@ -88,7 +114,7 @@ export const toZulipMessage = (notification: Notification) => {
   const { kind, body, fields } = notification;
   const layout = Layouts[kind];
 
-  const lines = [toHeading(notification, layout.titleLink)];
+  const lines = [toHeading(notification, layout)];
 
   if (layout.bodySlot && body) {
     lines.push(toBody(body, layout));
@@ -98,5 +124,5 @@ export const toZulipMessage = (notification: Notification) => {
     lines.push(...toFieldLines(fields, layout.fieldsLayout));
   }
 
-  return lines.join('\n');
+  return lines.filter(Boolean).join('\n');
 };

@@ -93,4 +93,51 @@ describe('toDiscordEmbed', () => {
     ]);
     expect(embed.toJSON().fields?.[1]).not.toHaveProperty('inline');
   });
+
+  describe('rss', () => {
+    const post = {
+      kind: 'rss' as const,
+      author: {
+        name: 'Immich Blog',
+        url: 'https://immich.app/blog/rss.xml',
+        iconUrl: 'https://immich.app/favicon.png',
+      },
+      title: 'Immich v2.0.0',
+      url: 'https://immich.app/blog/v2',
+      body: 'Summary',
+      timestamp: '2025-06-10T09:30:00.000Z',
+    };
+
+    it('should send the feed as author, then the post title, summary, timestamp and link, in that order', () => {
+      expect(JSON.stringify(toDiscordEmbed(post))).toBe(
+        JSON.stringify({
+          author: {
+            name: 'Immich Blog',
+            url: 'https://immich.app/blog/rss.xml',
+            icon_url: 'https://immich.app/favicon.png',
+          },
+          title: 'Immich v2.0.0',
+          description: 'Summary',
+          timestamp: '2025-06-10T09:30:00.000Z',
+          url: 'https://immich.app/blog/v2',
+        }),
+      );
+    });
+
+    it('should leave out every key the post does not have, an empty title included, which Discord refuses', () => {
+      expect(toDiscordEmbed({ kind: 'rss', title: '' }).toJSON()).toStrictEqual({});
+    });
+
+    it('should never colour an RSS post', () => {
+      expect(toDiscordEmbed({ ...post, accent: 'pr.merged' }).toJSON()).not.toHaveProperty('color');
+    });
+
+    it('should keep an empty title on every other kind, and never set a timestamp there', () => {
+      for (const kind of ['feed', 'release', 'incident', 'purchase', 'report', 'alert'] as const) {
+        const embed = toDiscordEmbed({ kind, title: '', timestamp: '2025-06-10T09:30:00.000Z' }).toJSON();
+        expect(embed.title, kind).toMatch(/^( <a:peepoAlert:\d+>)?$/);
+        expect(embed, kind).not.toHaveProperty('timestamp');
+      }
+    });
+  });
 });

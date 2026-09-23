@@ -4,19 +4,25 @@ import { neutraliseZulipLabel, neutraliseZulipMentions, shorten, shortenCodePoin
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
+import { RSSService } from 'src/services/rss.service';
+import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
-import { ZulipService, isBotSender } from 'src/services/zulip.service';
+import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
 
 /** Zulip's default `max_message_length`, in code points: the server refuses a longer message. */
 const MAX_MESSAGE_LENGTH = 10_000;
 const SIMILAR_LOOKBACK = 10;
 const ECHO_LENGTH = 80;
 const ERROR_LENGTH = 300;
+const SCHEDULE_ECHO_LENGTH = 80;
 
 /** Straight and curly double quotes: a phone keyboard curls the quotes around `text="two words"`. */
 const QUOTES = new Set(['"', '“', '”']);
 
 const BOTH_PLATFORMS: BackfillPlatforms = { discord: true, zulip: true };
+
+const SUPPRESS_EMBEDS_IGNORED =
+  '`suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message';
 
 const EMOTE_SYNC_SERVER = `the ${Constants.Discord.EmoteSyncServer.name} Discord server (${Constants.Discord.EmoteSyncServer.id})`;
 
@@ -105,6 +111,17 @@ const code = (text: string) => `\`${neutraliseZulipMentions(text.replaceAll('`',
 const describeError = (error: unknown) =>
   code(shorten(error instanceof Error ? error.message : String(error), ERROR_LENGTH));
 
+/** Zulip's empty topic is the one it shows as "general chat". */
+const describeTopic = (topic: string | null) => (topic ? `topic ${code(topic)}` : 'the general chat topic');
+
+const notScheduled = (name: string) =>
+  `There is no scheduled message ${code(name)} on Zulip; ${code('schedule-list')} lists them.`;
+
+const isBoolean = (value: string | undefined) => value === undefined || /^(true|false)$/i.test(value);
+
+const ignoredSuppressEmbeds = (options: Record<string, string>) =>
+  options['suppress-embeds'] === undefined ? '' : ` ${SUPPRESS_EMBEDS_IGNORED}.`;
+
 const countBackticks = (text: string) => (text.match(/`/g) ?? []).length;
 
 /** The bot's own code spans hold no backtick, so a cut leaving an odd number of them was cut inside one and must close it. */
@@ -174,6 +191,56 @@ export class ZulipCommandService {
       options: ['id'],
       run: (context) => this.fourthwall(context),
     },
+    'schedule-add': {
+      usage: 'schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]',
+      description: `post the message in this stream on that cron schedule, in the topic given or this one; ${SUPPRESS_EMBEDS_IGNORED}`,
+      positionals: 1,
+      options: ['name', 'cron', 'message', 'topic', 'suppress-embeds'],
+      run: (context) => this.scheduleAdd(context),
+    },
+    'schedule-list': {
+      usage: 'schedule-list',
+      description: 'list every scheduled message on Zulip, with its schedule, stream, topic and the start of its text',
+      positionals: 0,
+      options: [],
+      run: () => this.scheduleList(),
+    },
+    'schedule-edit': {
+      usage: 'schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]',
+      description: `change the schedule, text or topic of a scheduled message on Zulip, from its next post on; ${SUPPRESS_EMBEDS_IGNORED}`,
+      positionals: 1,
+      options: ['name', 'cron', 'message', 'topic', 'suppress-embeds'],
+      run: (context) => this.scheduleEdit(context),
+    },
+    'schedule-remove': {
+      usage: 'schedule-remove <name>',
+      description: 'delete a scheduled message on Zulip, which stops it',
+      positionals: 1,
+      options: ['name'],
+      run: (context) => this.scheduleRemove(context),
+    },
+    'rss-subscribe': {
+      usage: 'rss-subscribe <url> [topic=<topic>]',
+      description:
+        'post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
+      positionals: 1,
+      options: ['url', 'topic'],
+      run: (context) => this.rssSubscribe(context),
+    },
+    'rss-unsubscribe': {
+      usage: 'rss-unsubscribe <url>',
+      description: 'stop posting that RSS feed in this stream',
+      positionals: 1,
+      options: ['url'],
+      run: (context) => this.rssUnsubscribe(context),
+    },
+    'rss-list': {
+      usage: 'rss-list',
+      description: 'list the RSS feeds this stream is subscribed to, with their topics',
+      positionals: 0,
+      options: [],
+      run: ({ message }) => this.rssList(message),
+    },
     similar: {
       usage: 'similar [text]',
       description:
@@ -190,6 +257,8 @@ export class ZulipCommandService {
     private chatService: ChatService,
     private githubService: GithubService,
     private webhookService: WebhookService,
+    private scheduledMessageService: ScheduledMessageService,
+    private rssService: RSSService,
   ) {}
 
   async init() {
@@ -369,6 +438,109 @@ export class ZulipCommandService {
         return 'Updated every Fourthwall order.';
       },
     });
+  }
+
+  private async scheduleAdd(context: CommandContext) {
+    const { message, options } = context;
+    const name = this.oneArgument(context, 'name');
+    const { cron, message: text, topic = message.topic } = options;
+    if (!name || !cron || !text || !isBoolean(options['suppress-embeds'])) {
+      return this.usage('schedule-add');
+    }
+    await this.scheduledMessageService.createScheduledMessage({
+      name,
+      cronExpression: cron,
+      message: text,
+      channelId: String(message.streamId),
+      topic,
+      createdBy: String(message.senderId),
+      service: 'zulip',
+    });
+    return `Scheduled message ${code(name)} created with cron ${code(cron)}, posting in ${describeTopic(topic)} of this stream.${ignoredSuppressEmbeds(options)}`;
+  }
+
+  private async scheduleList() {
+    const messages = await this.scheduledMessageService.listScheduledMessages('zulip');
+    if (messages.length === 0) {
+      return 'There are no scheduled messages on Zulip.';
+    }
+    return [
+      'Scheduled messages on Zulip:',
+      ...messages.map(
+        ({ name, cronExpression, channelId, topic, message }) =>
+          `- ${code(name)}: ${code(cronExpression)} in stream ${describeZulipStream(Number(channelId))}, ${describeTopic(topic)}: ${code(shorten(message.replaceAll(/\s+/g, ' ').trim(), SCHEDULE_ECHO_LENGTH))}`,
+      ),
+    ].join('\n');
+  }
+
+  private async scheduleEdit(context: CommandContext) {
+    const { options } = context;
+    const name = this.oneArgument(context, 'name');
+    const { cron, message: text, topic } = options;
+    const changed = cron !== undefined || text !== undefined || topic !== undefined;
+    if (!name || !changed || cron === '' || text === '' || !isBoolean(options['suppress-embeds'])) {
+      return this.usage('schedule-edit');
+    }
+    const updated = await this.scheduledMessageService.updateScheduledMessage(name, 'zulip', {
+      cronExpression: cron,
+      message: text,
+      topic,
+    });
+    if (!updated) {
+      return notScheduled(name);
+    }
+    return `Updated scheduled message ${code(name)}: it posts with cron ${code(updated.cronExpression)} in ${describeTopic(updated.topic)} of stream ${describeZulipStream(Number(updated.channelId))}.${ignoredSuppressEmbeds(options)}`;
+  }
+
+  private async scheduleRemove(context: CommandContext) {
+    const name = this.oneArgument(context, 'name');
+    if (!name) {
+      return this.usage('schedule-remove');
+    }
+    const removed = await this.scheduledMessageService.deleteScheduledMessage(name, 'zulip');
+    return removed ? `Removed scheduled message ${code(name)}.` : notScheduled(name);
+  }
+
+  private async rssSubscribe(context: CommandContext) {
+    const { message, options } = context;
+    const url = this.oneArgument(context, 'url');
+    if (!url) {
+      return this.usage('rss-subscribe');
+    }
+    const topic = options.topic ?? message.topic;
+    const existing = (await this.rssService.getZulipRSSFeeds(message.streamId)).find((feed) => feed.url === url);
+    if (existing) {
+      return `This stream is already subscribed to ${code(url)}, in ${describeTopic(existing.topic)}.`;
+    }
+    return this.inBackground('rss-subscribe', context, {
+      ack: `Subscribing this stream to ${code(url)}: fetching the feed to post its newest post in ${describeTopic(topic)}…`,
+      work: async () => {
+        await this.rssService.createZulipRSSFeed(url, message.streamId, topic);
+        return `Subscribed this stream to ${code(url)}: its new posts go to ${describeTopic(topic)}.`;
+      },
+    });
+  }
+
+  private async rssUnsubscribe(context: CommandContext) {
+    const url = this.oneArgument(context, 'url');
+    if (!url) {
+      return this.usage('rss-unsubscribe');
+    }
+    const removed = await this.rssService.removeZulipRSSFeed(url, context.message.streamId);
+    return removed
+      ? `Unsubscribed this stream from ${code(url)}.`
+      : `This stream is not subscribed to ${code(url)}; ${code('rss-list')} lists the feeds it is.`;
+  }
+
+  private async rssList(message: StreamMessage) {
+    const feeds = await this.rssService.getZulipRSSFeeds(message.streamId);
+    if (feeds.length === 0) {
+      return 'This stream is not subscribed to any RSS feed.';
+    }
+    return [
+      'RSS feeds of this stream:',
+      ...feeds.map(({ url, topic }) => `- ${code(url)} in ${describeTopic(topic)}`),
+    ].join('\n');
   }
 
   private async similar({ message, args, options }: CommandContext) {

@@ -15,7 +15,8 @@ export type NotificationKind =
   /** A daily, weekly or monthly licences or orders report. */
   | 'report'
   /** A release workflow failure. */
-  | 'alert';
+  | 'alert'
+  | 'rss';
 
 /**
  * Semantic outcome of the event, namespaced by domain. A token names the event at its call site and
@@ -61,7 +62,8 @@ export type Notification = {
   author?: NotificationAuthor;
   /**
    * Headline. Whether it is rendered as a link to `url` is a function of `kind` (feed, release,
-   * incident and purchase titles link; report and alert titles do not), never of this value.
+   * incident, purchase and rss titles link; report and alert titles do not), never of this value.
+   * An `rss` post may have no title and no `url`.
    */
   title: string;
   url?: string;
@@ -73,4 +75,11 @@ export type Notification = {
    */
   body?: string;
   fields?: NotificationField[];
+  /** When the event happened, as an ISO 8601 string. Only the `rss` kind renders it. */
+  timestamp?: string;
 };
+
+export type NotificationTarget =
+  | { platform: 'discord'; channelId: string }
+  | { platform: 'mattermost'; channelId: string }
+  | { platform: 'zulip'; stream: number; topic: string };

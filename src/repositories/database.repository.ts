@@ -189,20 +189,24 @@ export class DatabaseRepository implements IDatabaseRepository {
     await this.db.insertInto('rss_feed').values(entity).execute();
   }
 
-  async getRSSFeeds(channelId?: string): Promise<RSSFeed[]> {
+  async getRSSFeeds(channel?: Pick<RSSFeed, 'channelId' | 'service'>): Promise<RSSFeed[]> {
     return this.db
       .selectFrom('rss_feed')
       .selectAll()
-      .$if(!!channelId, (qb) => qb.where('rss_feed.channelId', '=', channelId!))
+      .$if(!!channel, (qb) =>
+        qb.where('rss_feed.channelId', '=', channel!.channelId).where('rss_feed.service', '=', channel!.service),
+      )
       .execute();
   }
 
-  async removeRSSFeed(url: string, channelId: string): Promise<void> {
-    await this.db
+  async removeRSSFeed(url: string, channelId: string, service: RSSFeed['service']): Promise<boolean> {
+    const { numDeletedRows } = await this.db
       .deleteFrom('rss_feed')
       .where('rss_feed.url', '=', url)
       .where('rss_feed.channelId', '=', channelId)
-      .execute();
+      .where('rss_feed.service', '=', service)
+      .executeTakeFirst();
+    return numDeletedRows > 0n;
   }
 
   async updateRSSFeed(entity: UpdateRSSFeed): Promise<void> {
@@ -211,10 +215,11 @@ export class DatabaseRepository implements IDatabaseRepository {
       .set(entity)
       .where('rss_feed.url', '=', entity.url)
       .where('rss_feed.channelId', '=', entity.channelId)
+      .where('rss_feed.service', '=', entity.service)
       .execute();
   }
 
-  getScheduledMessages(service?: 'discord' | 'mattermost'): Promise<ScheduledMessage[]> {
+  getScheduledMessages(service?: ScheduledMessage['service']): Promise<ScheduledMessage[]> {
     return this.db
       .selectFrom('scheduled_message')
       .selectAll()
@@ -222,7 +227,7 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
-  getScheduledMessage(name: string, service: 'discord' | 'mattermost'): Promise<ScheduledMessage | undefined> {
+  getScheduledMessage(name: string, service: ScheduledMessage['service']): Promise<ScheduledMessage | undefined> {
     return this.db
       .selectFrom('scheduled_message')
       .where('name', '=', name)
