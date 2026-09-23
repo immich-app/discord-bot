@@ -1,4 +1,4 @@
-import { neutraliseZulipMentions, shorten, toZulipQuote } from 'src/format';
+import { neutraliseZulipLabel, neutraliseZulipMentions, shorten, toZulipQuote } from 'src/format';
 import {
   Notification,
   NotificationAccent,
@@ -53,11 +53,7 @@ export const Emoji: Record<NotificationAccent, string> = {
 
 export const neutraliseMentions = neutraliseZulipMentions;
 
-/**
- * Python-Markdown only closes a link label when `(` or `[` directly follows `]`, so breaking just those
- * pairs stops an untrusted title forging the heading's link while leaving every other `]` as written.
- */
-export const neutraliseLabel = (text: string) => neutraliseMentions(text).replaceAll(/\](?=[([])/g, ']\u200B');
+export const neutraliseLabel = neutraliseZulipLabel;
 
 const toAuthorLink = ({ name, url }: NotificationAuthor) => `— [${neutraliseLabel(name)}](${url})`;
 

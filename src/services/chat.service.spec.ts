@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
 import { Constants } from 'src/constants';
+import { DiscordCommands } from 'src/discord/commands';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -9,7 +10,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
-import { ChatService } from 'src/services/chat.service';
+import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -46,6 +47,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   getLatestReleaseTag: vitest.fn(),
   isCollaborator: vitest.fn(),
   getPullRequests: vitest.fn(),
+  getPullRequest: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -133,6 +135,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
+  getMessages: vitest.fn(),
   registerQueue: vitest.fn(),
   getEvents: vitest.fn(),
   deleteQueue: vitest.fn(),
@@ -646,6 +649,15 @@ describe('Bot test', () => {
       return { interaction, deferReply, reply };
     };
 
+    const syncEmotes = (interaction: CommandInteraction) =>
+      new DiscordCommands(
+        sut,
+        undefined as never,
+        undefined as never,
+        undefined as never,
+        undefined as never,
+      ).handleEmoteSync(interaction);
+
     beforeEach(() => {
       zulipMock.listEmoji.mockResolvedValue([]);
     });
@@ -658,7 +670,7 @@ describe('Bot test', () => {
         { identifier: 'nameless:3', name: null, url: 'https://cdn.discordapp.com/emojis/3.png', animated: false },
       ]);
 
-      await sut.syncEmotes(interaction);
+      await syncEmotes(interaction);
 
       expect(discordMock.getEmotes).toHaveBeenCalledOnce();
       expect(discordMock.getEmotes).toHaveBeenCalledWith('guild-1');
@@ -706,7 +718,7 @@ describe('Bot test', () => {
       const { interaction } = newInteraction();
       discordMock.getEmotes.mockResolvedValue([{ identifier: 'catJAM:1', name: 'catJAM', url, animated }]);
 
-      await sut.syncEmotes(interaction);
+      await syncEmotes(interaction);
 
       expect(zulipMock.createEmote).toHaveBeenCalledOnce();
       expect(zulipMock.createEmote).toHaveBeenCalledWith('catjam', expected);
@@ -721,7 +733,7 @@ describe('Bot test', () => {
         { identifier: 'pepeD:2', name: 'pepeD', url: 'https://cdn.discordapp.com/emojis/2.webp', animated: false },
       ]);
 
-      await sut.syncEmotes(interaction);
+      await syncEmotes(interaction);
 
       const [defer] = deferReply.mock.invocationCallOrder;
       const [getEmotes] = discordMock.getEmotes.mock.invocationCallOrder;
@@ -762,7 +774,7 @@ describe('Bot test', () => {
         const { interaction } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote(name, 1)]);
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).toHaveBeenCalledOnce();
         expect(zulipMock.createEmote).toHaveBeenCalledWith(expected, 'https://cdn.discordapp.com/emojis/1.webp');
@@ -773,7 +785,7 @@ describe('Bot test', () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1)]);
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(reply.edit).toHaveBeenCalledWith('Done syncing');
       });
@@ -782,7 +794,7 @@ describe('Bot test', () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('CatJam', 2), emote('CATJAM', 3)]);
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual([
           ['catjam', 'https://cdn.discordapp.com/emojis/1.webp'],
@@ -802,7 +814,7 @@ describe('Bot test', () => {
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('pepeD', 2)]);
         zulipMock.listEmoji.mockResolvedValue([{ name: 'catjam', deactivated: false }]);
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).toHaveBeenCalledOnce();
         expect(zulipMock.createEmote).toHaveBeenCalledWith('peped', 'https://cdn.discordapp.com/emojis/2.webp');
@@ -815,7 +827,7 @@ describe('Bot test', () => {
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1)]);
         zulipMock.listEmoji.mockResolvedValue([{ name: 'catjam', deactivated: true }]);
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).toHaveBeenCalledOnce();
         expect(zulipMock.createEmote).toHaveBeenCalledWith('catjam', 'https://cdn.discordapp.com/emojis/1.webp');
@@ -825,7 +837,7 @@ describe('Bot test', () => {
       it('should be a no-op on Zulip when synced twice, suffixed names included', async () => {
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('CatJam', 2), emote('nameless:3', 3)]);
 
-        await sut.syncEmotes(newInteraction().interaction);
+        await syncEmotes(newInteraction().interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual([
           ['catjam', 'https://cdn.discordapp.com/emojis/1.webp'],
@@ -839,7 +851,7 @@ describe('Bot test', () => {
         );
         const { interaction, reply } = newInteraction();
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
         expect(reply.edit).toHaveBeenCalledWith(
@@ -879,7 +891,7 @@ describe('Bot test', () => {
         const { interaction, reply } = newInteraction();
         zulipMock.createEmote.mockRejectedValueOnce(new Error('This endpoint does not accept bot requests'));
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads);
         expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
@@ -896,7 +908,7 @@ describe('Bot test', () => {
         const { interaction, reply } = newInteraction();
         mattermostMock.createEmote.mockResolvedValueOnce().mockRejectedValueOnce(new Error('boom'));
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads);
         expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
@@ -912,7 +924,7 @@ describe('Bot test', () => {
         zulipMock.createEmote.mockRejectedValueOnce(new Error('zulip')).mockRejectedValueOnce(new Error('zulip'));
         mattermostMock.createEmote.mockRejectedValueOnce(new Error('mattermost'));
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads);
         expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
@@ -924,7 +936,7 @@ describe('Bot test', () => {
         const { interaction, reply } = newInteraction();
         zulipMock.listEmoji.mockRejectedValue(new Error('Zulip client not initialised'));
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
         expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
@@ -941,7 +953,7 @@ describe('Bot test', () => {
         zulipMock.listEmoji.mockRejectedValue(new Error('Zulip client not initialised'));
         mattermostMock.createEmote.mockResolvedValueOnce().mockRejectedValueOnce(new Error('boom'));
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(reply.edit).toHaveBeenCalledWith(
           'Done syncing, Zulip skipped: its emoji could not be listed, 1 failed: pepeD',
@@ -960,7 +972,7 @@ describe('Bot test', () => {
         );
         zulipMock.createEmote.mockRejectedValue(new Error('This endpoint does not accept bot requests'));
 
-        await sut.syncEmotes(interaction);
+        await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).toHaveBeenCalledTimes(300);
         expect(mattermostMock.createEmote).toHaveBeenCalledTimes(300);
@@ -970,6 +982,75 @@ describe('Bot test', () => {
         expect(report).toMatch(/\.\.\.$/);
         expect(report).toHaveLength(2000);
       });
+    });
+  });
+
+  describe('formatEmoteSyncReport', () => {
+    const report = { zulipSkipped: false, failed: ['pepeD'], renamed: [], alreadySynced: ['catJAM'] };
+
+    it('should start with "Done syncing" and nothing else when no subject is given, as Discord posts it', () => {
+      expect(formatEmoteSyncReport(report)).toBe('Done syncing, 1 failed: pepeD, 1 already on Zulip: catJAM');
+    });
+
+    it('should name the subject when one is given, as the Zulip command does, since its target is not where it is run', () => {
+      expect(formatEmoteSyncReport(report, 'the emotes of the Immich Discord server (979116623879368755)')).toBe(
+        'Done syncing the emotes of the Immich Discord server (979116623879368755), 1 failed: pepeD, 1 already on Zulip: catJAM',
+      );
+    });
+  });
+
+  describe('handleFindSimilarIssuesOrDiscussions', () => {
+    const hits = [
+      {
+        similarity: 0.912,
+        number: 1,
+        item_type: 'issue' as const,
+        title: 'Thumbnails crash](https://evil.example) [',
+        state: 'open' as const,
+        state_reason: null,
+      },
+      {
+        similarity: 0.8,
+        number: 2,
+        item_type: 'discussion' as const,
+        title: 'Ping @**all**',
+        state: 'open' as const,
+        state_reason: null,
+      },
+    ];
+
+    it('should list each hit with its title as it is and a link of its own, as Discord posts it', async () => {
+      loopDedupeMock.getForText.mockResolvedValue(hits);
+
+      await expect(sut.handleFindSimilarIssuesOrDiscussions('the thumbnails crash')).resolves.toBe(
+        [
+          '[Issue] Thumbnails crash](https://evil.example) [ ([immich-app/immich#1](https://github.com/immich-app/immich/issues/1)), Similarity: 0.912',
+          '[Discussion] Ping @**all** ([immich-app/immich#2](https://github.com/immich-app/immich/discussions/2)), Similarity: 0.800',
+        ].join('\n'),
+      );
+      expect(loopDedupeMock.getForText).toHaveBeenCalledExactlyOnceWith('the thumbnails crash');
+    });
+
+    it('should run the title, and only the title, through the neutraliser given', async () => {
+      loopDedupeMock.getForText.mockResolvedValue(hits);
+
+      await expect(
+        sut.handleFindSimilarIssuesOrDiscussions(
+          'the thumbnails crash',
+          (title) => `<${title.replaceAll('](', ']|(')}>`,
+        ),
+      ).resolves.toBe(
+        [
+          '[Issue] <Thumbnails crash]|(https://evil.example) [> ([immich-app/immich#1](https://github.com/immich-app/immich/issues/1)), Similarity: 0.912',
+          '[Discussion] <Ping @**all**> ([immich-app/immich#2](https://github.com/immich-app/immich/discussions/2)), Similarity: 0.800',
+        ].join('\n'),
+      );
+    });
+
+    it('should answer nothing when there is no hit', async () => {
+      loopDedupeMock.getForText.mockResolvedValue([]);
+
+      await expect(sut.handleFindSimilarIssuesOrDiscussions('anything')).resolves.toBe('');
     });
   });
 

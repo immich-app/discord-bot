@@ -20,6 +20,8 @@ export interface SearchResult {
   }>;
 }
 
+export type PullRequestState = 'OPEN' | 'CLOSED' | 'MERGED';
+
 export type PullRequest = {
   id: string;
   fullDatabaseId: string;
@@ -27,6 +29,7 @@ export type PullRequest = {
   title: string;
   body: string;
   url: string;
+  state: PullRequestState;
   repository: { nameWithOwner: string };
   author: { __typename: 'Bot' | 'User' | 'Organization' };
 };
@@ -37,6 +40,7 @@ export type PullRequestBaseEvent = {
   pull_request: {
     number: number;
     id: number;
+    node_id: string;
     title: string;
     body: string;
     html_url: string;
@@ -77,6 +81,15 @@ export interface IGithubInterface {
   isCollaborator(dto: { org: string; repo: string; userLogin: string }): Promise<boolean>;
   getPullRequests(
     { org, repo }: { org: string; repo: string },
-    { states }: { states?: Array<'OPEN' | 'CLOSED' | 'MERGED'> },
+    { states }: { states?: PullRequestState[] },
   ): AsyncGenerator<PullRequest[]>;
+  getPullRequest({
+    org,
+    repo,
+    number,
+  }: {
+    org: string;
+    repo: string;
+    number: number;
+  }): Promise<PullRequest | undefined>;
 }

@@ -223,6 +223,7 @@ export const Constants = {
     Tags: discordTags,
     Categories: discordCategories,
     Servers: ['979116623879368755', '1369624002863173762'],
+    EmoteSyncServer: { id: '979116623879368755', name: 'Immich' },
   },
   Cron: {
     ImmichBirthday: '36 4 3 2 *',
@@ -252,6 +253,8 @@ export const Constants = {
       GithubReferences: Object.values(zulipTeamStreams),
       TwitterMirror: Object.values(zulipTeamStreams),
     },
+    /** Membership of these private streams is the only authorisation for commands: Zulip has no per-channel bot permissions. */
+    Commands: Object.values(zulipTeamStreams),
     TeamStreams: zulipTeamStreams,
   },
 };

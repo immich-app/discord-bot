@@ -12,6 +12,7 @@ import { ChatService } from 'src/services/chat.service';
 import { DatabaseService } from 'src/services/database.service';
 import { GithubService } from 'src/services/github.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
+import { ZulipCommandService } from 'src/services/zulip-command.service';
 import { ZulipService } from 'src/services/zulip.service';
 
 const middleware = [{ provide: APP_PIPE, useValue: new ValidationPipe({ transform: true, whitelist: true }) }];
@@ -28,14 +29,17 @@ export class AppModule implements OnModuleInit {
     private chatService: ChatService,
     private githubService: GithubService,
     private scheduledMessageService: ScheduledMessageService,
+    private zulipCommandService: ZulipCommandService,
     private zulipService: ZulipService,
   ) {}
 
   async onModuleInit() {
     await this.githubService.init();
     await this.databaseService.runMigrations();
+    // Every Zulip handler registers in its service's init, which must run before ZulipService.init starts the loop, or it silently misses messages.
     await this.chatService.init();
     await this.scheduledMessageService.init();
+    await this.zulipCommandService.init();
     await this.zulipService.init();
   }
 }

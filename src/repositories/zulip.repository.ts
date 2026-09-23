@@ -7,8 +7,10 @@ import {
   ZulipEvent,
   ZulipEventQueue,
   ZulipMessage,
+  ZulipMessagesQuery,
   ZulipMessageUpdate,
   ZulipQueueRegistration,
+  ZulipReceivedMessage,
   ZulipSubscription,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
@@ -107,7 +109,19 @@ export class ZulipRepository implements IZulipInterface {
     if (data?.user_id === undefined) {
       throw new Error('Zulip returned no user ID for the bot');
     }
-    return { userId: data.user_id };
+    return { userId: data.user_id, fullName: data.full_name ?? '' };
+  }
+
+  async getMessages({ stream, topic, numBefore }: ZulipMessagesQuery): Promise<ZulipReceivedMessage[]> {
+    // `narrow` is typed as a JSON-encoded string by the spec, so it is stringified here rather than by the client.
+    const narrow = JSON.stringify([
+      { operator: 'channel', operand: stream },
+      { operator: 'topic', operand: topic },
+    ]);
+    const { data } = await this.bot.GET('/messages', {
+      params: { query: { anchor: 'newest', num_before: numBefore, num_after: 0, narrow, apply_markdown: false } },
+    });
+    return (data!.messages ?? []).map(toReceivedMessage);
   }
 
   async registerQueue(): Promise<ZulipQueueRegistration> {
@@ -167,24 +181,20 @@ export class ZulipRepository implements IZulipInterface {
 
 type RawEvent = { id?: number; type?: string; message?: components['schemas']['MessagesEvent'] };
 
+const toReceivedMessage = (message: components['schemas']['MessagesBase']): ZulipReceivedMessage => ({
+  id: message.id ?? -1,
+  senderId: message.sender_id ?? -1,
+  senderEmail: message.sender_email ?? '',
+  type: message.type === 'private' ? 'private' : 'stream',
+  streamId: message.stream_id,
+  topic: message.subject ?? '',
+  content: message.content ?? '',
+});
+
 const toEvent = (event: RawEvent): ZulipEvent => {
   const id = event.id ?? -1;
   if (event.type !== 'message' || !event.message) {
     return { id, type: event.type ?? 'unknown' };
   }
-
-  const { message } = event;
-  return {
-    id,
-    type: 'message',
-    message: {
-      id: message.id ?? -1,
-      senderId: message.sender_id ?? -1,
-      senderEmail: message.sender_email ?? '',
-      type: message.type === 'private' ? 'private' : 'stream',
-      streamId: message.stream_id,
-      topic: message.subject ?? '',
-      content: message.content ?? '',
-    },
-  };
+  return { id, type: 'message', message: toReceivedMessage(event.message) };
 };
