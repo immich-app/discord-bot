@@ -53,7 +53,7 @@ import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } fro
 import { MirrorConversation, MirrorMessage, NewMirrorMessage } from 'src/schema';
 import { hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { parseCommand } from 'src/services/zulip-command.service';
-import { ZulipService } from 'src/services/zulip.service';
+import { isBotSender, ZulipService } from 'src/services/zulip.service';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -64,6 +64,10 @@ const LATE_MS = 120_000;
 const RETRY_DELAYS_MS = [1_000, 5_000];
 const SHUTDOWN_GRACE_MS = 5_000;
 const RECOVERY_DEPTH = 20;
+const DISCORD_CATCH_UP_PAGE = 50;
+const ZULIP_CATCH_UP_PAGE = 100;
+const ACTIVE_THREAD_DAYS = 7;
+const ACTIVE_THREAD_LIMIT = 20;
 const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const DISCORD_MESSAGE_LENGTH = 2000;
@@ -86,6 +90,7 @@ type PairState = {
   channelName?: string;
   announced: boolean;
   webhookRecreatedAt?: number;
+  catchUpQueued: boolean;
 };
 
 type Identity = { username: string; avatarUrl?: string };
@@ -195,6 +200,7 @@ export class MirrorService implements OnModuleDestroy {
   private emojiCodes?: Record<string, string>;
   private emojiRetryAt = 0;
   private emotes = new Map<string, { byName: Map<string, string>; expiresAt: number }>();
+  private zulipRegistered = false;
 
   constructor(
     @Inject(IZulipInterface) private zulip: IZulipInterface,
@@ -233,6 +239,7 @@ export class MirrorService implements OnModuleDestroy {
       queue: new SerialQueue(pair.key, this.logger),
       status: 'pending',
       announced: false,
+      catchUpQueued: false,
     }));
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
     this.zulipService.onMessageUpdate((update) => this.onZulipUpdate(update));
@@ -349,6 +356,10 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     this.verifiedConversations.clear();
+    this.zulipRegistered = true;
+    for (const state of this.pairs) {
+      this.maybeCatchUp(state);
+    }
   }
 
   private isCommand(content: string) {
@@ -404,6 +415,126 @@ export class MirrorService implements OnModuleDestroy {
         `${pair.key}: mirroring Discord channel ${pair.discordChannelId} with Zulip stream ${pair.zulipStreamId}${topic}`,
       );
     }
+    this.maybeCatchUp(state);
+  }
+
+  private maybeCatchUp(state: PairState) {
+    if (state.catchUpQueued || !this.zulipRegistered || !this.discordReady(state)) {
+      return;
+    }
+    state.catchUpQueued = true;
+    state.queue.push('catch-up', () => this.catchUp(state));
+  }
+
+  /** Queues what was missed while either side was away, through the normal create path, right after this op. */
+  private async catchUp(state: PairState) {
+    state.catchUpQueued = false;
+    const { pair } = state;
+    const since = Date.now() - Constants.Mirror.CatchUpMaxAgeHours * HOUR;
+    const discord = await this.missedOnDiscord(state);
+    const zulip = await this.missedOnZulip(state);
+    const recentDiscord = discord.filter(({ createdTimestamp }) => createdTimestamp >= since);
+    const recentZulip = zulip.filter(({ timestamp }) => timestamp * 1000 >= since);
+
+    const skipped = discord.length - recentDiscord.length + zulip.length - recentZulip.length;
+    if (skipped > 0) {
+      this.logger.log(
+        `${pair.key}: catch-up skipped ${plural(skipped, 'message')} older than ${Constants.Mirror.CatchUpMaxAgeHours} hours`,
+      );
+    }
+    if (recentDiscord.length + recentZulip.length > 0) {
+      this.logger.log(
+        `${pair.key}: catching up ${plural(recentDiscord.length, 'Discord message')} and ${plural(recentZulip.length, 'Zulip message')}`,
+      );
+    }
+    state.queue.pushNext([
+      ...recentDiscord.map((dto) => ({
+        label: `Discord message ${dto.id}`,
+        run: () => this.mirrorDiscordMessage(state, dto),
+      })),
+      ...recentZulip.map((message) => ({
+        label: `Zulip message ${message.id}`,
+        run: () => this.mirrorZulipMessage(state, message),
+      })),
+    ]);
+  }
+
+  /** Discord-origin rows only: a webhook copy posted while a Discord message was missed must not hide it. */
+  private async missedOnDiscord(state: PairState) {
+    const { pair } = state;
+    const locations: { channelId: string; after: string | undefined; thread?: MirrorConversation }[] = [];
+    if (pair.kind === 'text') {
+      locations.push({
+        channelId: pair.discordChannelId,
+        after: await this.database.getMirrorDiscordHighWater(pair.discordChannelId, null),
+      });
+    }
+    const since = new Date(Date.now() - ACTIVE_THREAD_DAYS * DAY);
+    for (const thread of await this.database.getActiveMirrorThreads(
+      pair.discordChannelId,
+      since,
+      ACTIVE_THREAD_LIMIT,
+    )) {
+      const threadId = thread.discordThreadId!;
+      const highWater = await this.database.getMirrorDiscordHighWater(pair.discordChannelId, threadId);
+      locations.push({ channelId: threadId, after: highWater ?? threadId, thread });
+    }
+
+    const missed: DiscordSourceMessage[] = [];
+    for (const { channelId, after, thread } of locations) {
+      if (after === undefined) {
+        continue;
+      }
+      try {
+        const page = await this.discordMirror.fetchMirrorMessagesAfter(channelId, after, DISCORD_CATCH_UP_PAGE);
+        if (page.length === DISCORD_CATCH_UP_PAGE) {
+          this.logger.warn(
+            `${pair.key}: catch-up read a full page of Discord channel ${channelId}; the rest follows from the new high-water mark at the next trigger`,
+          );
+        }
+        missed.push(...page);
+      } catch (error) {
+        if (thread && isMirrorError(error, 'unknown-channel')) {
+          await this.detach(state, thread, 'the Discord thread no longer exists');
+        } else {
+          this.fail(`${pair.key}: catch-up could not read Discord channel ${channelId}`, error);
+        }
+      }
+    }
+    return missed;
+  }
+
+  /** Moved messages are left out: they may have come from outside the mirror, which is never mirrored retroactively. */
+  private async missedOnZulip(state: PairState) {
+    const { pair } = state;
+    const after = await this.database.getMirrorZulipHighWater(pair.zulipStreamId);
+    if (after === undefined) {
+      return [];
+    }
+    let page: ZulipReceivedMessage[];
+    try {
+      page = await this.retryZulip(() =>
+        this.zulip.getStreamMessagesAfter(pair.zulipStreamId, after, ZULIP_CATCH_UP_PAGE),
+      );
+    } catch (error) {
+      this.fail(`${pair.key}: catch-up could not read Zulip stream ${pair.zulipStreamId}`, error);
+      return [];
+    }
+    if (page.length === ZULIP_CATCH_UP_PAGE) {
+      this.logger.warn(
+        `${pair.key}: catch-up read a full page of Zulip stream ${pair.zulipStreamId}; the rest follows from the new high-water mark at the next trigger`,
+      );
+    }
+    const self = this.zulipService.ownUser?.userId;
+    return page.filter(
+      (message) =>
+        message.type === 'stream' &&
+        message.streamId === pair.zulipStreamId &&
+        message.senderId !== self &&
+        !isBotSender(message) &&
+        !this.isCommand(message.content) &&
+        message.movedAt === undefined,
+    );
   }
 
   private discordReady(state: PairState) {

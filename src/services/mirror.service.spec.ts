@@ -1692,6 +1692,283 @@ describe(MirrorService.name, () => {
     });
   });
 
+  describe('catch-up', () => {
+    const MAIN_HIGH_WATER = '300000000000000001';
+
+    const seedHighWaters = () => {
+      seedRow({
+        discordMessageId: MAIN_HIGH_WATER,
+        origin: 'discord',
+        discordWebhookId: null,
+        discordAuthorId: CONTRIBUTOR,
+        zulipMessageId: 5000,
+        zulipSenderId: null,
+      });
+      seedRow({ discordMessageId: '800000000000000001', zulipMessageId: 1000 });
+    };
+
+    const missedOnDiscord = (overrides: Partial<DiscordSourceMessage> = {}) =>
+      discordMessage({ id: '300000000000000002', content: 'missed on discord', ...overrides });
+
+    const missedOnZulip = (overrides: Partial<ZulipReceivedMessage> = {}) =>
+      zulipMessage({ id: 1001, content: 'missed on zulip', ...overrides });
+
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => (resolve = res));
+      return { promise, resolve };
+    };
+
+    it('should fetch nothing without a high-water mark', async () => {
+      await start();
+
+      expect(db.repository.getMirrorDiscordHighWater).toHaveBeenCalledWith(DEV_CHANNEL, null);
+      expect(db.repository.getMirrorZulipHighWater).toHaveBeenCalledWith(DEV_STREAM);
+      expect(discord.fetchMirrorMessagesAfter).not.toHaveBeenCalled();
+      expect(zulip.getStreamMessagesAfter).not.toHaveBeenCalled();
+    });
+
+    it('should wait until both sides are ready, whichever comes first', async () => {
+      sut.init();
+      await register();
+      expect(db.repository.getMirrorZulipHighWater).not.toHaveBeenCalled();
+
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      expect(db.repository.getMirrorZulipHighWater).toHaveBeenCalledTimes(3);
+
+      await register();
+      expect(db.repository.getMirrorZulipHighWater).toHaveBeenCalledTimes(6);
+    });
+
+    it('should not start while Discord is away', async () => {
+      sut.init();
+      await sut.onDiscordReady();
+      discord.isReady.mockReturnValue(false);
+
+      await register();
+
+      expect(db.repository.getMirrorZulipHighWater).not.toHaveBeenCalled();
+    });
+
+    it('should queue one catch-up at a time', async () => {
+      sut.init();
+      await sut.onDiscordReady();
+      for (const handler of stub.handlers.registration) {
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+      }
+      await sut.whenIdle();
+
+      expect(db.repository.getMirrorZulipHighWater).toHaveBeenCalledTimes(3);
+    });
+
+    it('should mirror what was missed on both sides, Discord first', async () => {
+      seedHighWaters();
+      discord.fetchMirrorMessagesAfter.mockResolvedValue([
+        missedOnDiscord(),
+        missedOnDiscord({ id: '300000000000000003', content: 'second' }),
+      ]);
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM ? [missedOnZulip(), missedOnZulip({ id: 1002, content: 'later' })] : [],
+      );
+
+      await start();
+
+      expect(discord.fetchMirrorMessagesAfter).toHaveBeenCalledExactlyOnceWith(DEV_CHANNEL, MAIN_HIGH_WATER, 50);
+      expect(zulip.getStreamMessagesAfter).toHaveBeenCalledWith(DEV_STREAM, 1000, 100);
+      expect(sentMessages().map(({ content }) => content)).toEqual([
+        '**Contrib** (&#64;contrib123): missed on discord',
+        '**Contrib** (&#64;contrib123): second',
+      ]);
+      expect(discord.sendMirrorMessage.mock.calls.map(([{ content }]) => content)).toEqual([
+        'missed on zulip',
+        'later',
+      ]);
+      expect(zulip.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        discord.sendMirrorMessage.mock.invocationCallOrder[0],
+      );
+      expect(log()).toHaveBeenCalledWith('Dev: catching up 2 Discord messages and 2 Zulip messages');
+    });
+
+    it('should run what it found before anything queued after it', async () => {
+      seedHighWaters();
+      const page = deferred<DiscordSourceMessage[]>();
+      discord.fetchMirrorMessagesAfter.mockReturnValue(page.promise);
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM ? [missedOnZulip()] : [],
+      );
+      sut.init();
+      await sut.onDiscordReady();
+      for (const handler of stub.handlers.registration) {
+        handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
+      }
+      await Promise.resolve();
+
+      for (const handler of stub.handlers.message) {
+        await handler(zulipMessage({ id: 1003, content: 'live' }));
+      }
+      page.resolve([missedOnDiscord()]);
+      await sut.whenIdle();
+
+      expect(discord.sendMirrorMessage.mock.calls.map(([{ content }]) => content)).toEqual(['missed on zulip', 'live']);
+      expect(zulip.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        discord.sendMirrorMessage.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('should not mirror a message twice when catch-up finds one the live event already brought', async () => {
+      seedHighWaters();
+      sut.init();
+      await sut.onDiscordReady();
+      await fromZulip(missedOnZulip());
+      zulip.getStreamMessagesAfter.mockResolvedValue([missedOnZulip()]);
+
+      await register();
+
+      expect(zulip.getStreamMessagesAfter).toHaveBeenCalled();
+      expect(discord.sendMirrorMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should skip messages older than 6 hours and say how many', async () => {
+      seedHighWaters();
+      const old = Date.now() - 7 * 60 * 60 * 1000;
+      discord.fetchMirrorMessagesAfter.mockResolvedValue([missedOnDiscord({ createdTimestamp: old })]);
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM ? [missedOnZulip({ timestamp: Math.floor(old / 1000) })] : [],
+      );
+
+      await start();
+
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+      expect(discord.sendMirrorMessage).not.toHaveBeenCalled();
+      expect(log()).toHaveBeenCalledWith('Dev: catch-up skipped 2 messages older than 6 hours');
+    });
+
+    it('should leave out moved messages, the bot, other bots and commands', async () => {
+      seedHighWaters();
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM
+          ? [
+              missedOnZulip({ id: 1001, movedAt: Math.floor(Date.now() / 1000) }),
+              missedOnZulip({ id: 1002, senderId: BOT.userId }),
+              missedOnZulip({ id: 1003, senderEmail: 'ci-bot@zulip.example.com' }),
+              missedOnZulip({ id: 1004, content: `@**${BOT.fullName}** help` }),
+              missedOnZulip({ id: 1005, streamId: FORUM_STREAM }),
+              missedOnZulip({ id: 1006, content: 'kept' }),
+            ]
+          : [],
+      );
+
+      await start();
+
+      expect(discord.sendMirrorMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content: 'kept' }));
+    });
+
+    it('should mark a message it catches up late', async () => {
+      seedHighWaters();
+      const timestamp = Math.floor(Date.now() / 1000) - 600;
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM ? [missedOnZulip({ timestamp })] : [],
+      );
+
+      await start();
+
+      expect(sent(0).content).toBe(`missed on zulip\n-# sent <t:${timestamp}:f>`);
+    });
+
+    it('should read the active threads from their own high-water marks, or from their start', async () => {
+      const withDiscordRow = seedThread({ id: 'with', discordThreadId: '200000000000000001', zulipTopicKey: 'a' });
+      const zulipOnly = seedThread({ id: 'without', discordThreadId: '200000000000000002', zulipTopicKey: 'b' });
+      seedThread({ id: 'idle', discordThreadId: '200000000000000003', zulipTopicKey: 'c' });
+      seedRow({
+        discordMessageId: '300000000000000009',
+        conversationId: withDiscordRow.id,
+        origin: 'discord',
+        discordThreadId: withDiscordRow.discordThreadId,
+        discordWebhookId: null,
+        zulipMessageId: 71,
+      });
+      seedRow({
+        discordMessageId: '800000000000000002',
+        conversationId: zulipOnly.id,
+        discordThreadId: zulipOnly.discordThreadId,
+        zulipMessageId: 72,
+      });
+
+      await start();
+
+      expect(db.repository.getActiveMirrorThreads).toHaveBeenCalledWith(DEV_CHANNEL, expect.any(Date), 20);
+      expect(discord.fetchMirrorMessagesAfter.mock.calls).toEqual([
+        ['200000000000000001', '300000000000000009', 50],
+        ['200000000000000002', '200000000000000002', 50],
+      ]);
+    });
+
+    it('should warn when a page is full', async () => {
+      seedHighWaters();
+      discord.fetchMirrorMessagesAfter.mockResolvedValue(
+        Array.from({ length: 50 }, (_, index) => missedOnDiscord({ id: String(300000000000000100n + BigInt(index)) })),
+      );
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM
+          ? Array.from({ length: 100 }, (_, index) => missedOnZulip({ id: 2000 + index, movedAt: 1 }))
+          : [],
+      );
+
+      await start();
+
+      expect(warn()).toHaveBeenCalledWith(
+        `Dev: catch-up read a full page of Discord channel ${DEV_CHANNEL}; the rest follows from the new high-water mark at the next trigger`,
+      );
+      expect(warn()).toHaveBeenCalledWith(
+        `Dev: catch-up read a full page of Zulip stream ${DEV_STREAM}; the rest follows from the new high-water mark at the next trigger`,
+      );
+    });
+
+    it('should log a side it cannot read and still catch up the other', async () => {
+      seedHighWaters();
+      discord.fetchMirrorMessagesAfter.mockRejectedValue(new DiscordMirrorError('forbidden', 50_001));
+      zulip.getStreamMessagesAfter.mockImplementation(async (stream) =>
+        stream === DEV_STREAM ? [missedOnZulip()] : [],
+      );
+
+      await start();
+
+      expect(error()).toHaveBeenCalledWith(
+        `Dev: catch-up could not read Discord channel ${DEV_CHANNEL}: forbidden (50001)`,
+      );
+      expect(discord.sendMirrorMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should detach an active thread that no longer exists on Discord', async () => {
+      seedThread({ id: 'deleted' });
+      seedRow({ conversationId: 'deleted', discordThreadId: '200000000000000001' });
+      discord.fetchMirrorMessagesAfter.mockRejectedValue(new DiscordMirrorError('unknown-channel', 10_003));
+
+      await start();
+
+      expect(db.conversations).toEqual([]);
+      expect(log()).toHaveBeenCalledWith(
+        'Dev: detached the conversation of Discord thread 200000000000000001: the Discord thread no longer exists',
+      );
+      expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should log a Zulip stream it cannot read', async () => {
+      seedHighWaters();
+      zulip.getStreamMessagesAfter.mockRejectedValue(
+        new ZulipApiError(403, 'BAD_REQUEST', 'Invalid channel ID', 'GET'),
+      );
+
+      await start();
+
+      expect(error()).toHaveBeenCalledWith(
+        `Dev: catch-up could not read Zulip stream ${DEV_STREAM}: Zulip GET failed with 403 BAD_REQUEST: Invalid channel ID`,
+      );
+    });
+  });
+
   describe('onModuleDestroy', () => {
     it('should stop taking new work', async () => {
       await start();
