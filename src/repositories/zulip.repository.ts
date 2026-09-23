@@ -15,6 +15,7 @@ import {
   ZulipUploadRefused,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
+import { readAtMost } from 'src/mirror/download';
 import { createZulipClient, multipart, type ZulipClient, type ZulipClientOptions } from 'src/repositories/zulip.client';
 
 const IMAGE_TIMEOUT_MS = 30_000;
@@ -58,30 +59,6 @@ const toUploadUrl = (path: string, origin: string) => {
   } catch {
     throw refuse();
   }
-};
-
-/** The body, or `undefined` as soon as it runs past `maxBytes`. */
-const readAtMost = async (body: ReadableStream<Uint8Array> | null, maxBytes: number) => {
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  if (body) {
-    const reader = body.getReader();
-    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
-      size += chunk.value.byteLength;
-      if (size > maxBytes) {
-        await reader.cancel();
-        return undefined;
-      }
-      chunks.push(chunk.value);
-    }
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 };
 
 const toEmoji = (codepoints: unknown) => {
