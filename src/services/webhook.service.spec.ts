@@ -2982,7 +2982,8 @@ describe(WebhookService.name, () => {
   describe('handlePullRequestZulipTopic', () => {
     const PR_STREAM = 112;
     const TOPIC = '#1234: feat: add thing';
-    const FIRST_MESSAGE = 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nThis PR adds a thing.\n~~~';
+    const FIRST_MESSAGE =
+      '**[feat: add thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nThis PR adds a thing.\n~~~';
 
     const storedPullRequest = (overrides: Record<string, unknown> = {}) =>
       ({
@@ -3036,7 +3037,7 @@ describe(WebhookService.name, () => {
         databaseMock.getPullRequestById.mockResolvedValue(storedPullRequest({ zulipMessageId: null }));
       });
 
-      it('should open a topic with the link and the quoted body, and store the message ID', async () => {
+      it('should open a topic with the full title linked and the quoted body, and store the message ID', async () => {
         await sut.onGithub(event('opened'), 'github-slug');
 
         expect(topicPosts()).toEqual([{ stream: PR_STREAM, topic: TOPIC, content: FIRST_MESSAGE }]);
@@ -3045,19 +3046,48 @@ describe(WebhookService.name, () => {
         expect(zulipMock.updateMessage).not.toHaveBeenCalled();
       });
 
-      it('should post only the link when the PR has no body', async () => {
+      it('should post only the linked title when the PR has no body', async () => {
         await sut.onGithub(event('opened', { body: null }), 'github-slug');
 
         expect(topicPosts()).toEqual([
-          { stream: PR_STREAM, topic: TOPIC, content: 'https://github.com/immich-app/immich/pull/1234' },
+          {
+            stream: PR_STREAM,
+            topic: TOPIC,
+            content: '**[feat: add thing](https://github.com/immich-app/immich/pull/1234)**',
+          },
         ]);
+      });
+
+      it('should keep the whole of a long title in the first message, which the topic name cuts', async () => {
+        const title = 'feat(server): a title that goes on well past the sixty character mark of Zulip';
+
+        await sut.onGithub(event('opened', { title, body: null }), 'github-slug');
+
+        expect(topicPosts()).toEqual([
+          {
+            stream: PR_STREAM,
+            topic: '#1234: feat(server): a title that goes on well past the...',
+            content: `**[${title}](https://github.com/immich-app/immich/pull/1234)**`,
+          },
+        ]);
+      });
+
+      it('should keep a title from ending the link early or adding one of its own', async () => {
+        await sut.onGithub(
+          event('opened', { title: 'fix: lone ] bracket [x](https://evil.example) @**all**', body: null }),
+          'github-slug',
+        );
+
+        expect(topicPosts()[0].content).toBe(
+          '**[fix: lone &#93; bracket &#91;x&#93;(https://evil.example) @\u200B**all**](https://github.com/immich-app/immich/pull/1234)**',
+        );
       });
 
       it('should neutralise mentions in the body and keep its fences inside the quote', async () => {
         await sut.onGithub(event('opened', { body: 'cc @**all** and #**general**\n~~~\ncode\n~~~' }), 'github-slug');
 
         expect(topicPosts()[0].content).toBe(
-          'https://github.com/immich-app/immich/pull/1234\n\n~~~~ quote\ncc @\u200B**all** and #\u200B**general**\n~~~\ncode\n~~~\n~~~~',
+          '**[feat: add thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~~ quote\ncc @\u200B**all** and #\u200B**general**\n~~~\ncode\n~~~\n~~~~',
         );
       });
 
@@ -3065,7 +3095,7 @@ describe(WebhookService.name, () => {
         await sut.onGithub(event('opened', { body: 'x'.repeat(2001) }), 'github-slug');
 
         expect(topicPosts()[0].content).toBe(
-          `https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\n${'x'.repeat(1997)}...\n~~~`,
+          `**[feat: add thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\n${'x'.repeat(1997)}...\n~~~`,
         );
       });
 
@@ -3315,18 +3345,23 @@ describe(WebhookService.name, () => {
     });
 
     describe('edited', () => {
-      it('should rename the topic when the title changed', async () => {
+      it('should rename the topic, then rewrite the title in the first message, when the title changed', async () => {
         await sut.onGithub(
           event('edited', { title: 'feat: add the thing' }, { changes: { title: { from: 'feat: add thing' } } }),
           'github-slug',
         );
 
         expect(zulipMock.getMessage).toHaveBeenCalledWith(42);
-        expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
-        expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
-          topic: '#1234: feat: add the thing',
-          propagateMode: 'change_all',
-        });
+        expect(zulipMock.updateMessage.mock.calls).toEqual([
+          [42, { topic: '#1234: feat: add the thing', propagateMode: 'change_all' }],
+          [
+            42,
+            {
+              content:
+                '**[feat: add the thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nThis PR adds a thing.\n~~~',
+            },
+          ],
+        ]);
         expect(topicPosts()).toEqual([]);
       });
 
@@ -3344,7 +3379,7 @@ describe(WebhookService.name, () => {
         });
       });
 
-      it('should edit the first message when the body changed', async () => {
+      it('should edit the first message, keeping its title, when the body changed', async () => {
         await sut.onGithub(
           event('edited', { body: 'Now with tests.' }, { changes: { body: { from: 'This PR adds a thing.' } } }),
           'github-slug',
@@ -3352,7 +3387,8 @@ describe(WebhookService.name, () => {
 
         expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
         expect(zulipMock.updateMessage).toHaveBeenCalledWith(42, {
-          content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+          content:
+            '**[feat: add thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nNow with tests.\n~~~',
         });
       });
 
@@ -3368,7 +3404,13 @@ describe(WebhookService.name, () => {
 
         expect(zulipMock.updateMessage.mock.calls).toEqual([
           [42, { topic: '#1234: feat: add the thing', propagateMode: 'change_all' }],
-          [42, { content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~' }],
+          [
+            42,
+            {
+              content:
+                '**[feat: add the thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nNow with tests.\n~~~',
+            },
+          ],
         ]);
       });
 
@@ -3536,7 +3578,7 @@ describe(WebhookService.name, () => {
       });
 
       it('should post the new title as a plain message when the rename is refused', async () => {
-        zulipMock.updateMessage.mockRejectedValue(timeLimit());
+        zulipMock.updateMessage.mockRejectedValueOnce(timeLimit());
 
         await expect(
           sut.onGithub(
@@ -3546,7 +3588,7 @@ describe(WebhookService.name, () => {
         ).resolves.toBeUndefined();
 
         expect(topicPosts()).toEqual([
-          { stream: PR_STREAM, topic: TOPIC, content: 'Pull request has been renamed to: #1234: feat: add the thing' },
+          { stream: PR_STREAM, topic: TOPIC, content: 'Pull request has been renamed to: feat: add the thing' },
         ]);
         expect(Logger.prototype.warn).toHaveBeenCalledOnce();
       });
@@ -3564,19 +3606,17 @@ describe(WebhookService.name, () => {
           propagateMode: 'change_all',
         });
         expect(topicPosts().map(({ content }) => content)).toEqual([
-          'Pull request has been renamed to: #1234: ping @​**all** and #​**general**',
+          'Pull request has been renamed to: ping @​**all** and #​**general**',
         ]);
       });
 
-      it('should post the name the topic would have had, within the topic limit, after a refused rename', async () => {
+      it('should post the full title, not the name the topic would have had, after a refused rename', async () => {
         zulipMock.updateMessage.mockRejectedValue(timeLimit());
         const title = 'feat(server): a title that goes on well past the sixty character mark of Zulip';
 
         await sut.onGithub(event('edited', { title }, { changes: { title: { from: 'x' } } }), 'github-slug');
 
-        expect(topicPosts().map(({ content }) => content)).toEqual([
-          'Pull request has been renamed to: #1234: feat(server): a title that goes on well past the...',
-        ]);
+        expect(topicPosts().map(({ content }) => content)).toEqual([`Pull request has been renamed to: ${title}`]);
       });
 
       it('should log and carry on when the fallback message itself cannot be posted', async () => {
@@ -3679,10 +3719,11 @@ describe(WebhookService.name, () => {
 
         expect(zulipMock.updateMessage).toHaveBeenCalledTimes(2);
         expect(zulipMock.updateMessage).toHaveBeenLastCalledWith(42, {
-          content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+          content:
+            '**[feat: add the thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nNow with tests.\n~~~',
         });
         expect(topicPosts().map(({ content }) => content)).toEqual([
-          'Pull request has been renamed to: #1234: feat: add the thing',
+          'Pull request has been renamed to: feat: add the thing',
         ]);
       });
 
@@ -3834,13 +3875,15 @@ describe(WebhookService.name, () => {
           {
             stream: PR_STREAM,
             topic: '#1234: feat: add the thing',
-            content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+            content:
+              '**[feat: add the thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nNow with tests.\n~~~',
           },
         ]);
         expect(databaseMock.updatePullRequest).toHaveBeenCalledWith({ nodeId: 'PR_node_1234', zulipMessageId: 500 });
         expect(zulipMock.updateMessage).toHaveBeenCalledOnce();
         expect(zulipMock.updateMessage).toHaveBeenCalledWith(500, {
-          content: 'https://github.com/immich-app/immich/pull/1234\n\n~~~ quote\nNow with tests.\n~~~',
+          content:
+            '**[feat: add the thing](https://github.com/immich-app/immich/pull/1234)**\n\n~~~ quote\nNow with tests.\n~~~',
         });
       });
 
@@ -3937,7 +3980,7 @@ describe(WebhookService.name, () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: Constants.Zulip.Streams.ImmichPullRequests,
         topic: '#1: PR 1',
-        content: 'https://github.com/immich-app/immich/pull/1\n\n~~~ quote\nBody 1\n~~~',
+        content: '**[PR 1](https://github.com/immich-app/immich/pull/1)**\n\n~~~ quote\nBody 1\n~~~',
       });
       expect(row(1)).toMatchObject({ discordThreadId: 'thread-#1: PR 1', zulipMessageId: 501 });
       expect(Logger.prototype.error).not.toHaveBeenCalled();
