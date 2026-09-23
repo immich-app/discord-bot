@@ -80,6 +80,13 @@ describe('toZulipTopicName', () => {
     expect(codePoints(toZulipTopicName('😀'.repeat(70), '123'))).toBe(58);
   });
 
+  it('should never name a topic resolved', () => {
+    expect(toZulipTopicName('✔ quick question', '1')).toBe('quick question');
+    expect(toZulipTopicName('  ✔  ✔ quick question', '1')).toBe('quick question');
+    expect(toZulipTopicName('✔ ', '1')).toBe('✔');
+    expect(toZulipTopicName('✔done', '1')).toBe('✔done');
+  });
+
   it('should trim what the cut leaves', () => {
     expect(toZulipTopicName(`${'x'.repeat(54)}${' '.repeat(10)}y`, '1')).toBe(`${'x'.repeat(54)} ...`);
     expect(toZulipTopicName(`   ${'x'.repeat(58)}`, '1')).toBe('x'.repeat(58));

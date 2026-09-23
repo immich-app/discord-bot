@@ -1593,6 +1593,15 @@ describe(MirrorService.name, () => {
       expect(sentMessages()[0].topic).toBe('#DEV (2)');
     });
 
+    it('should never open a topic that is already resolved', async () => {
+      const postId = '300000000000000007';
+      await fromDiscord(
+        discordMessage({ id: postId, channelId: FORUM, threadId: postId, threadName: '✔ quick question' }),
+      );
+
+      expect(sentMessages()[0]).toEqual(expect.objectContaining({ stream: FORUM_STREAM, topic: 'quick question' }));
+    });
+
     it('should post a forum starter once, as the first message of its topic', async () => {
       const post = '300000000000000007';
       await fromDiscord(discordMessage({ id: post, channelId: FORUM, threadId: post, threadName: 'Feature idea' }));

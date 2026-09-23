@@ -1,4 +1,4 @@
-import { shortenCodePoints, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH } from 'src/format';
+import { isResolvedTopic, shortenCodePoints, unresolveTopic, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH } from 'src/format';
 
 const BIDI_CONTROLS = /[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
@@ -28,9 +28,17 @@ export const EMPTY_TOPIC_NAME = 'general chat';
 /** Zulip compares topics case-insensitively, yet a topic really named `General Chat` is not the empty one. */
 export const topicKey = (topic: string) => (topic === EMPTY_TOPIC_NAME ? '' : topic.toLowerCase());
 
-/** Leaves room for the resolve prefix, so the topic can still be resolved. */
-export const toZulipTopicName = (name: string, threadId: string) =>
-  shortenCodePoints(name.trim(), ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH).trim() || `thread ${threadId}`;
+/**
+ * Leaves room for the resolve prefix, so the topic can still be resolved, and never starts resolved, since only Zulip
+ * users resolve a topic.
+ */
+export const toZulipTopicName = (name: string, threadId: string) => {
+  let base = name.trim();
+  while (isResolvedTopic(base)) {
+    base = unresolveTopic(base).trim();
+  }
+  return shortenCodePoints(base, ZULIP_MAX_UNRESOLVED_TOPIC_LENGTH).trim() || `thread ${threadId}`;
+};
 
 export const topicCandidates = (base: string, threadId: string) => {
   const candidates = [base];

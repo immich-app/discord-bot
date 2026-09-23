@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { getConfig } from 'src/config';
 import { Constants } from 'src/constants';
-import { isResolvedTopic, plural, unresolveTopic, ZULIP_RESOLVED_PREFIX, zulipNarrowLink } from 'src/format';
+import { isResolvedTopic, plural, ZULIP_RESOLVED_PREFIX, zulipNarrowLink } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import {
   DiscordMirrorChannel,
@@ -2156,12 +2156,10 @@ export class MirrorService implements OnModuleDestroy {
     }
 
     const current = conversation.zulipTopic;
-    const target = await this.claimTopic(
-      state,
-      toZulipTopicName(unresolveTopic(thread.name), thread.threadId),
-      thread.threadId,
-      { exclude: conversation.id, prefix: isResolvedTopic(current) ? ZULIP_RESOLVED_PREFIX : '' },
-    );
+    const target = await this.claimTopic(state, toZulipTopicName(thread.name, thread.threadId), thread.threadId, {
+      exclude: conversation.id,
+      prefix: isResolvedTopic(current) ? ZULIP_RESOLVED_PREFIX : '',
+    });
     if (target === undefined || target === current) {
       return;
     }
