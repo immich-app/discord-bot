@@ -68,7 +68,14 @@ export class DiscordRepository implements IDiscordInterface {
   }
 
   async login(token: string) {
+    // bot.login resolves at the gateway's READY, before the guilds arrive: until then no guild channel can be fetched.
+    const ready = new Promise<void>((resolve) => bot.once('clientReady', () => resolve()));
     await bot.login(token);
+    await ready;
+  }
+
+  isReady() {
+    return bot.isReady();
   }
 
   async sendMessage({

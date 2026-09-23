@@ -7,7 +7,7 @@ import { Constants, ReleaseMessages } from 'src/constants';
 import { DiscordCommands } from 'src/discord/commands';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
-import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import {
   FourthwallOrderCreateWebhook,
   FourthwallOrderUpdateWebhook,
@@ -80,6 +80,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
+  isReady: vitest.fn().mockReturnValue(true),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),
@@ -1295,6 +1296,48 @@ describe(WebhookService.name, () => {
       expect(databaseMock.createPayment).toHaveBeenCalledOnce();
       expect(databaseMock.getTotalLicenseCount).not.toHaveBeenCalled();
       expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+    });
+
+    it('should report a failed insert to Discord bot-spam and the Zulip bot topic, and carry on', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      zulipMock.isInitialised.mockReturnValue(true);
+      databaseMock.createPayment.mockRejectedValue(new Error('invalid input syntax for type integer: "@**all**"'));
+
+      await sut['handlePayment'](makeStripeEvent({ status: 'requires_payment_method' }));
+
+      expect(sent()).toEqual({
+        discord: [
+          {
+            channelId: DiscordChannel.BotSpam,
+            message: 'Failed to insert payment into database: Error: invalid input syntax for type integer: "@**all**"',
+          },
+        ],
+        mattermost: [],
+        zulip: [
+          {
+            stream: Constants.Zulip.Streams.ImmichAlerts,
+            topic: 'bot',
+            content:
+              'Failed to insert payment into database:\n~~~ quote\nError: invalid input syntax for type integer: "@​**all**"\n~~~',
+          },
+        ],
+      });
+    });
+
+    it('should fall back to no licences when the count fails, and report it', async () => {
+      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      databaseMock.getTotalLicenseCount.mockRejectedValue(new Error('connection lost'));
+
+      await sut['handlePayment'](makeStripeEvent());
+
+      const [report, purchase] = sent().discord;
+      expect(report).toEqual({
+        channelId: DiscordChannel.BotSpam,
+        message: 'Failed to insert payment into database: Error: connection lost',
+      });
+      expect(purchase).toBeUndefined();
+      const [post] = mattermostMock.send.mock.calls[0];
+      expect(JSON.stringify(post.props)).toContain('$0 - 0 keys');
     });
   });
 

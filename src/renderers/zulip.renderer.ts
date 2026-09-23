@@ -17,7 +17,7 @@ type ZulipLayout = {
   optionalTitleAndLink?: boolean;
 };
 
-const Layouts: Record<NotificationKind, ZulipLayout> = {
+const Layouts: Record<Exclude<NotificationKind, 'log'>, ZulipLayout> = {
   feed: { titleLink: true, bodySlot: true, bodyStyle: 'quote', fieldsLayout: 'line' },
   release: { titleLink: true, bodySlot: true, bodyMaxLength: 500, bodyStyle: 'inline', fieldsLayout: 'line' },
   incident: { titleLink: true, bodySlot: false, bodyStyle: 'inline', fieldsLayout: 'block' },
@@ -110,8 +110,17 @@ const toFieldLines = (fields: NotificationField[], layout: ZulipLayout['fieldsLa
     return layout === 'line' ? `**${safeName}:** ${toOneLine(safeValue)}` : `**${safeName}**\n${toQuote(safeValue)}`;
   });
 
+/** The detail of a `log` line is an error's text, which can hold anything, so it is quoted like a feed body. */
+const toLogLine = ({ title, body }: Notification) => {
+  const line = neutraliseMentions(title);
+  return body ? `${line}:\n${toQuote(neutraliseMentions(body))}` : line;
+};
+
 export const toZulipMessage = (notification: Notification) => {
   const { kind, body, fields } = notification;
+  if (kind === 'log') {
+    return toLogLine(notification);
+  }
   const layout = Layouts[kind];
 
   const lines = [toHeading(notification, layout)];

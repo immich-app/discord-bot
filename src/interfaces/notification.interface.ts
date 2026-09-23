@@ -16,7 +16,9 @@ export type NotificationKind =
   | 'report'
   /** A release workflow failure. */
   | 'alert'
-  | 'rss';
+  | 'rss'
+  /** A plain-text line the bot posts about itself: its startup, or an error it logged. */
+  | 'log';
 
 /**
  * Semantic outcome of the event, namespaced by domain. A token names the event at its call site and

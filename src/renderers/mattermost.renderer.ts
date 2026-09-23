@@ -47,6 +47,7 @@ const Layouts: Record<NotificationKind, MattermostLayout> = {
   purchase: { author: 'text', titleLink: true, bodySlot: true, fieldsLayout: 'columns' },
   report: { author: 'text', titleLink: false, bodySlot: true, fieldsLayout: 'columns' },
   alert: { author: 'text', titleLink: false, bodySlot: true, fieldsLayout: 'columns' },
+  log: { author: 'text', titleLink: false, bodySlot: true, fieldsLayout: 'columns' },
   rss: {
     author: 'avatar',
     titleLink: true,

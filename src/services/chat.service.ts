@@ -17,11 +17,13 @@ import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfac
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { NotificationService } from 'src/services/notification.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
+const DISCORD_READY_WAIT_MS = 60_000;
 
 const _star_history: Record<string, number | undefined> = {};
 const _fork_history: Record<string, number | undefined> = {};
@@ -173,14 +175,10 @@ export class ChatService {
     @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
     private zulipService: ZulipService,
+    private notifications: NotificationService,
   ) {}
 
   async init() {
-    const { bot } = getConfig();
-    if (bot.token !== 'dev') {
-      await this.discord.login(bot.token);
-    }
-
     // The Zulip clients are initialised once, by ZulipService.
     await this.mattermost.init();
     this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
@@ -262,18 +260,45 @@ ${messageParts.join('\n')}`,
     }
   }
 
-  async onReady() {
-    this.logger.verbose('DiscordBot.onReady');
+  async loginToDiscord() {
+    const { bot } = getConfig();
+    const login = bot.token === 'dev' ? Promise.resolve() : this.discord.login(bot.token);
+    void this.announceStartup(login);
+    try {
+      await login;
+    } catch (error) {
+      await logError('Discord login failed', error, { notifications: this.notifications, logger: this.logger });
+      throw error;
+    }
+  }
+
+  private async announceStartup(discordLogin: Promise<void>) {
+    let timer: NodeJS.Timeout | undefined;
+    const waited = new Promise<'waited'>(
+      (resolve) => (timer = setTimeout(() => resolve('waited'), DISCORD_READY_WAIT_MS)),
+    );
+    const outcome = await Promise.race([
+      discordLogin.then(
+        () => 'ready',
+        () => 'failed',
+      ),
+      waited,
+    ]);
+    clearTimeout(timer);
+    if (outcome === 'failed') {
+      return;
+    }
 
     const versionMessage = await this.getVersionMessage();
     this.logger.log(`Bot ${versionMessage} started`);
 
     if (versionMessage) {
-      await this.discord.sendMessage({
-        channelId: DiscordChannel.BotSpam,
-        message: `I'm alive, running ${versionMessage}!`,
-      });
+      await this.notifications.notify('team.bot', { kind: 'log', title: `I'm alive, running ${versionMessage}!` });
     }
+  }
+
+  onReady() {
+    this.logger.verbose('DiscordBot.onReady');
   }
 
   async onError(error: Error) {
@@ -283,7 +308,7 @@ ${messageParts.join('\n')}`,
     }
 
     this.logger.verbose(`DiscordBot.onError - ${error}`);
-    await logError('Discord bot error', error, { discord: this.discord, logger: this.logger });
+    await logError('Discord bot error', error, { notifications: this.notifications, logger: this.logger });
   }
 
   async getLink(name: string, message: string | null) {

@@ -4,7 +4,7 @@ import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { Notification, NotificationTarget } from 'src/interfaces/notification.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
-import { toDiscordEmbed } from 'src/renderers/discord.renderer';
+import { toDiscordMessage } from 'src/renderers/discord.renderer';
 import { toMattermostBlock } from 'src/renderers/mattermost.renderer';
 import { toZulipMessage } from 'src/renderers/zulip.renderer';
 
@@ -37,7 +37,7 @@ export class NotificationService {
     const { discord, mattermost, zulip }: NotificationRoute = NotificationRoutes[destination];
     const delivered: boolean[] = [];
 
-    if (discord) {
+    if (discord && this.discord.isReady()) {
       delivered.push(await this.toDiscord(destination, notification, discord));
     }
 
@@ -57,7 +57,7 @@ export class NotificationService {
   async notifyTarget(target: NotificationTarget, notification: Notification): Promise<boolean> {
     switch (target.platform) {
       case 'discord': {
-        return this.toDiscord(`channel ${target.channelId}`, notification, target);
+        return this.discord.isReady() && this.toDiscord(`channel ${target.channelId}`, notification, target);
       }
       case 'mattermost': {
         return this.toMattermost(`channel ${target.channelId}`, notification, target);
@@ -72,7 +72,7 @@ export class NotificationService {
   private toDiscord(label: string, notification: Notification, { channelId, crosspost }: DiscordRoute) {
     const render = () => ({
       channelId,
-      message: { embeds: [toDiscordEmbed(notification)] },
+      message: toDiscordMessage(notification),
       ...(crosspost ? { crosspost: true } : {}),
     });
     return this.deliver(label, 'discord', render, (dto) => this.discord.sendMessage(dto));

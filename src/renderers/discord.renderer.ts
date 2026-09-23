@@ -1,4 +1,4 @@
-import { APIEmbed, EmbedBuilder } from 'discord.js';
+import { APIEmbed, EmbedBuilder, MessageCreateOptions } from 'discord.js';
 import { Notification, NotificationKind } from 'src/interfaces/notification.interface';
 import { Palette } from 'src/renderers/palette';
 
@@ -16,7 +16,9 @@ type DiscordLayout = {
   bodySlot: boolean;
 };
 
-const Layouts: Record<Exclude<NotificationKind, 'rss'>, DiscordLayout> = {
+type EmbedNotification = Notification & { kind: Exclude<NotificationKind, 'log'> };
+
+const Layouts: Record<Exclude<NotificationKind, 'rss' | 'log'>, DiscordLayout> = {
   feed: { authorIcon: true, titleLink: true, bodySlot: true },
   release: { authorIcon: true, titleLink: true, bodySlot: true },
   incident: { authorIcon: false, titleLink: true, bodySlot: false },
@@ -42,7 +44,7 @@ const toRSSEmbed = ({ author, title, body, timestamp, url }: Notification) =>
     ...(url && { url }),
   });
 
-export const toDiscordEmbed = (notification: Notification) => {
+export const toDiscordEmbed = (notification: EmbedNotification) => {
   const { kind, accent, author, title, url, body, fields } = notification;
   if (kind === 'rss') {
     return toRSSEmbed(notification);
@@ -79,4 +81,12 @@ export const toDiscordEmbed = (notification: Notification) => {
   }
 
   return new EmbedBuilder(data);
+};
+
+export const toDiscordMessage = (notification: Notification): string | MessageCreateOptions => {
+  const { kind, title, body } = notification;
+  if (kind === 'log') {
+    return body ? `${title}: ${body}` : title;
+  }
+  return { embeds: [toDiscordEmbed({ ...notification, kind })] };
 };

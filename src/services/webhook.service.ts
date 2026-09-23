@@ -563,7 +563,7 @@ export class WebhookService {
         }),
       message: 'Failed to insert payment into database',
       fallbackValue: undefined,
-      discord: this.discord,
+      notifications: this.notifications,
       logger: this.logger,
     });
 
@@ -575,7 +575,7 @@ export class WebhookService {
       method: () => this.database.getTotalLicenseCount(),
       message: 'Failed to insert payment into database',
       fallbackValue: { server: 0, client: 0 },
-      discord: this.discord,
+      notifications: this.notifications,
       logger: this.logger,
     });
 

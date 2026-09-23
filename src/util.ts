@@ -1,12 +1,12 @@
 import { Logger } from '@nestjs/common';
 import { channelLink, hyperlink } from 'discord.js';
-import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
+import { NotificationService } from 'src/services/notification.service';
 
-type Repos = { discord: IDiscordInterface; logger: Logger };
-export const logError = async (message: string, error: unknown, { discord, logger }: Repos) => {
+type Repos = { notifications: NotificationService; logger: Logger };
+export const logError = async (message: string, error: unknown, { notifications, logger }: Repos) => {
   logger.error(message, error);
   try {
-    await discord.sendMessage({ channelId: DiscordChannel.BotSpam, message: `${message}: ${error}` });
+    await notifications.notify('team.bot', { kind: 'log', title: message, body: `${error}` });
   } catch (error) {
     logger.error('Failed to send error message to bot spam channel', error);
   }
@@ -16,15 +16,13 @@ type WithErrorOptions<T> = Repos & {
   message: string;
   method: () => Promise<T>;
   fallbackValue: T;
-  discord: IDiscordInterface;
-  logger: Logger;
 };
 export const withErrorLogging = async <T = unknown>(options: WithErrorOptions<T>) => {
-  const { message, method, fallbackValue, discord, logger } = options;
+  const { message, method, fallbackValue, notifications, logger } = options;
   try {
     return await method();
   } catch (error) {
-    await logError(message, error, { discord, logger });
+    await logError(message, error, { notifications, logger });
     return fallbackValue;
   }
 };

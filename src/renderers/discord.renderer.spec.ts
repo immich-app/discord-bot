@@ -1,5 +1,5 @@
 import { Colors } from 'discord.js';
-import { toDiscordEmbed } from 'src/renderers/discord.renderer';
+import { toDiscordEmbed, toDiscordMessage } from 'src/renderers/discord.renderer';
 import { describe, expect, it } from 'vitest';
 
 describe('toDiscordEmbed', () => {
@@ -139,5 +139,26 @@ describe('toDiscordEmbed', () => {
         expect(embed, kind).not.toHaveProperty('timestamp');
       }
     });
+  });
+});
+
+describe('toDiscordMessage', () => {
+  it('should send a log line as plain text, the detail after a colon', () => {
+    expect(toDiscordMessage({ kind: 'log', title: 'Discord bot error', body: 'Error: boom' })).toBe(
+      'Discord bot error: Error: boom',
+    );
+    expect(toDiscordMessage({ kind: 'log', title: "I'm alive, running 1.0.0@[abc](https://x)!" })).toBe(
+      "I'm alive, running 1.0.0@[abc](https://x)!",
+    );
+    expect(toDiscordMessage({ kind: 'log', title: 'Failed', body: '' })).toBe('Failed');
+  });
+
+  it('should send every other kind as one embed', () => {
+    const message = toDiscordMessage({ kind: 'alert', accent: 'release.failed', title: 'Release Workflow Failed' });
+    expect(message).toEqual({ embeds: [expect.any(Object)] });
+    const [embed] = (message as { embeds: [ReturnType<typeof toDiscordEmbed>] }).embeds;
+    expect(embed.toJSON()).toEqual(
+      toDiscordEmbed({ kind: 'alert', accent: 'release.failed', title: 'Release Workflow Failed' }).toJSON(),
+    );
   });
 });
