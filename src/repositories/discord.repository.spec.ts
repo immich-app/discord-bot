@@ -9,6 +9,7 @@ import {
   PermissionFlagsBits,
   PermissionsBitField,
   ThreadAutoArchiveDuration,
+  WebhookClient,
 } from 'discord.js';
 import { inspect } from 'node:util';
 import { Constants } from 'src/constants';
@@ -25,9 +26,19 @@ const bot = vitest.hoisted(() => ({
   guilds: { cache: new Map<string, unknown>() },
 }));
 
+/** What the repository executes each webhook through, by webhook ID. */
+const webhookClients = vitest.hoisted(() => new Map<string, object>());
+
 vitest.mock('discordx', () => ({
   Client: vitest.fn(function () {
     return bot;
+  }),
+}));
+
+vitest.mock('discord.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('discord.js')>()),
+  WebhookClient: vitest.fn(function ({ id }: { id: string }) {
+    return webhookClients.get(id);
   }),
 }));
 
@@ -81,16 +92,21 @@ const makeThread = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const makeWebhook = (id: string, overrides: Record<string, unknown> = {}) => ({
-  id,
-  name: 'Zulip mirror',
-  owner: { id: botUserId },
-  token: 'secret-token',
-  send: vitest.fn(),
-  editMessage: vitest.fn(),
-  deleteMessage: vitest.fn(),
-  ...overrides,
-});
+const makeWebhook = (id: string, overrides: Record<string, unknown> = {}) => {
+  const webhook = {
+    id,
+    name: 'Zulip mirror',
+    owner: { id: botUserId },
+    token: 'secret-token',
+    send: vitest.fn(),
+    editMessage: vitest.fn(),
+    deleteMessage: vitest.fn(),
+    ...overrides,
+  };
+  const { send, editMessage, deleteMessage } = webhook;
+  webhookClients.set(id, { id, send, editMessage, deleteMessage, destroy: vitest.fn() });
+  return webhook;
+};
 
 const webhooks = (...list: ReturnType<typeof makeWebhook>[]) => new Collection(list.map((w) => [w.id, w]));
 
@@ -130,6 +146,7 @@ describe(DiscordRepository.name, () => {
       displayAvatarURL: vitest.fn().mockReturnValue('https://cdn.discordapp.com/avatars/bot.png'),
     };
     bot.guilds.cache.clear();
+    webhookClients.clear();
     channel = makeChannel();
     webhook = makeWebhook('700000000000000001');
     bot.channels.fetch.mockResolvedValue(channel);
@@ -229,7 +246,7 @@ describe(DiscordRepository.name, () => {
       const someoneElses = makeWebhook('70000000000000001', { owner: { id: '1' } });
       const follower = makeWebhook('7000000000000001', { token: null });
       channel.fetchWebhooks.mockResolvedValue(webhooks(newer, someoneElses, follower, older));
-      older.send.mockResolvedValue({ id: '300000000000000005', channelId });
+      older.send.mockResolvedValue({ id: '300000000000000005', channel_id: channelId });
 
       await sut.ensureMirrorWebhook(channelId);
       await sut.sendMirrorMessage({ channelId, username: 'A', content: 'x', pingUserIds: [], suppressEmbeds: false });
@@ -318,6 +335,12 @@ describe(DiscordRepository.name, () => {
       expect(channel.fetchWebhooks).toHaveBeenCalledTimes(2);
     });
 
+    it('should refuse a created webhook that comes without a token', async () => {
+      channel.createWebhook.mockResolvedValue(makeWebhook('700000000000000002', { token: null }));
+      await expect(sut.ensureMirrorWebhook(channelId)).rejects.toMatchObject({ kind: 'other' });
+      expect(WebhookClient).not.toHaveBeenCalled();
+    });
+
     it('should refuse a channel that cannot hold webhooks', async () => {
       channel.type = ChannelType.PublicThread;
       await expect(sut.ensureMirrorWebhook(channelId)).rejects.toMatchObject({ kind: 'unknown-channel' });
@@ -332,7 +355,7 @@ describe(DiscordRepository.name, () => {
   describe('sendMirrorMessage', () => {
     beforeEach(async () => {
       await resolveWebhook();
-      webhook.send.mockResolvedValue({ id: '300000000000000005', channelId: threadId });
+      webhook.send.mockResolvedValue({ id: '300000000000000005', channel_id: threadId });
     });
 
     it('should send through the webhook with no mentions but the listed users', async () => {
@@ -415,6 +438,7 @@ describe(DiscordRepository.name, () => {
       await expect(send()).rejects.toMatchObject({ kind: 'unknown-webhook', code: undefined });
       expect(webhook.send).toHaveBeenCalledOnce();
 
+      expect(vitest.mocked(WebhookClient).mock.results[0].value.destroy).toHaveBeenCalledOnce();
       await sut.ensureMirrorWebhook(channelId);
       expect(channel.fetchWebhooks).toHaveBeenCalledTimes(2);
     });
@@ -446,6 +470,18 @@ describe(DiscordRepository.name, () => {
 
       expect(thrown).toBeInstanceOf(DiscordMirrorError);
       expect(thrown).toMatchObject({ kind, code });
+    });
+
+    it("should send through a client of the webhook's own, whose REST manager nobody logs", async () => {
+      await sut.sendMirrorMessage({ channelId, username: 'A', content: 'x', pingUserIds: [], suppressEmbeds: false });
+      await sut.editMirrorMessage(target(), { content: 'y', suppressEmbeds: false });
+      await sut.deleteMirrorMessage(target());
+
+      expect(WebhookClient).toHaveBeenCalledExactlyOnceWith({ id: webhook.id, token: 'secret-token' });
+      const client = vitest.mocked(WebhookClient).mock.results[0].value;
+      expect(webhook.send.mock.contexts).toEqual([client]);
+      expect(webhook.editMessage.mock.contexts).toEqual([client]);
+      expect(webhook.deleteMessage.mock.contexts).toEqual([client]);
     });
 
     it('should never pass on the webhook token or the request body', async () => {

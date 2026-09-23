@@ -11,6 +11,7 @@ import {
   RESTJSONErrorCodes,
   ThreadAutoArchiveDuration,
   Webhook,
+  WebhookClient,
 } from 'discord.js';
 import { Client } from 'discordx';
 import { Constants } from 'src/constants';
@@ -178,7 +179,10 @@ const bySnowflake = (a: { id: string }, b: { id: string }) => {
 };
 
 export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInterface {
-  private mirrorWebhooks = new Map<string, Webhook>();
+  /**
+   * Each runs on a REST manager of its own: the bot's logs its debug lines, which name a webhook route by its token.
+   */
+  private mirrorWebhooks = new Map<string, WebhookClient>();
   private mirrorWebhookFailures = new Map<string, { error: DiscordMirrorError; until: number }>();
 
   constructor() {
@@ -355,7 +359,11 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     this.throwWebhookFailure(channelId);
 
     try {
-      this.mirrorWebhooks.set(channelId, await this.findOrCreateMirrorWebhook(channelId));
+      const { id, token } = await this.findOrCreateMirrorWebhook(channelId);
+      if (!token) {
+        throw new DiscordMirrorError('other', undefined, 'Discord gave the mirror webhook no token');
+      }
+      this.mirrorWebhooks.set(channelId, new WebhookClient({ id, token }));
       this.mirrorWebhookFailures.delete(channelId);
     } catch (error) {
       const mirrorError = toMirrorError(error);
@@ -386,7 +394,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
         allowedMentions: { parse: [], roles: [], users: message.pingUserIds, repliedUser: false },
         flags: message.suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [],
       });
-      return { messageId: sent.id, channelId: sent.channelId, webhookId: webhook.id };
+      return { messageId: sent.id, channelId: sent.channel_id, webhookId: webhook.id };
     } catch (error) {
       throw this.toWebhookError(message.channelId, webhook, error);
     }
@@ -543,7 +551,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     );
   }
 
-  private getMirrorWebhook(channelId: string): Webhook {
+  private getMirrorWebhook(channelId: string): WebhookClient {
     const webhook = this.mirrorWebhooks.get(channelId);
     if (webhook) {
       return webhook;
@@ -565,10 +573,11 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     this.mirrorWebhookFailures.delete(channelId);
   }
 
-  private toWebhookError(channelId: string, webhook: Webhook, error: unknown) {
+  private toWebhookError(channelId: string, webhook: WebhookClient, error: unknown) {
     const mirrorError = toMirrorError(error);
     if (mirrorError.kind === 'unknown-webhook' && this.mirrorWebhooks.get(channelId) === webhook) {
       this.mirrorWebhooks.delete(channelId);
+      webhook.destroy();
     }
     return mirrorError;
   }
