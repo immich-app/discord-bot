@@ -7,7 +7,8 @@ export type ZulipConfig = {
 };
 export type MessagePayload = { stream: string | number; topic?: string; content: string };
 
-export type ZulipMessage = { id: number; topic: string };
+/** `streamId` is undefined for a direct message. */
+export type ZulipMessage = { id: number; topic: string; streamId?: number };
 
 /** Zulip cannot change content and topic in one request, so a caller sends one or the other. */
 export type ZulipMessageUpdate = {

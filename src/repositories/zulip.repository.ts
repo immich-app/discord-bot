@@ -151,7 +151,8 @@ export class ZulipRepository implements IZulipInterface {
     const { data } = await this.bot.GET('/messages/{message_id}', {
       params: { path: { message_id: id }, query: { allow_empty_topic_name: true } },
     });
-    return { id: data!.message!.id ?? id, topic: data!.message!.subject ?? '' };
+    const message = data!.message!;
+    return { id: message.id ?? id, topic: message.subject ?? '', streamId: message.stream_id };
   }
 
   async updateMessage(

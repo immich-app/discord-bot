@@ -400,6 +400,15 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
+  getMirrorMessagesByConversation(conversationId: string): Promise<MirrorMessage[]> {
+    return this.db
+      .selectFrom('mirror_message')
+      .selectAll()
+      .where('conversationId', '=', conversationId)
+      .where('deletedAt', 'is', null)
+      .execute();
+  }
+
   async getNewestMirrorZulipMessageId(conversationId: string): Promise<number | undefined> {
     const { newest } = await this.db
       .selectFrom('mirror_message')

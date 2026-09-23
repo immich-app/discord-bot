@@ -16,6 +16,7 @@ import {
 } from 'src/interfaces/discord-mirror.interface';
 import {
   IZulipInterface,
+  ZulipMessage,
   ZulipMessagesDeleted,
   ZulipMessageUpdated,
   ZulipReceivedMessage,
@@ -140,6 +141,8 @@ const isExpected = (error: unknown) => error instanceof DiscordMirrorError || is
 const isTransient = (error: unknown) => isTransientZulipFailure(error) || isMirrorError(error, 'unavailable');
 
 const snowflakeAt = (ms: number) => (BigInt(ms) - DISCORD_EPOCH) << 22n;
+
+const isMainTopic = (pair: EnabledPair, key: string) => pair.mainTopic !== null && key === topicKey(pair.mainTopic);
 
 const suppressEmbeds = (content: string) => hasBlacklistedUrl(content.match(URLS) ?? []);
 
@@ -960,20 +963,23 @@ export class MirrorService implements OnModuleDestroy {
     if (known) {
       return known;
     }
-    if (pair.mainTopic !== null && key === topicKey(pair.mainTopic)) {
+    if (isMainTopic(pair, key)) {
       return this.mainConversation(state);
     }
 
     const recent = await this.retryZulip(() =>
       this.zulip.getMessages({ stream: pair.zulipStreamId, topic: message.topic, numBefore: RECOVERY_DEPTH }),
     );
-    const rows = await this.database.getMirrorMessagesByZulipIds(
-      recent.map(({ id }) => id).filter((id) => id !== message.id),
-    );
+    const recentIds = recent.map(({ id }) => id).filter((id) => id !== message.id);
+    const rows = await this.database.getMirrorMessagesByZulipIds(recentIds);
     for (const conversationId of new Set(rows.toReversed().map((row) => row.conversationId))) {
       const conversation =
         conversationId === null ? undefined : await this.database.getMirrorConversation(conversationId);
-      if (conversation?.discordThreadId && conversation.zulipStreamId === pair.zulipStreamId) {
+      if (
+        conversation?.discordThreadId &&
+        conversation.zulipStreamId === pair.zulipStreamId &&
+        (await this.isAnchoredIn(state, conversation, key, recentIds))
+      ) {
         await this.database.updateMirrorConversation(conversation.id, {
           zulipTopic: message.topic,
           zulipTopicKey: key,
@@ -985,6 +991,23 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     return undefined;
+  }
+
+  /** A conversation goes where its anchor goes: messages moved away without it never take it along. */
+  private async isAnchoredIn(state: PairState, conversation: MirrorConversation, key: string, recentIds: number[]) {
+    const anchor = conversation.zulipAnchorMessageId;
+    if (anchor === null || recentIds.includes(anchor)) {
+      return true;
+    }
+    try {
+      const { topic, streamId } = await this.retryZulip(() => this.zulip.getMessage(anchor));
+      return streamId === state.pair.zulipStreamId && topic !== '' && topicKey(topic) === key;
+    } catch (error) {
+      if (isZulipMessageGone(error)) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   private async mainConversation(state: PairState) {
@@ -1271,10 +1294,20 @@ export class MirrorService implements OnModuleDestroy {
   private async deleteFromZulip(state: PairState, messageIds: number[]) {
     const { pair } = state;
     const rows = await this.database.getMirrorMessagesByZulipIds(messageIds);
+    const vanished = await this.vanishedConversations(state, messageIds);
     await this.database.markMirrorMessagesDeleted(rows.map(({ discordMessageId }) => discordMessageId));
+    for (const conversation of vanished) {
+      await this.database.removeMirrorConversation(conversation.id);
+      this.logger.warn(
+        `${pair.key}: Zulip removed every mirrored message of the topic of Discord thread ${conversation.discordThreadId}, as it does when the topic moves to a stream the bot cannot read; detached the thread and left its Discord copies alone (delete them there by hand if the topic was deleted)`,
+      );
+    }
 
     const cutoff = Date.now() - Constants.Mirror.DeleteSyncMaxAgeDays * DAY;
-    const copies = rows.filter(({ origin }) => origin === 'zulip');
+    const gone = new Set(vanished.map(({ id }) => id));
+    const copies = rows.filter(
+      ({ origin, conversationId }) => origin === 'zulip' && (conversationId === null || !gone.has(conversationId)),
+    );
     const old = copies.filter(({ createdAt }) => createdAt.getTime() < cutoff);
     const young = copies.filter(({ createdAt }) => createdAt.getTime() >= cutoff);
     if (old.length > 0) {
@@ -1303,6 +1336,28 @@ export class MirrorService implements OnModuleDestroy {
     await this.reanchor(state, messageIds);
   }
 
+  /**
+   * Zulip tells a bot about a topic that moves to a stream the bot cannot read only by deleting its messages, so a
+   * deletion that takes a thread's anchor and every other mirrored message of the thread may well be such a move.
+   */
+  private async vanishedConversations(state: PairState, messageIds: number[]) {
+    const deleted = new Set(messageIds);
+    const vanished: MirrorConversation[] = [];
+    for (const conversation of await this.database.getMirrorConversationsByAnchors(messageIds)) {
+      if (conversation.zulipStreamId !== state.pair.zulipStreamId || conversation.discordThreadId === null) {
+        continue;
+      }
+      const rows = await this.database.getMirrorMessagesByConversation(conversation.id);
+      if (
+        rows.some(({ origin }) => origin === 'zulip') &&
+        rows.every(({ zulipMessageId }) => deleted.has(zulipMessageId))
+      ) {
+        vanished.push(conversation);
+      }
+    }
+    return vanished;
+  }
+
   /** A conversation whose anchor is gone moves to its newest remaining message; without one, the next message is. */
   private async reanchor(state: PairState, deletedIds: number[]) {
     for (const conversation of await this.database.getMirrorConversationsByAnchors(deletedIds)) {
@@ -1321,6 +1376,7 @@ export class MirrorService implements OnModuleDestroy {
     const conversations = (await this.database.getMirrorConversationsByAnchors(moved)).filter(
       ({ zulipStreamId, discordThreadId }) => zulipStreamId === pair.zulipStreamId && discordThreadId !== null,
     );
+    await this.leaveConversations(state, update, moved, new Set(conversations.map(({ id }) => id)));
     for (const conversation of conversations) {
       const threadId = conversation.discordThreadId!;
       if (update.newStreamId !== undefined && update.newStreamId !== pair.zulipStreamId) {
@@ -1332,11 +1388,7 @@ export class MirrorService implements OnModuleDestroy {
       }
 
       const zulipTopicKey = topicKey(update.topic);
-      const owner =
-        zulipTopicKey === conversation.zulipTopicKey
-          ? undefined
-          : await this.database.getMirrorConversationByZulipTopic(pair.zulipStreamId, zulipTopicKey);
-      if (owner && owner.id !== conversation.id) {
+      if (await this.isTakenByAnother(state, conversation, zulipTopicKey)) {
         await this.detach(state, conversation, 'its Zulip topic was merged into another conversation');
         continue;
       }
@@ -1365,6 +1417,36 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  /** Moved messages whose conversation stays behind no longer belong to it, so they can never become its anchor. */
+  private async leaveConversations(
+    state: PairState,
+    update: ZulipMessageUpdated,
+    moved: number[],
+    movingAlong: Set<string>,
+  ) {
+    const outOfStream = update.newStreamId !== undefined && update.newStreamId !== state.pair.zulipStreamId;
+    const leaving = (await this.database.getMirrorMessagesByZulipIds(moved)).filter(
+      ({ conversationId }) => outOfStream || (conversationId !== null && !movingAlong.has(conversationId)),
+    );
+    await this.database.updateMirrorMessages(
+      leaving.map(({ discordMessageId }) => discordMessageId),
+      outOfStream ? { conversationId: null, zulipStreamId: update.newStreamId } : { conversationId: null },
+    );
+  }
+
+  /** The main topic counts as taken even before its conversation exists. */
+  private async isTakenByAnother(state: PairState, conversation: MirrorConversation, key: string) {
+    const { pair } = state;
+    if (key === conversation.zulipTopicKey) {
+      return false;
+    }
+    if (isMainTopic(pair, key)) {
+      return true;
+    }
+    const owner = await this.database.getMirrorConversationByZulipTopic(pair.zulipStreamId, key);
+    return owner !== undefined && owner.id !== conversation.id;
+  }
+
   private async detach(state: PairState, conversation: MirrorConversation, reason: string) {
     await this.database.removeMirrorConversation(conversation.id);
     this.logger.log(
@@ -1380,9 +1462,9 @@ export class MirrorService implements OnModuleDestroy {
       return conversation;
     }
 
-    let topic: string;
+    let found: ZulipMessage;
     try {
-      topic = (await this.retryZulip(() => this.zulip.getMessage(anchor))).topic;
+      found = await this.retryZulip(() => this.zulip.getMessage(anchor));
     } catch (error) {
       if (!isZulipMessageGone(error)) {
         this.logger.warn(
@@ -1395,13 +1477,14 @@ export class MirrorService implements OnModuleDestroy {
       return (await this.database.getMirrorConversation(conversation.id)) ?? conversation;
     }
 
+    if (found.streamId !== pair.zulipStreamId) {
+      await this.detach(state, conversation, 'its Zulip topic was moved to another stream');
+      return undefined;
+    }
+    const { topic } = found;
     if (topic !== '' && topic !== conversation.zulipTopic) {
       const zulipTopicKey = topicKey(topic);
-      const owner =
-        zulipTopicKey === conversation.zulipTopicKey
-          ? undefined
-          : await this.database.getMirrorConversationByZulipTopic(pair.zulipStreamId, zulipTopicKey);
-      if (owner && owner.id !== conversation.id) {
+      if (await this.isTakenByAnother(state, conversation, zulipTopicKey)) {
         await this.detach(state, conversation, 'its Zulip topic was merged into another conversation');
         return undefined;
       }
@@ -1424,7 +1507,7 @@ export class MirrorService implements OnModuleDestroy {
     for (const [index, name] of candidates.entries()) {
       const candidate = `${prefix}${name}`;
       const key = topicKey(candidate);
-      if (pair.mainTopic !== null && key === topicKey(pair.mainTopic)) {
+      if (isMainTopic(pair, key)) {
         continue;
       }
       const owner = await this.database.getMirrorConversationByZulipTopic(pair.zulipStreamId, key);
@@ -1645,6 +1728,8 @@ export class MirrorService implements OnModuleDestroy {
     if (!found || thread.name === toDiscordThreadName(found.zulipTopic)) {
       return;
     }
+    // Read afresh: a move the bot missed could have taken the anchor into another stream, whose topic this would rename.
+    this.verifiedConversations.delete(found.id);
     const conversation = await this.verifyConversation(state, found);
     if (!conversation) {
       return;

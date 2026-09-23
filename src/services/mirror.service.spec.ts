@@ -86,6 +86,7 @@ type MirrorMethods =
   | 'createMirrorMessages'
   | 'getMirrorMessagesByDiscordIds'
   | 'getMirrorMessagesByZulipIds'
+  | 'getMirrorMessagesByConversation'
   | 'getNewestMirrorZulipMessageId'
   | 'updateMirrorMessages'
   | 'markMirrorMessagesDeleted'
@@ -184,6 +185,12 @@ const newMirrorDatabase = () => {
         .filter(visible(options))
         .filter(({ zulipMessageId }) => ids.includes(zulipMessageId))
         .sort((a, b) => a.zulipMessageId - b.zulipMessageId || a.part - b.part)
+        .map((row) => ({ ...row })),
+    ),
+    getMirrorMessagesByConversation: vitest.fn(async (id: string) =>
+      messages
+        .filter(visible())
+        .filter(({ conversationId }) => conversationId === id)
         .map((row) => ({ ...row })),
     ),
     getNewestMirrorZulipMessageId: vitest.fn(async (id: string) => {
@@ -372,6 +379,10 @@ describe(MirrorService.name, () => {
     discord = newDiscordMirrorMock();
     db = newMirrorDatabase();
     stub = newZulipServiceStub();
+    zulip.getMessage.mockImplementation(async (id) => {
+      const conversation = db.conversations.find(({ zulipAnchorMessageId }) => zulipAnchorMessageId === id);
+      return { id, topic: conversation?.zulipTopic ?? '', streamId: conversation?.zulipStreamId ?? DEV_STREAM };
+    });
     sut = new MirrorService(
       zulip,
       discord,
@@ -721,6 +732,30 @@ describe(MirrorService.name, () => {
         expect.objectContaining({ zulipTopic: 'new name', zulipTopicKey: 'new name' }),
       );
       expect(discord.startMirrorThread).not.toHaveBeenCalled();
+    });
+
+    it('should not take a thread along with messages moved away from its anchor', async () => {
+      await fromZulip(zulipMessage({ topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      zulip.getMessages.mockResolvedValue([zulipMessage({ id: 1002, topic: 'Elsewhere' })]);
+
+      await fromZulip(zulipMessage({ id: 1003, topic: 'Elsewhere' }));
+
+      expect(zulip.getMessage).toHaveBeenCalledWith(1001);
+      expect(discord.startMirrorThread).toHaveBeenCalledTimes(2);
+      expect(db.conversations.map(({ zulipTopic }) => zulipTopic)).toEqual(['Crash', 'Elsewhere']);
+    });
+
+    it('should find a renamed topic again through its anchor', async () => {
+      const thread = seedThread({ zulipTopic: 'old name', zulipTopicKey: 'old name', zulipAnchorMessageId: 60 });
+      seedRow({ zulipMessageId: 70, conversationId: thread.id, discordThreadId: thread.discordThreadId });
+      zulip.getMessages.mockResolvedValue([zulipMessage({ id: 70, topic: 'new name' })]);
+      zulip.getMessage.mockResolvedValue({ id: 60, topic: 'New Name', streamId: DEV_STREAM });
+
+      await fromZulip(zulipMessage({ topic: 'new name' }));
+
+      expect(sent(0).threadId).toBe(thread.discordThreadId);
+      expect(db.conversations[0].zulipTopic).toBe('new name');
     });
 
     it('should never adopt the main conversation for another topic', async () => {
@@ -1152,7 +1187,7 @@ describe(MirrorService.name, () => {
 
     it('should re-read the topic of a conversation once per queue registration', async () => {
       const thread = seedThread({ zulipTopic: 'old', zulipTopicKey: 'old', zulipAnchorMessageId: 42 });
-      zulip.getMessage.mockResolvedValue({ id: 42, topic: 'New' });
+      zulip.getMessage.mockResolvedValue({ id: 42, topic: 'New', streamId: DEV_STREAM });
 
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId, threadName: 'old' }));
       await fromDiscord(
@@ -1172,7 +1207,7 @@ describe(MirrorService.name, () => {
 
     it('should keep the stored topic when the anchor is in the empty topic', async () => {
       const thread = seedThread({ zulipTopic: 'general chat', zulipTopicKey: 'general chat' });
-      zulip.getMessage.mockResolvedValue({ id: 70, topic: '' });
+      zulip.getMessage.mockResolvedValue({ id: 70, topic: '', streamId: DEV_STREAM });
 
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId }));
 
@@ -1190,10 +1225,35 @@ describe(MirrorService.name, () => {
       expect(sentMessages()[0].topic).toBe('Crash on upload');
     });
 
+    it('should detach a conversation whose anchor was moved to another stream', async () => {
+      const thread = seedThread({ zulipAnchorMessageId: 42 });
+      zulip.getMessage.mockResolvedValue({ id: 42, topic: 'Crash on upload', streamId: 950 });
+
+      await fromDiscord(discordMessage({ threadId: thread.discordThreadId, threadName: 'Crash on upload' }));
+
+      expect(log()).toHaveBeenCalledWith(
+        `Dev: detached the conversation of Discord thread ${thread.discordThreadId}: its Zulip topic was moved to another stream`,
+      );
+      expect(sentMessages()).toEqual([expect.objectContaining({ stream: DEV_STREAM, topic: 'Crash on upload' })]);
+      expect(db.conversations).toEqual([
+        expect.objectContaining({ discordThreadId: thread.discordThreadId, zulipAnchorMessageId: 5001 }),
+      ]);
+    });
+
+    it('should detach a conversation whose topic became the main topic', async () => {
+      const thread = seedThread({ zulipAnchorMessageId: 42 });
+      zulip.getMessage.mockResolvedValue({ id: 42, topic: '#dev', streamId: DEV_STREAM });
+
+      await fromDiscord(discordMessage({ threadId: thread.discordThreadId, threadName: 'Crash on upload' }));
+
+      expect(sentMessages()).toEqual([expect.objectContaining({ topic: 'Crash on upload' })]);
+      expect(db.conversations).toEqual([expect.objectContaining({ zulipTopicKey: 'crash on upload' })]);
+    });
+
     it('should detach a conversation whose topic was merged into another one', async () => {
       seedThread({ id: 'other', discordThreadId: '200000000000000009', zulipTopic: 'Other', zulipTopicKey: 'other' });
       const thread = seedThread({ zulipAnchorMessageId: 42 });
-      zulip.getMessage.mockResolvedValue({ id: 42, topic: 'other' });
+      zulip.getMessage.mockResolvedValue({ id: 42, topic: 'other', streamId: DEV_STREAM });
 
       await fromDiscord(discordMessage({ threadId: thread.discordThreadId, threadName: 'Crash on upload' }));
 
@@ -1583,15 +1643,41 @@ describe(MirrorService.name, () => {
     it('should re-anchor a conversation whose anchor was deleted', async () => {
       await fromZulip(zulipMessage({ topic: 'Crash' }));
       await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1003, topic: 'Crash' }));
 
       await deleteFromZulip({ messageIds: [1001] });
-      expect(db.conversations[0].zulipAnchorMessageId).toBe(1002);
-
-      await deleteFromZulip({ messageIds: [1002] });
-      expect(db.conversations[0].zulipAnchorMessageId).toBeNull();
-
-      await fromZulip(zulipMessage({ id: 1003, topic: 'Crash' }));
       expect(db.conversations[0].zulipAnchorMessageId).toBe(1003);
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledOnce();
+
+      await deleteFromZulip({ messageIds: [1003] });
+      expect(db.conversations[0].zulipAnchorMessageId).toBe(1002);
+    });
+
+    it('should leave the Discord copies alone when a whole thread disappears from Zulip', async () => {
+      await fromZulip(zulipMessage({ topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      const threadId = db.conversations[0].discordThreadId!;
+      await fromDiscord(discordMessage({ threadId, threadName: 'Crash' }));
+
+      await deleteFromZulip({ messageIds: [1001, 1002, 5001], topic: 'Crash' });
+
+      expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
+      expect(db.conversations).toEqual([]);
+      expect(warn()).toHaveBeenCalledWith(
+        `Dev: Zulip removed every mirrored message of the topic of Discord thread ${threadId}, as it does when the topic moves to a stream the bot cannot read; detached the thread and left its Discord copies alone (delete them there by hand if the topic was deleted)`,
+      );
+    });
+
+    it('should still delete the copies when the rest of the thread stays', async () => {
+      await fromZulip(zulipMessage({ topic: 'Crash' }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      const threadId = db.conversations[0].discordThreadId!;
+      await fromDiscord(discordMessage({ threadId, threadName: 'Crash' }));
+
+      await deleteFromZulip({ messageIds: [1001, 1002], topic: 'Crash' });
+
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledTimes(2);
+      expect(db.conversations[0].zulipAnchorMessageId).toBe(5001);
     });
   });
 
@@ -1660,6 +1746,50 @@ describe(MirrorService.name, () => {
 
       expect(db.conversations[0].zulipTopic).toBe('Crash');
       expect(discord.renameMirrorThread).not.toHaveBeenCalled();
+      expect(db.messages.find(({ zulipMessageId }) => zulipMessageId === 1002)?.conversationId).toBeNull();
+    });
+
+    it('should never re-anchor a thread to a message that left its stream', async () => {
+      const conversationId = db.conversations[0].id;
+      seedRow({
+        discordMessageId: '300000000000000077',
+        origin: 'discord',
+        conversationId,
+        discordThreadId: threadId,
+        discordWebhookId: null,
+        zulipMessageId: 999,
+      });
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash' }));
+      await updateFromZulip({ messageId: 1002, messageIds: [1002], newStreamId: 950, propagateMode: 'change_one' });
+
+      await deleteFromZulip({ messageIds: [1001] });
+
+      expect(db.conversations[0].zulipAnchorMessageId).toBe(999);
+      expect(db.messages.find(({ zulipMessageId }) => zulipMessageId === 1002)).toEqual(
+        expect.objectContaining({ conversationId: null, zulipStreamId: 950 }),
+      );
+    });
+
+    it('should read the anchor again before renaming its topic, and detach it from another stream', async () => {
+      zulip.getMessage.mockResolvedValue({ id: 1001, topic: 'Crash', streamId: 950 });
+
+      sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'general chat' });
+      await sut.whenIdle();
+
+      expect(zulip.getMessage).toHaveBeenCalledWith(1001);
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+      expect(db.conversations).toEqual([]);
+    });
+
+    it('should detach a thread renamed to the main topic before the main conversation exists', async () => {
+      await updateFromZulip({ messageId: 1001, topic: '#DEV', propagateMode: 'change_all' });
+
+      expect(db.conversations).toEqual([]);
+      expect(discord.renameMirrorThread).not.toHaveBeenCalled();
+
+      await fromDiscord(discordMessage());
+      expect(sentMessages()).toEqual([expect.objectContaining({ topic: '#dev' })]);
+      expect(error()).not.toHaveBeenCalled();
     });
 
     it('should never move the main conversation', async () => {
@@ -1693,7 +1823,7 @@ describe(MirrorService.name, () => {
       db.conversations[0].zulipTopic = '✔ Crash';
       db.conversations[0].zulipTopicKey = '✔ crash';
       await register();
-      zulip.getMessage.mockResolvedValue({ id: 1001, topic: '✔ Crash' });
+      zulip.getMessage.mockResolvedValue({ id: 1001, topic: '✔ Crash', streamId: DEV_STREAM });
       zulip.getMessages.mockImplementation(async ({ topic }) => (topic === '✔ Crash on start' ? [zulipMessage()] : []));
 
       sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'Crash on start' });

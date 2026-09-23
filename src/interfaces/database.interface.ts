@@ -88,6 +88,7 @@ export interface IDatabaseRepository {
   getMirrorMessagesByDiscordIds(ids: string[], options?: MirrorMessageQuery): Promise<MirrorMessage[]>;
   /** Ordered by zulipMessageId, then part. */
   getMirrorMessagesByZulipIds(ids: number[], options?: MirrorMessageQuery): Promise<MirrorMessage[]>;
+  getMirrorMessagesByConversation(conversationId: string): Promise<MirrorMessage[]>;
   getNewestMirrorZulipMessageId(conversationId: string): Promise<number | undefined>;
   updateMirrorMessages(discordMessageIds: string[], changes: UpdateMirrorMessage): Promise<void>;
   markMirrorMessagesDeleted(discordMessageIds: string[]): Promise<void>;
