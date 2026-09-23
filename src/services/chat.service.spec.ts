@@ -465,6 +465,14 @@ describe('Bot test', () => {
     ])('should $name', async ({ message: message, links }) => {
       await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual(links);
     });
+
+    it.each([
+      { name: 'a Discord channel mention', message: 'see <#1369628205035688098>' },
+      { name: 'a number too large for an issue', message: '#1369628205035688098' },
+    ])('should not look up $name', async ({ message }) => {
+      await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual([]);
+      expect(databaseMock.getLatestPullRequestByNumber).not.toHaveBeenCalled();
+    });
   });
 
   describe('handleGithubFileReferences', () => {

@@ -73,7 +73,9 @@ type BetterTTVResponse = {
 
 const GITHUB_PAGE_REGEX =
   /https:\/\/github\.com\/(?<orgPage>[\w\-.,_]*)\/(?<repoPage>[\w\-.,_]+)\/(?<category>(pull|issues|discussions))\/(?<numPage>\d+)/g;
-const GITHUB_QUICK_REF_REGEX = /(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?#(?<num>\d+)/g;
+const GITHUB_QUICK_REF_REGEX = /(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(?<!<)#(?<num>\d+)/g;
+// Issue and pull request numbers are stored as Postgres integers.
+const MAX_GITHUB_NUMBER = 2_147_483_647;
 const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_QUICK_REF_REGEX.source})`, 'g');
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
@@ -506,7 +508,7 @@ ${messageParts.join('\n')}`,
 
       const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups;
       const id = Number(num ?? numPage);
-      if (Number.isNaN(id)) {
+      if (Number.isNaN(id) || id > MAX_GITHUB_NUMBER) {
         continue;
       }
 
