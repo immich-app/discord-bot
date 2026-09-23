@@ -16,6 +16,7 @@ const newDatabaseMock = (): Mocked<Pick<IDatabaseRepository, 'getTotalLicenseCou
 
 const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
+  isReady: vitest.fn().mockReturnValue(true),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),

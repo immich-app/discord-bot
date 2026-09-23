@@ -209,6 +209,10 @@ export const NotificationRoutes = {
     discord: { channelId: discordChannels.TeamAlerts },
     zulip: { stream: zulipStreams.ImmichAlerts, topic: 'release workflow' },
   },
+  'team.bot': {
+    discord: { channelId: DiscordChannel.BotSpam },
+    zulip: { stream: zulipStreams.ImmichAlerts, topic: 'bot' },
+  },
 } satisfies Record<string, NotificationRoute>;
 
 export type NotificationDestination = keyof typeof NotificationRoutes;

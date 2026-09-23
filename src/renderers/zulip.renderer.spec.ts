@@ -571,4 +571,37 @@ describe('toZulipMessage', () => {
       );
     });
   });
+
+  describe('log', () => {
+    it('should post the line alone, links and all, when there is no detail', () => {
+      const title = "I'm alive, running 1.0.0@[01234567](https://github.com/immich-app/discord-bot/commit/0123)!";
+      expect(toZulipMessage({ kind: 'log', title })).toBe(title);
+      expect(toZulipMessage({ kind: 'log', title: 'Failed', body: '' })).toBe('Failed');
+    });
+
+    it('should quote the detail beneath the line', () => {
+      expect(toZulipMessage({ kind: 'log', title: 'Discord bot error', body: 'Error: boom\nat line 2' })).toBe(
+        'Discord bot error:\n~~~ quote\nError: boom\nat line 2\n~~~',
+      );
+    });
+
+    it('should mention nobody, from the line or the detail', () => {
+      expect(toZulipMessage({ kind: 'log', title: 'Failed for @**all**', body: 'error: "@*team*" #**general**' })).toBe(
+        'Failed for @\u200B**all**:\n~~~ quote\nerror: "@\u200B*team*" #\u200B**general**\n~~~',
+      );
+    });
+
+    it('should keep the detail in its quote whatever fences it holds', () => {
+      const body = '~~~\n```\n~~~~ quote\n@**all**';
+      expect(toZulipMessage({ kind: 'log', title: 'Failed', body })).toBe(
+        'Failed:\n~~~~~ quote\n~~~\n```\n~~~~ quote\n@\u200B**all**\n~~~~~',
+      );
+    });
+
+    it('should ignore an accent, author and fields', () => {
+      expect(
+        toZulipMessage({ kind: 'log', accent: 'release.failed', author, title: 'T', url: 'https://x', fields }),
+      ).toBe('T');
+    });
+  });
 });

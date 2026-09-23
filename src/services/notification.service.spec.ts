@@ -16,6 +16,7 @@ vitest.mock('src/renderers/zulip.renderer', async (importOriginal) => {
 
 const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
+  isReady: vitest.fn().mockReturnValue(true),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),
@@ -108,6 +109,10 @@ const ExpectedRoutes: Record<
   'team.release-alerts': {
     discord: { channelId: Constants.Discord.Channels.TeamAlerts },
     zulip: { stream: ImmichAlerts, topic: 'release workflow' },
+  },
+  'team.bot': {
+    discord: { channelId: DiscordChannel.BotSpam },
+    zulip: { stream: ImmichAlerts, topic: 'bot' },
   },
 };
 
@@ -217,7 +222,8 @@ describe(NotificationService.name, () => {
       for (const destination of destinations) {
         const { zulip } = NotificationRoutes[destination] as { zulip?: { stream: number } };
         if (zulip) {
-          expect(zulip.stream, destination).toBe(destination === 'team.release-alerts' ? 113 : 111);
+          const alerts = destination === 'team.release-alerts' || destination === 'team.bot';
+          expect(zulip.stream, destination).toBe(alerts ? 113 : 111);
         }
       }
     });
@@ -232,6 +238,20 @@ describe(NotificationService.name, () => {
       expect(embeds).toHaveLength(1);
       expect(embeds[0]).toBeInstanceOf(EmbedBuilder);
       expect(embeds[0].toJSON()).toMatchObject({ title: 'Pull request opened', url: 'https://example.com/1' });
+    });
+
+    it('should send a log line to Discord and Zulip as plain text', async () => {
+      await sut.notify('team.bot', { kind: 'log', title: 'Discord bot error', body: 'Error: boom' });
+
+      expect(discordMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        channelId: DiscordChannel.BotSpam,
+        message: 'Discord bot error: Error: boom',
+      });
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 113,
+        topic: 'bot',
+        content: 'Discord bot error:\n~~~ quote\nError: boom\n~~~',
+      });
     });
 
     it('should send the rendered block tree to Mattermost', async () => {
@@ -294,6 +314,19 @@ describe(NotificationService.name, () => {
 
       expect(mattermostMock.send).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(loggerMock).not.toHaveBeenCalled();
+      expect(fatalMock).not.toHaveBeenCalled();
+    });
+
+    it('should skip Discord silently while it is not ready', async () => {
+      discordMock.isReady.mockReturnValue(false);
+
+      await expect(
+        sut.notify('team.bot', { kind: 'log', title: 'Failed', body: 'Error: boom' }),
+      ).resolves.toBeUndefined();
+
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
       expect(loggerMock).not.toHaveBeenCalled();
       expect(fatalMock).not.toHaveBeenCalled();
     });
@@ -514,6 +547,15 @@ describe(NotificationService.name, () => {
 
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       expect(toZulipMessage).not.toHaveBeenCalled();
+      expect(loggerMock).not.toHaveBeenCalled();
+    });
+
+    it('should skip Discord without logging while it is not ready, and resolve false', async () => {
+      discordMock.isReady.mockReturnValue(false);
+
+      await expect(sut.notifyTarget({ platform: 'discord', channelId: '123' }, rss)).resolves.toBe(false);
+
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
       expect(loggerMock).not.toHaveBeenCalled();
     });
 

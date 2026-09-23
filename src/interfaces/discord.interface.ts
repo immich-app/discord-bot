@@ -25,6 +25,7 @@ export enum DiscordEvents {
 
 export interface IDiscordInterface {
   login(token: string): Promise<void>;
+  isReady(): boolean;
   sendMessage({
     channelId,
     threadId,

@@ -26,8 +26,8 @@ export class DiscordEvents {
   }
 
   @Once({ event: 'clientReady' })
-  async onReady() {
-    await this.service.onReady();
+  onReady() {
+    this.service.onReady();
   }
 
   @On({ event: 'error' })

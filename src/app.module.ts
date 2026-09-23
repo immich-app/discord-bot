@@ -41,5 +41,6 @@ export class AppModule implements OnModuleInit {
     await this.scheduledMessageService.init();
     await this.zulipCommandService.init();
     await this.zulipService.init();
+    await this.chatService.loginToDiscord();
   }
 }

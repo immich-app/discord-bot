@@ -5,7 +5,7 @@ import { Constants } from 'src/constants';
 import { DiscordCommands } from 'src/discord/commands';
 import { neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
-import { IDiscordInterface } from 'src/interfaces/discord.interface';
+import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
@@ -14,12 +14,16 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
+import { NotificationService } from 'src/services/notification.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
-import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
+import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
+
+const config = vitest.hoisted(() => ({ botToken: 'dev' }));
 
 vitest.mock('src/config', () => ({
   getConfig: () => ({
-    bot: { token: 'dev' },
+    commitSha: '0123456789abcdef',
+    bot: { token: config.botToken },
     fourthwall: { user: 'fw-user', password: 'fw-password' },
     zulip: {
       bot: { username: 'bot@example.com', apiKey: 'bot-key' },
@@ -56,6 +60,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
+  isReady: vitest.fn().mockReturnValue(true),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
   getEmotes: vitest.fn(),
@@ -187,6 +192,7 @@ describe('Bot test', () => {
       mattermostMock,
       zulipMock,
       zulipServiceMock as unknown as ZulipService,
+      new NotificationService(discordMock, mattermostMock, zulipMock),
     );
   });
 
@@ -1319,6 +1325,145 @@ describe('Bot test', () => {
       loopDedupeMock.getForText.mockResolvedValue([]);
 
       await expect(sut.handleFindSimilarIssuesOrDiscussions('anything')).resolves.toBe('');
+    });
+  });
+
+  describe('bot-spam', () => {
+    let errorMock: MockInstance;
+    let fatalMock: MockInstance;
+
+    beforeEach(() => {
+      zulipMock.isInitialised.mockReturnValue(true);
+      zulipMock.sendMessage.mockResolvedValue({ id: 1 });
+      for (const level of ['log', 'verbose'] as const) {
+        vitest.spyOn(Logger.prototype, level).mockImplementation(() => {});
+      }
+      errorMock = vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      fatalMock = vitest.spyOn(Logger.prototype, 'fatal').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      config.botToken = 'dev';
+      vitest.useRealTimers();
+      vitest.restoreAllMocks();
+    });
+
+    const alive =
+      "I'm alive, running 1.0.0@[01234567](https://github.com/immich-app/discord-bot/commit/0123456789abcdef)!";
+    const announced = { stream: 113, topic: 'bot', content: alive };
+
+    it('should log in to Discord, then announce the running version on Discord bot-spam and the Zulip bot topic', async () => {
+      config.botToken = 'token';
+      let ready = () => {};
+      discordMock.login.mockReturnValue(new Promise<void>((resolve) => (ready = resolve)));
+      const version = vitest.spyOn(sut, 'getVersionMessage' as never);
+
+      const loggingIn = sut.loginToDiscord();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(version).not.toHaveBeenCalled();
+      ready();
+      await loggingIn;
+
+      expect(discordMock.login).toHaveBeenCalledExactlyOnceWith('token');
+      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced));
+      expect(discordMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        channelId: DiscordChannel.BotSpam,
+        message: alive,
+      });
+    });
+
+    it('should announce on Zulip alone, logging no failure, with the dev token', async () => {
+      discordMock.isReady.mockReturnValue(false);
+
+      await sut.loginToDiscord();
+
+      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced));
+      expect(discordMock.login).not.toHaveBeenCalled();
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(errorMock).not.toHaveBeenCalled();
+      expect(fatalMock).not.toHaveBeenCalled();
+    });
+
+    it('should report a failed Discord login on Zulip instead of announcing, and fail the boot', async () => {
+      config.botToken = 'revoked';
+      discordMock.isReady.mockReturnValue(false);
+      discordMock.login.mockRejectedValue(new Error('An invalid token was provided.'));
+      const version = vitest.spyOn(sut, 'getVersionMessage' as never);
+
+      await expect(sut.loginToDiscord()).rejects.toThrow('An invalid token was provided.');
+
+      expect(version).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 113,
+        topic: 'bot',
+        content: 'Discord login failed:\n~~~ quote\nError: An invalid token was provided.\n~~~',
+      });
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should announce on Zulip alone once Discord has not turned ready for a minute', async () => {
+      vitest.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      config.botToken = 'token';
+      discordMock.isReady.mockReturnValue(false);
+      discordMock.login.mockReturnValue(new Promise(() => {}));
+      const version = vitest.spyOn(sut, 'getVersionMessage' as never);
+
+      void sut.loginToDiscord();
+      await vitest.advanceTimersByTimeAsync(59_999);
+      expect(version).not.toHaveBeenCalled();
+      await vitest.advanceTimersByTimeAsync(1);
+
+      await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced));
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should post nothing when Discord turns ready: the start is announced once per process', () => {
+      sut.onReady();
+
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should report a Discord client error on Discord bot-spam and the Zulip bot topic', async () => {
+      await sut.onError(new Error('gateway closed by @**all**'));
+
+      expect(discordMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        channelId: DiscordChannel.BotSpam,
+        message: 'Discord bot error: Error: gateway closed by @**all**',
+      });
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 113,
+        topic: 'bot',
+        content: 'Discord bot error:\n~~~ quote\nError: gateway closed by @\u200B**all**\n~~~',
+      });
+    });
+
+    it('should report once and resolve when neither platform takes the report', async () => {
+      discordMock.sendMessage.mockRejectedValue(new Error('discord down'));
+      zulipMock.sendMessage.mockRejectedValue(new Error('zulip down'));
+
+      await expect(sut.onError(new Error('boom'))).resolves.toBeUndefined();
+
+      expect(discordMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(errorMock.mock.calls.map(([message]) => message)).toEqual([
+        'Discord bot error',
+        'Could not notify team.bot on discord: Error: discord down',
+        'Could not notify team.bot on zulip: Error: zulip down',
+      ]);
+      expect(fatalMock).toHaveBeenCalledExactlyOnceWith(
+        'Could not notify team.bot on any platform: notification dropped',
+      );
+    });
+
+    it('should ignore a send to a thread Discord has not finished creating', async () => {
+      const error = new Error('Unknown Message');
+      error.name = 'DiscordAPIError[10008]';
+
+      await sut.onError(error);
+
+      expect(discordMock.sendMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
   });
 
