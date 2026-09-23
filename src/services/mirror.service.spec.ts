@@ -745,6 +745,27 @@ describe(MirrorService.name, () => {
       expect(zulip.sendMessage).not.toHaveBeenCalled();
     });
 
+    it('should not create what was already queued once the pair turns off', async () => {
+      vitest.useFakeTimers();
+      await start();
+      await vitest.advanceTimersByTimeAsync(10 * 60 * 1000 - 1000);
+      let resolveSend!: (value: { id: number }) => void;
+      zulip.sendMessage.mockReturnValueOnce(new Promise((resolve) => (resolveSend = resolve)));
+      sut.onDiscordMessage(discordMessage({ content: 'first' }));
+      sut.onDiscordMessage(discordMessage({ id: '300000000000000002', content: 'second' }));
+      discord.getMirrorChannel.mockResolvedValue({
+        ...mirrorChannel(DEV_CHANNEL),
+        missingPermissions: ['ViewChannel'],
+      });
+
+      await vitest.advanceTimersByTimeAsync(2000);
+      resolveSend({ id: 5001 });
+      await sut.whenIdle();
+
+      expect(sut.handlesChannel(DEV_CHANNEL)).toBe(false);
+      expect(zulip.sendMessage).toHaveBeenCalledOnce();
+    });
+
     it('should turn a pair on again once its channel can be mirrored again, and catch up', async () => {
       vitest.useFakeTimers();
       seedRow({ zulipMessageId: 1000 });

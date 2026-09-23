@@ -585,6 +585,9 @@ export class MirrorService implements OnModuleDestroy {
     if (state.status !== 'disabled' || state.offReason !== reason) {
       this.logger[level](reason);
     }
+    if (state.status !== 'disabled') {
+      this.lostTrack(state);
+    }
     state.status = 'disabled';
     state.offReason = reason;
   }
