@@ -10,6 +10,7 @@ import {
   ZulipEventQueue,
   ZulipMessagesDeleted,
   ZulipMessageUpdated,
+  ZulipReactionChanged,
   ZulipReceivedMessage,
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
@@ -18,6 +19,7 @@ import { ZulipApiError } from 'src/repositories/zulip.client';
 export type ZulipMessageHandler = (message: ZulipReceivedMessage) => Promise<void> | void;
 export type ZulipUpdateHandler = (update: ZulipMessageUpdated) => Promise<void> | void;
 export type ZulipDeletionHandler = (deletion: ZulipMessagesDeleted) => Promise<void> | void;
+export type ZulipReactionHandler = (reaction: ZulipReactionChanged) => Promise<void> | void;
 export type ZulipRegistrationHandler = (registration: { subscribedStreamIds: number[] }) => void;
 
 const INITIAL_BACKOFF_MS = 1_000;
@@ -68,6 +70,7 @@ export class ZulipService implements OnModuleDestroy {
   private handlers: ZulipMessageHandler[] = [];
   private updateHandlers: ZulipUpdateHandler[] = [];
   private deletionHandlers: ZulipDeletionHandler[] = [];
+  private reactionHandlers: ZulipReactionHandler[] = [];
   private registrationHandlers: ZulipRegistrationHandler[] = [];
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
@@ -99,6 +102,10 @@ export class ZulipService implements OnModuleDestroy {
 
   onMessagesDeleted(handler: ZulipDeletionHandler) {
     this.deletionHandlers.push(handler);
+  }
+
+  onReaction(handler: ZulipReactionHandler) {
+    this.reactionHandlers.push(handler);
   }
 
   onQueueRegistered(handler: ZulipRegistrationHandler) {
@@ -279,6 +286,14 @@ export class ZulipService implements OnModuleDestroy {
       const { deletion } = event;
       for (const handler of this.deletionHandlers) {
         await this.runHandler(`the deletion of messages ${deletion.messageIds.join(', ')}`, () => handler(deletion));
+      }
+    } else if (event.reaction) {
+      const { reaction } = event;
+      if (reaction.userId === this.self?.userId) {
+        return;
+      }
+      for (const handler of this.reactionHandlers) {
+        await this.runHandler(`a reaction to message ${reaction.messageId}`, () => handler(reaction));
       }
     }
   }

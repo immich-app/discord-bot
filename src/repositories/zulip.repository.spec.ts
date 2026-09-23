@@ -163,6 +163,7 @@ describe('ZulipRepository', () => {
         topic: '#1234: feat: add thing',
         streamId: 120,
         senderFullName: 'Alice',
+        reactions: [],
       });
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -174,7 +175,35 @@ describe('ZulipRepository', () => {
     it('should return the empty topic as an empty string, not the realm\'s "general chat" display name', async () => {
       fetchMock.mockResolvedValue(json({ result: 'success', msg: '', message: { id: 42, subject: '' } }));
 
-      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '' });
+      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '', reactions: [] });
+    });
+
+    it('should return the reactions with who gave them, skipping any it cannot read', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          message: {
+            id: 42,
+            subject: 'x',
+            reactions: [
+              { emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'unicode_emoji', user_id: 12 },
+              { emoji_name: 'catjam', emoji_code: '1', reaction_type: 'realm_emoji', user_id: 7 },
+              { emoji_name: 'odd', emoji_code: '1', reaction_type: 'something_new', user_id: 7 },
+              { emoji_name: 'nobody', emoji_code: '1f44d', reaction_type: 'unicode_emoji' },
+            ],
+          },
+        }),
+      );
+
+      await expect(sut.getMessage(42)).resolves.toEqual(
+        expect.objectContaining({
+          reactions: [
+            { name: '+1', code: '1f44d', type: 'unicode_emoji', userId: 12 },
+            { name: 'catjam', code: '1', type: 'realm_emoji', userId: 7 },
+          ],
+        }),
+      );
     });
 
     it('should return the topic a human gave the message since, resolved prefix included', async () => {
@@ -182,7 +211,7 @@ describe('ZulipRepository', () => {
         json({ result: 'success', msg: '', message: { id: 42, subject: '✔ #1234: something else' } }),
       );
 
-      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '✔ #1234: something else' });
+      await expect(sut.getMessage(42)).resolves.toEqual({ id: 42, topic: '✔ #1234: something else', reactions: [] });
     });
 
     it('should throw on a Zulip error instead of resolving', async () => {
@@ -297,8 +326,8 @@ describe('ZulipRepository', () => {
       );
 
       await expect(sut.listEmoji()).resolves.toEqual([
-        { name: 'green_tick', deactivated: false },
-        { name: 'old', deactivated: true },
+        { id: '1', name: 'green_tick', deactivated: false },
+        { id: '2', name: 'old', deactivated: true },
       ]);
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -571,7 +600,7 @@ describe('ZulipRepository', () => {
       expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
       expect(request(0).headers.get('content-type')).toBe('application/x-www-form-urlencoded');
       expect(await request(0).text()).toBe(
-        'event_types=%5B%22message%22%2C%22update_message%22%2C%22delete_message%22%5D&apply_markdown=false&client_capabilities=%7B%22notification_settings_null%22%3Afalse%2C%22bulk_message_deletion%22%3Atrue%7D&fetch_event_types=%5B%22subscription%22%2C%22realm%22%5D',
+        'event_types=%5B%22message%22%2C%22update_message%22%2C%22delete_message%22%2C%22reaction%22%5D&apply_markdown=false&client_capabilities=%7B%22notification_settings_null%22%3Afalse%2C%22bulk_message_deletion%22%3Atrue%7D&fetch_event_types=%5B%22subscription%22%2C%22realm%22%5D',
       );
     });
 
@@ -702,6 +731,62 @@ describe('ZulipRepository', () => {
             movedAt: undefined,
           },
         },
+      ]);
+    });
+
+    it('should return an added and a removed reaction with the emoji and who gave it, and an unreadable one by type', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          events: [
+            {
+              id: 3,
+              type: 'reaction',
+              op: 'add',
+              user_id: 8,
+              message_id: 653,
+              emoji_name: 'thumbs_up',
+              emoji_code: '1f44d',
+              reaction_type: 'unicode_emoji',
+            },
+            {
+              id: 4,
+              type: 'reaction',
+              op: 'remove',
+              user_id: 8,
+              message_id: 656,
+              emoji_name: 'catjam',
+              emoji_code: '1',
+              reaction_type: 'realm_emoji',
+            },
+            { id: 5, type: 'reaction', op: 'add', message_id: 656 },
+          ],
+        }),
+      );
+
+      await expect(sut.getEvents({ queueId: 'q1', lastEventId: -1 }, live())).resolves.toEqual([
+        {
+          id: 3,
+          type: 'reaction',
+          reaction: {
+            op: 'add',
+            userId: 8,
+            messageId: 653,
+            emoji: { name: 'thumbs_up', code: '1f44d', type: 'unicode_emoji' },
+          },
+        },
+        {
+          id: 4,
+          type: 'reaction',
+          reaction: {
+            op: 'remove',
+            userId: 8,
+            messageId: 656,
+            emoji: { name: 'catjam', code: '1', type: 'realm_emoji' },
+          },
+        },
+        { id: 5, type: 'reaction' },
       ]);
     });
 
@@ -1326,15 +1411,13 @@ describe('ZulipRepository', () => {
         json({
           names: ['+1'],
           name_to_codepoint: { '+1': '1f44d', smile: '1f604', hash: '0023-20e3', flag_gb: '1f1ec-1f1e7' },
-          codepoint_to_name: {},
+          codepoint_to_name: { '1f44d': '+1', '1F604': 'smile', '0023-20e3': 'hash', 'not-hex': 'x', '1f1ec-1f1e7': 5 },
         }),
       );
 
       await expect(sut.getEmojiCodes()).resolves.toEqual({
-        '+1': '👍',
-        smile: '😄',
-        hash: '#⃣',
-        flag_gb: '🇬🇧',
+        unicode: { '+1': '👍', smile: '😄', hash: '#⃣', flag_gb: '🇬🇧' },
+        names: { '1f44d': '+1', '1f604': 'smile', '0023-20e3': 'hash' },
       });
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -1349,7 +1432,7 @@ describe('ZulipRepository', () => {
         }),
       );
 
-      await expect(sut.getEmojiCodes()).resolves.toEqual({ ok: '👍' });
+      await expect(sut.getEmojiCodes()).resolves.toEqual({ unicode: { ok: '👍' }, names: {} });
     });
 
     it('should throw when the table cannot be fetched', async () => {
@@ -1366,6 +1449,39 @@ describe('ZulipRepository', () => {
         await expect(sut.getEmojiCodes()).rejects.toThrow('The Zulip emoji codes have no name_to_codepoint table');
       },
     );
+  });
+
+  describe('reactions', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it.each([
+      ['addReaction', 'POST'],
+      ['removeReaction', 'DELETE'],
+    ] as const)('should %s as the bot, naming the emoji exactly', async (method, verb) => {
+      fetchMock.mockResolvedValue(json({ result: 'success', msg: '' }));
+
+      await sut[method](42, { name: 'flag_germany', code: '1f1e9-1f1ea', type: 'unicode_emoji' });
+
+      expect(request(0).method).toBe(verb);
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/messages/42/reactions');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.bot));
+      expect(await request(0).text()).toBe(
+        'emoji_name=flag_germany&emoji_code=1f1e9-1f1ea&reaction_type=unicode_emoji',
+      );
+    });
+
+    it('should reject with the code Zulip gives a reaction the bot has already', async () => {
+      fetchMock.mockResolvedValue(
+        json({ result: 'error', msg: 'Reaction already exists.', code: 'REACTION_ALREADY_EXISTS' }, { status: 400 }),
+      );
+
+      await expect(sut.addReaction(42, { name: 'catjam', code: '1', type: 'realm_emoji' })).rejects.toMatchObject({
+        status: 400,
+        code: 'REACTION_ALREADY_EXISTS',
+      });
+    });
   });
 
   describe('createEmote', () => {

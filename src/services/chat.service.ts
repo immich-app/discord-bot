@@ -15,7 +15,7 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
-import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { NotificationService } from 'src/services/notification.service';
 import { ZulipService } from 'src/services/zulip.service';
@@ -112,6 +112,18 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
   }
   claimed.add(candidate);
   return candidate;
+};
+
+/**
+ * The Zulip names the sync gives Discord's emotes, in Discord's order. A realm emoji already holding a built-in name
+ * (an administrator's override) counts as that emote, already synced, so that name is not claimed beforehand.
+ */
+/** Its logo emoji `zulip` is not in the table, and Zulip lets even a member replace it. */
+export const zulipBuiltInEmoji = ({ unicode }: ZulipEmojiCodes) => [...Object.keys(unicode), 'zulip'];
+
+export const zulipEmojiNames = (emoteNames: string[], builtIn: string[], existing: Set<string>) => {
+  const claimed = new Set(builtIn.filter((name) => !existing.has(name)));
+  return emoteNames.map((name) => claimZulipEmojiName(name, claimed));
 };
 
 const MATTERMOST_DUPLICATE_EMOJI = 'api.emoji.create.duplicate.app_error';
@@ -811,9 +823,15 @@ ${formattedCode}
     const existing = await this.listZulipEmoji();
     const mattermostSkipped = !this.mattermost.isInitialised();
     const onMattermost = mattermostSkipped ? undefined : await this.listMattermostEmoji();
-    // A realm emoji already holding a built-in name (an administrator's override) counts as that emote, already synced.
     const builtIn = existing ? await this.listZulipBuiltInEmoji() : undefined;
-    const claimed = new Set(builtIn?.filter((name) => !existing?.has(name)));
+    const zulipNames =
+      existing && builtIn
+        ? zulipEmojiNames(
+            emotes.map((emote) => emote.name ?? emote.identifier),
+            builtIn,
+            existing,
+          )
+        : [];
 
     let zulipSkipped: ZulipSkipReason | undefined = existing ? (builtIn ? undefined : 'builtins') : 'unlisted';
     let zulipUploaded = 0;
@@ -822,14 +840,14 @@ ${formattedCode}
     const renamed: string[] = [];
     const alreadyOnZulip: string[] = [];
     const alreadyOnMattermost: string[] = [];
-    for (const emote of emotes) {
+    for (const [index, emote] of emotes.entries()) {
       const name = emote.name ?? emote.identifier;
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
 
       // One bad emote, or one platform being down, must not abort the rest of the sync.
       let zulipFailed = false;
       if (existing && !zulipSkipped) {
-        const zulipName = claimZulipEmojiName(name, claimed);
+        const zulipName = zulipNames[index];
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
         if (existing.has(zulipName)) {
           alreadyOnZulip.push(asZulip);
@@ -914,11 +932,10 @@ ${formattedCode}
   /**
    * Zulip refuses a built-in emoji's name from a member (`Only administrators can override default emoji.`) and
    * takes it from an administrator as a realm-wide replacement of the built-in, so those names are never uploaded.
-   * Its logo emoji `zulip` is not in the table, and Zulip lets even a member replace it.
    */
   private async listZulipBuiltInEmoji() {
     try {
-      return [...Object.keys(await this.zulip.getEmojiCodes()), 'zulip'];
+      return zulipBuiltInEmoji(await this.zulip.getEmojiCodes());
     } catch (error) {
       this.logger.error('Could not fetch the Zulip built-in emoji names, skipping the Zulip side of the sync', error);
       return undefined;

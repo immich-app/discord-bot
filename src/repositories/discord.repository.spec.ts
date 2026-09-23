@@ -24,6 +24,7 @@ const bot = vitest.hoisted(() => ({
   user: null as { id: string; displayAvatarURL: (options: unknown) => string } | null,
   channels: { fetch: vitest.fn() },
   guilds: { cache: new Map<string, unknown>() },
+  rest: { put: vitest.fn(), delete: vitest.fn() },
 }));
 
 const webhookClients = vitest.hoisted(() => new Map<string, object>());
@@ -603,6 +604,56 @@ describe(DiscordRepository.name, () => {
     it('should refuse a channel without messages', async () => {
       bot.channels.fetch.mockResolvedValue({ isTextBased: () => false });
       await expect(sut.deleteMirrorMessage(target())).rejects.toMatchObject({ kind: 'unknown-channel' });
+    });
+  });
+
+  describe('reactions', () => {
+    it('should read the reactions of the message afresh, with whether the bot gave one', async () => {
+      const fetch = vitest.fn().mockResolvedValue({
+        reactions: {
+          cache: new Collection([
+            ['👍', { emoji: { id: null, name: '👍' }, count: 2, me: true }],
+            ['5', { emoji: { id: '5', name: 'catJAM', animated: true }, count: 1, me: false }],
+          ]),
+        },
+      });
+      bot.channels.fetch.mockResolvedValue(makeThread({ isDMBased: () => false, messages: { fetch } }));
+
+      await expect(sut.getMirrorReactions(target())).resolves.toEqual([
+        { emoji: { id: null, name: '👍', animated: false }, count: 2, me: true },
+        { emoji: { id: '5', name: 'catJAM', animated: true }, count: 1, me: false },
+      ]);
+      expect(bot.channels.fetch).toHaveBeenCalledWith(threadId);
+      expect(fetch).toHaveBeenCalledWith({ message: '300000000000000001', force: true });
+    });
+
+    it('should map a message that is gone', async () => {
+      channel.messages.fetch.mockRejectedValue(apiError(10_008, 404));
+
+      await expect(sut.getMirrorReactions(target({ threadId: null }))).rejects.toMatchObject({
+        kind: 'unknown-message',
+      });
+    });
+
+    it('should react and take the reaction back as the bot, a Unicode emoji encoded and an emote by name and ID', async () => {
+      await sut.addMirrorReaction(target(), { id: null, name: '❤️', animated: false });
+      await sut.removeMirrorReaction(target({ threadId: null }), { id: '5', name: 'catJAM', animated: true });
+
+      expect(bot.rest.put).toHaveBeenCalledWith(
+        `/channels/${threadId}/messages/300000000000000001/reactions/${encodeURIComponent('❤️')}/@me`,
+      );
+      expect(bot.rest.delete).toHaveBeenCalledWith(
+        `/channels/${channelId}/messages/300000000000000001/reactions/catJAM%3A5/@me`,
+      );
+    });
+
+    it('should map an emoji Discord does not know', async () => {
+      bot.rest.put.mockRejectedValue(apiError(10_014));
+
+      await expect(sut.addMirrorReaction(target(), { id: null, name: '❤', animated: false })).rejects.toMatchObject({
+        kind: 'unknown-emoji',
+        code: 10_014,
+      });
     });
   });
 

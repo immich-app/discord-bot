@@ -9,6 +9,7 @@ import {
   Partials,
   PermissionsString,
   RESTJSONErrorCodes,
+  Routes,
   ThreadAutoArchiveDuration,
   Webhook,
   WebhookClient,
@@ -22,9 +23,11 @@ import {
   DiscordMirrorErrorKind,
   DiscordMirrorNotice,
   DiscordMirrorPage,
+  DiscordMirrorReaction,
   DiscordMirrorSend,
   DiscordMirrorSent,
   DiscordMirrorTarget,
+  DiscordReactionEmoji,
   DiscordTeamMember,
   IDiscordMirrorInterface,
 } from 'src/interfaces/discord-mirror.interface';
@@ -78,7 +81,8 @@ const bot = new Client({
     prefix: '/',
   },
 
-  partials: [Partials.Message, Partials.Reaction],
+  // A reaction removed by a user who is not cached arrives with a partial user, or not at all without it.
+  partials: [Partials.Message, Partials.Reaction, Partials.User],
 
   guards: [reportErrors((error) => reportHandlerError(error))],
 });
@@ -87,6 +91,7 @@ const mirrorErrorKinds: Partial<Record<number, DiscordMirrorErrorKind>> = {
   [RESTJSONErrorCodes.UnknownChannel]: 'unknown-channel',
   [RESTJSONErrorCodes.UnknownMessage]: 'unknown-message',
   [RESTJSONErrorCodes.UnknownWebhook]: 'unknown-webhook',
+  [RESTJSONErrorCodes.UnknownEmoji]: 'unknown-emoji',
   [RESTJSONErrorCodes.MaximumNumberOfWebhooksReached]: 'max-webhooks',
   [RESTJSONErrorCodes.RequestEntityTooLarge]: 'too-large',
   [RESTJSONErrorCodes.TagRequiredToCreateAForumPostInThisChannel]: 'forum',
@@ -173,6 +178,9 @@ const fetchAvatar = async (url: string) => {
 
 const hasCode = (error: unknown, ...codes: number[]) =>
   error instanceof DiscordAPIError && typeof error.code === 'number' && codes.includes(error.code);
+
+/** `Routes` percent-encodes it. */
+const emojiRoute = ({ id, name }: DiscordReactionEmoji) => (id === null ? (name ?? '') : `${name ?? '_'}:${id}`);
 
 const bySnowflake = (a: { id: string }, b: { id: string }) => {
   const [x, y] = [BigInt(a.id), BigInt(b.id)];
@@ -262,6 +270,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
     const emotes = await guild.emojis.fetch();
     return emotes.map((emote) => ({
+      id: emote.id,
       identifier: emote.identifier,
       name: emote.name,
       url: emote.imageURL(),
@@ -542,6 +551,43 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       } else {
         throw new DiscordMirrorError('unknown-channel');
       }
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async getMirrorReactions(target: DiscordMirrorTarget): Promise<DiscordMirrorReaction[]> {
+    try {
+      const channel = await bot.channels.fetch(target.threadId ?? target.channelId);
+      if (!channel?.isTextBased() || channel.isDMBased()) {
+        throw new DiscordMirrorError('unknown-channel');
+      }
+      const message = await channel.messages.fetch({ message: target.messageId, force: true });
+      return message.reactions.cache.map(({ emoji, count, me }) => ({
+        emoji: { id: emoji.id, name: emoji.name, animated: emoji.animated ?? false },
+        count,
+        me,
+      }));
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async addMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji) {
+    try {
+      await bot.rest.put(
+        Routes.channelMessageOwnReaction(target.threadId ?? target.channelId, target.messageId, emojiRoute(emoji)),
+      );
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  async removeMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji) {
+    try {
+      await bot.rest.delete(
+        Routes.channelMessageOwnReaction(target.threadId ?? target.channelId, target.messageId, emojiRoute(emoji)),
+      );
     } catch (error) {
       throw toMirrorError(error);
     }

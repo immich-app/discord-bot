@@ -183,6 +183,8 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   downloadUpload: vitest.fn(),
   getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
+  addReaction: vitest.fn(),
+  removeReaction: vitest.fn(),
 });
 
 const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
@@ -705,16 +707,34 @@ describe('Bot test', () => {
 
     beforeEach(() => {
       zulipMock.listEmoji.mockResolvedValue([]);
-      zulipMock.getEmojiCodes.mockResolvedValue({ fire: '🔥', tada: '🎉', wave: '👋' });
+      zulipMock.getEmojiCodes.mockResolvedValue({ unicode: { fire: '🔥', tada: '🎉', wave: '👋' }, names: {} });
       mattermostMock.listEmoji.mockResolvedValue([]);
     });
 
     it('should upload every Discord emote to Zulip and Mattermost, then report done', async () => {
       const { interaction, deferReply, reply } = newInteraction();
       discordMock.getEmotes.mockResolvedValue([
-        { identifier: 'catJAM:1', name: 'catJAM', url: 'https://cdn.discordapp.com/emojis/1.webp', animated: false },
-        { identifier: 'a:pepeD:2', name: 'pepeD', url: 'https://cdn.discordapp.com/emojis/2.webp', animated: true },
-        { identifier: 'nameless:3', name: null, url: 'https://cdn.discordapp.com/emojis/3.png', animated: false },
+        {
+          id: '1',
+          identifier: 'catJAM:1',
+          name: 'catJAM',
+          url: 'https://cdn.discordapp.com/emojis/1.webp',
+          animated: false,
+        },
+        {
+          id: '2',
+          identifier: 'a:pepeD:2',
+          name: 'pepeD',
+          url: 'https://cdn.discordapp.com/emojis/2.webp',
+          animated: true,
+        },
+        {
+          id: '3',
+          identifier: 'nameless:3',
+          name: null,
+          url: 'https://cdn.discordapp.com/emojis/3.png',
+          animated: false,
+        },
       ]);
 
       await syncEmotes(interaction);
@@ -765,7 +785,7 @@ describe('Bot test', () => {
       },
     ])('should upload $url as $expected when animated is $animated', async ({ animated, url, expected }) => {
       const { interaction } = newInteraction();
-      discordMock.getEmotes.mockResolvedValue([{ identifier: 'catJAM:1', name: 'catJAM', url, animated }]);
+      discordMock.getEmotes.mockResolvedValue([{ id: '1', identifier: 'catJAM:1', name: 'catJAM', url, animated }]);
 
       await syncEmotes(interaction);
 
@@ -778,8 +798,20 @@ describe('Bot test', () => {
     it('should defer the reply, upload each emote to Zulip then Mattermost one at a time, then edit the reply', async () => {
       const { interaction, deferReply, reply } = newInteraction();
       discordMock.getEmotes.mockResolvedValue([
-        { identifier: 'catJAM:1', name: 'catJAM', url: 'https://cdn.discordapp.com/emojis/1.webp', animated: false },
-        { identifier: 'pepeD:2', name: 'pepeD', url: 'https://cdn.discordapp.com/emojis/2.webp', animated: false },
+        {
+          id: '1',
+          identifier: 'catJAM:1',
+          name: 'catJAM',
+          url: 'https://cdn.discordapp.com/emojis/1.webp',
+          animated: false,
+        },
+        {
+          id: '2',
+          identifier: 'pepeD:2',
+          name: 'pepeD',
+          url: 'https://cdn.discordapp.com/emojis/2.webp',
+          animated: false,
+        },
       ]);
 
       await syncEmotes(interaction);
@@ -802,6 +834,7 @@ describe('Bot test', () => {
 
     describe('Zulip names', () => {
       const emote = (name: string, id: number) => ({
+        id: String(id),
         identifier: `${name}:${id}`,
         name,
         url: `https://cdn.discordapp.com/emojis/${id}.webp`,
@@ -899,7 +932,7 @@ describe('Bot test', () => {
 
       it('should skip a suffix that is built-in or already claimed in the run', async () => {
         const { interaction, reply } = newInteraction();
-        zulipMock.getEmojiCodes.mockResolvedValue({ fire: '🔥', fire3: '🔥' });
+        zulipMock.getEmojiCodes.mockResolvedValue({ unicode: { fire: '🔥', fire3: '🔥' }, names: {} });
         discordMock.getEmotes.mockResolvedValue([emote('fire2', 1), emote('fire', 2), emote('FIRE', 3)]);
 
         await syncEmotes(interaction);
@@ -916,7 +949,7 @@ describe('Bot test', () => {
 
       it('should count a realm emoji that already overrides a built-in name as that emote, uploading no suffixed copy', async () => {
         const { interaction, reply } = newInteraction();
-        zulipMock.listEmoji.mockResolvedValue([{ name: 'fire', deactivated: false }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'fire', deactivated: false }]);
         discordMock.getEmotes.mockResolvedValue([emote('fire', 1), emote('Fire', 2), emote('tada', 3)]);
 
         await syncEmotes(interaction);
@@ -932,7 +965,7 @@ describe('Bot test', () => {
 
       it('should suffix an emote named like a built-in whose override is deactivated', async () => {
         const { interaction } = newInteraction();
-        zulipMock.listEmoji.mockResolvedValue([{ name: 'fire', deactivated: true }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'fire', deactivated: true }]);
         discordMock.getEmotes.mockResolvedValue([emote('fire', 1)]);
 
         await syncEmotes(interaction);
@@ -946,7 +979,7 @@ describe('Bot test', () => {
       it('should skip an emote whose name is already on Zulip instead of uploading it again', async () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('pepeD', 2)]);
-        zulipMock.listEmoji.mockResolvedValue([{ name: 'catjam', deactivated: false }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'catjam', deactivated: false }]);
 
         await syncEmotes(interaction);
 
@@ -961,7 +994,7 @@ describe('Bot test', () => {
       it('should treat a deactivated Zulip emoji as absent', async () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1)]);
-        zulipMock.listEmoji.mockResolvedValue([{ name: 'catjam', deactivated: true }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'catjam', deactivated: true }]);
 
         await syncEmotes(interaction);
 
@@ -989,7 +1022,11 @@ describe('Bot test', () => {
 
         zulipMock.createEmote.mockClear();
         zulipMock.listEmoji.mockResolvedValue(
-          ['catjam', 'catjam2', 'nameless_3', 'wave2'].map((name) => ({ name, deactivated: false })),
+          ['catjam', 'catjam2', 'nameless_3', 'wave2'].map((name, index) => ({
+            id: String(index),
+            name,
+            deactivated: false,
+          })),
         );
         const { interaction, reply } = newInteraction();
 
@@ -1029,8 +1066,20 @@ describe('Bot test', () => {
 
     describe('Mattermost names', () => {
       const emotes = [
-        { identifier: 'catJAM:1', name: 'catJAM', url: 'https://cdn.discordapp.com/emojis/1.webp', animated: false },
-        { identifier: 'pepeD:2', name: 'pepeD', url: 'https://cdn.discordapp.com/emojis/2.webp', animated: false },
+        {
+          id: '1',
+          identifier: 'catJAM:1',
+          name: 'catJAM',
+          url: 'https://cdn.discordapp.com/emojis/1.webp',
+          animated: false,
+        },
+        {
+          id: '2',
+          identifier: 'pepeD:2',
+          name: 'pepeD',
+          url: 'https://cdn.discordapp.com/emojis/2.webp',
+          animated: false,
+        },
       ];
       const duplicate = () =>
         new ClientError('https://mattermost.example.com', {
@@ -1117,9 +1166,27 @@ describe('Bot test', () => {
 
     describe('failures', () => {
       const emotes = [
-        { identifier: 'catJAM:1', name: 'catJAM', url: 'https://cdn.discordapp.com/emojis/1.webp', animated: false },
-        { identifier: 'pepeD:2', name: 'pepeD', url: 'https://cdn.discordapp.com/emojis/2.webp', animated: false },
-        { identifier: 'nameless:3', name: null, url: 'https://cdn.discordapp.com/emojis/3.png', animated: false },
+        {
+          id: '1',
+          identifier: 'catJAM:1',
+          name: 'catJAM',
+          url: 'https://cdn.discordapp.com/emojis/1.webp',
+          animated: false,
+        },
+        {
+          id: '2',
+          identifier: 'pepeD:2',
+          name: 'pepeD',
+          url: 'https://cdn.discordapp.com/emojis/2.webp',
+          animated: false,
+        },
+        {
+          id: '3',
+          identifier: 'nameless:3',
+          name: null,
+          url: 'https://cdn.discordapp.com/emojis/3.png',
+          animated: false,
+        },
       ];
       const zulipUploads = [
         ['catjam', 'https://cdn.discordapp.com/emojis/1.webp'],
@@ -1312,6 +1379,7 @@ describe('Bot test', () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue(
           Array.from({ length: 300 }, (_, index) => ({
+            id: String(index),
             identifier: `emote_number_${index}:${index}`,
             name: `emote_number_${index}`,
             url: `https://cdn.discordapp.com/emojis/${index}.webp`,

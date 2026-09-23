@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { AnyThreadChannel, ChannelType, Collection, Message, TextBasedChannel } from 'discord.js';
 import { MetadataStorage } from 'discordx';
+import { Constants } from 'src/constants';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
 import { isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { MirrorService } from 'src/services/mirror.service';
@@ -37,6 +38,7 @@ describe(DiscordMirrorEvents.name, () => {
       | 'onDiscordMessagesDeleted'
       | 'onDiscordThreadRenamed'
       | 'onDiscordThreadDeleted'
+      | 'onDiscordReactionsChanged'
       | 'onDiscordReady'
       | 'onDiscordDisconnected'
       | 'onDiscordResumed'
@@ -52,6 +54,7 @@ describe(DiscordMirrorEvents.name, () => {
       onDiscordMessagesDeleted: vitest.fn(),
       onDiscordThreadRenamed: vitest.fn(),
       onDiscordThreadDeleted: vitest.fn(),
+      onDiscordReactionsChanged: vitest.fn(),
       onDiscordReady: vitest.fn().mockResolvedValue(undefined),
       onDiscordDisconnected: vitest.fn(),
       onDiscordResumed: vitest.fn(),
@@ -75,6 +78,10 @@ describe(DiscordMirrorEvents.name, () => {
       messageUpdate: 0,
       messageDelete: 0,
       messageDeleteBulk: 0,
+      messageReactionAdd: 0,
+      messageReactionRemove: 0,
+      messageReactionRemoveAll: 0,
+      messageReactionRemoveEmoji: 0,
       threadUpdate: 0,
       threadDelete: 0,
       shardReady: Number.MAX_SAFE_INTEGER,
@@ -136,6 +143,37 @@ describe(DiscordMirrorEvents.name, () => {
     sut.onMessageDelete([{ id: dto.id, channel } as unknown as Message<true>]);
 
     expect(mirror.onDiscordMessagesDeleted).not.toHaveBeenCalled();
+  });
+
+  describe('reactions', () => {
+    const BOT_USER = '500000000000000001';
+    const reacted = (overrides: Record<string, unknown> = {}) =>
+      ({
+        id: dto.id,
+        guildId: Constants.Discord.Servers[0],
+        channel: guildChannel,
+        client: { user: { id: BOT_USER } },
+        ...overrides,
+      }) as unknown as Message<true>;
+
+    it('should pass every change to the reactions of a message in a mirrored channel on', () => {
+      sut.onReactionAdd([{ message: reacted() }, { id: '400000000000000001' }] as never);
+      sut.onReactionRemove([{ message: reacted() }, { id: '400000000000000001' }] as never);
+      sut.onReactionRemoveAll([reacted(), new Collection()] as never);
+      sut.onReactionRemoveEmoji([{ message: reacted() }] as never);
+
+      expect(mirror.onDiscordReactionsChanged.mock.calls).toEqual(Array(4).fill([PARENT, dto.id]));
+    });
+
+    it.each([
+      ["the bot's own", [{ message: reacted() }, { id: BOT_USER }]],
+      ['one in another guild', [{ message: reacted({ guildId: '999' }) }, { id: '400000000000000001' }]],
+      ['one in an uncached channel', [{ message: reacted({ channel: null }) }, { id: '400000000000000001' }]],
+    ])('should drop %s reaction', (_, args) => {
+      sut.onReactionAdd(args as never);
+
+      expect(mirror.onDiscordReactionsChanged).not.toHaveBeenCalled();
+    });
   });
 
   it('should pass a thread rename on', () => {

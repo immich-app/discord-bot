@@ -232,6 +232,13 @@ describe('toZulipMirrorBody', () => {
       expect(body('<:catJam:123456789012345678> <a:party_parrot_:123456789012345678>')).toBe(':catjam: :party_parrot:');
     });
 
+    it('should map an emote to the realm emoji the emote sync made of it, renamed or not', () => {
+      const emotes = { ...ctx, zulipEmojiByEmoteId: new Map([['123456789012345671', 'fire2']]) };
+      const dto = message({ content: '<:fire:123456789012345671> <:fire:123456789012345672>' });
+
+      expect(toZulipMirrorBody(dto, emotes)).toBe(':fire2: :fire:');
+    });
+
     it('should turn timestamps into Zulip times', () => {
       expect(body('<t:1700000000> <t:1700000000:R> <t:9999999999999:R>')).toBe(
         '<time:2023-11-14T22:13:20.000Z> <time:2023-11-14T22:13:20.000Z> <t:9999999999999:R>',

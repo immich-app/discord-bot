@@ -16,6 +16,8 @@ import { toZulipEmojiName } from 'src/services/chat.service';
 export type DiscordRenderContext = {
   /** Verified team members only. */
   zulipUserByDiscordId: Map<string, number>;
+  /** The realm emoji the emote sync made of each Discord emote, by emote ID. */
+  zulipEmojiByEmoteId?: Map<string, string>;
 };
 
 export type ZulipReplyTarget =
@@ -63,7 +65,7 @@ const DISCORD_INLINE = new RegExp(
     String.raw`<@!?(?<user>\d+)>`,
     String.raw`<@&(?<role>\d+)>`,
     String.raw`<#(?<channel>\d+)>`,
-    String.raw`<a?:(?<emote>\w+):\d+>`,
+    String.raw`<a?:(?<emote>\w+):(?<emoteId>\d+)>`,
     String.raw`<t:(?<unix>-?\d{1,13})(?::[tTdDfFR])?>`,
     String.raw`<\/(?<command>[^:<>\n]+):\d+>`,
   ].join('|'),
@@ -170,7 +172,7 @@ const translateInline = (part: string, message: TranslatedMessage, ctx: DiscordR
       return `&#35;${escapeZulipInline(message.mentions.channels[groups.channel] ?? 'unknown-channel')}`;
     }
     if (groups.emote !== undefined) {
-      return `:${toZulipEmojiName(groups.emote)}:`;
+      return `:${ctx.zulipEmojiByEmoteId?.get(groups.emoteId!) ?? toZulipEmojiName(groups.emote)}:`;
     }
     if (groups.unix !== undefined) {
       const date = new Date(Number(groups.unix) * 1000);

@@ -44,7 +44,7 @@ export interface IDiscordInterface {
   /** `undefined` when the bot cannot see that guild: not logged in to Discord, or not a member of it. */
   getEmotes(
     guildId: string,
-  ): Promise<{ identifier: string; name: string | null; url: string; animated: boolean }[] | undefined>;
+  ): Promise<{ id: string; identifier: string; name: string | null; url: string; animated: boolean }[] | undefined>;
   createThread(
     channelId: string,
     dto: { name: string; message: string; appliedTags?: string[] },

@@ -59,6 +59,8 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   downloadUpload: vitest.fn(),
   getStreamMessagesBefore: vitest.fn(),
   getEmojiCodes: vitest.fn(),
+  addReaction: vitest.fn(),
+  removeReaction: vitest.fn(),
 });
 
 /** A relevant holiday on the day after the frozen clock, unless overridden. */
@@ -897,6 +899,29 @@ describe('ZulipService', () => {
         expect(second).toHaveBeenCalledTimes(2);
         expect(handler).not.toHaveBeenCalled();
         expect(onUpdate).not.toHaveBeenCalled();
+      });
+
+      it("should hand every reaction but the bot's own to the reaction handlers", async () => {
+        const onReaction = vitest.fn();
+        sut.onReaction(onReaction);
+        const reaction = (id: number, userId: number) => ({
+          id,
+          type: 'reaction' as const,
+          reaction: {
+            op: 'add' as const,
+            userId,
+            messageId: 500,
+            emoji: { name: '+1', code: '1f44d', type: 'unicode_emoji' as const },
+          },
+        });
+
+        polls[0].resolve([reaction(9, 20), reaction(10, OWN_USER_ID)]);
+        await nextPoll();
+
+        expect(onReaction).toHaveBeenCalledExactlyOnceWith(reaction(9, 20).reaction);
+        expect(handler).not.toHaveBeenCalled();
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(polls[1].queue.lastEventId).toBe(10);
       });
 
       it('should run messages, updates and deletions in the order they arrived', async () => {

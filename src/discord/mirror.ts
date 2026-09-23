@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChannelType, TextBasedChannel } from 'discord.js';
+import { ChannelType, Message, PartialMessage, TextBasedChannel } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
+import { Constants } from 'src/constants';
 import { isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { MirrorService } from 'src/services/mirror.service';
 
@@ -45,6 +46,26 @@ export class DiscordMirrorEvents {
     }
   }
 
+  @On({ event: 'messageReactionAdd', priority: 0 })
+  onReactionAdd([reaction, user]: ArgsOf<'messageReactionAdd'>) {
+    this.reactionsChanged(reaction.message, user.id);
+  }
+
+  @On({ event: 'messageReactionRemove', priority: 0 })
+  onReactionRemove([reaction, user]: ArgsOf<'messageReactionRemove'>) {
+    this.reactionsChanged(reaction.message, user.id);
+  }
+
+  @On({ event: 'messageReactionRemoveAll', priority: 0 })
+  onReactionRemoveAll([message]: ArgsOf<'messageReactionRemoveAll'>) {
+    this.reactionsChanged(message);
+  }
+
+  @On({ event: 'messageReactionRemoveEmoji', priority: 0 })
+  onReactionRemoveEmoji([reaction]: ArgsOf<'messageReactionRemoveEmoji'>) {
+    this.reactionsChanged(reaction.message);
+  }
+
   @On({ event: 'threadUpdate', priority: 0 })
   onThreadUpdate([oldThread, newThread]: ArgsOf<'threadUpdate'>) {
     const { parentId } = newThread;
@@ -62,6 +83,17 @@ export class DiscordMirrorEvents {
   onThreadDelete([thread]: ArgsOf<'threadDelete'>) {
     if (thread.parentId && this.mirror.handlesChannel(thread.parentId)) {
       this.mirror.onDiscordThreadDeleted({ channelId: thread.parentId, threadId: thread.id });
+    }
+  }
+
+  /** The bot's own reactions are the mirror's, never mirrored back. */
+  private reactionsChanged(message: Message | PartialMessage, userId?: string) {
+    if (userId === message.client.user.id || !Constants.Discord.Servers.includes(message.guildId ?? '')) {
+      return;
+    }
+    const channelId = parentOf(message.channel);
+    if (channelId && this.mirror.handlesChannel(channelId)) {
+      this.mirror.onDiscordReactionsChanged(channelId, message.id);
     }
   }
 

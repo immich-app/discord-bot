@@ -33,6 +33,7 @@ import { MirrorService } from 'src/services/mirror.service';
 import {
   ZulipDeletionHandler,
   ZulipMessageHandler,
+  ZulipReactionHandler,
   ZulipRegistrationHandler,
   ZulipService,
   ZulipUpdateHandler,
@@ -298,6 +299,9 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     fetchMirrorMessagesBefore: vitest.fn().mockResolvedValue({ messages: [], oldestId: null, full: false }),
     sendMirrorNotice: vitest.fn(),
     unpinMirrorNotice: vitest.fn(),
+    getMirrorReactions: vitest.fn().mockResolvedValue([]),
+    addMirrorReaction: vitest.fn().mockResolvedValue(undefined),
+    removeMirrorReaction: vitest.fn().mockResolvedValue(undefined),
   };
 };
 
@@ -311,7 +315,6 @@ const newZulipMock = (): Mocked<IZulipInterface> => {
     getMessage: vitest.fn(),
     updateMessage: vitest.fn().mockResolvedValue(undefined),
     createEmote: vitest.fn(),
-    listEmoji: vitest.fn(),
     getSubscriptions: vitest.fn(),
     getOwnUser: vitest.fn(),
     getUser: vitest.fn(),
@@ -324,7 +327,13 @@ const newZulipMock = (): Mocked<IZulipInterface> => {
     uploadFile: vitest.fn(async (file: File) => ({ url: UPLOAD_URL, filename: file.name })),
     downloadUpload: vitest.fn(async (path: string) => new File(['bytes'], path.slice(path.lastIndexOf('/') + 1))),
     getStreamMessagesBefore: vitest.fn().mockResolvedValue([]),
-    getEmojiCodes: vitest.fn().mockResolvedValue({ smile: '😄' }),
+    getEmojiCodes: vitest.fn().mockResolvedValue({
+      unicode: { smile: '😄', fire: '🔥' },
+      names: { '1f604': 'smile', '1f525': 'fire', '1f44d': '+1', '2764': 'heart' },
+    }),
+    listEmoji: vitest.fn().mockResolvedValue([]),
+    addReaction: vitest.fn().mockResolvedValue(undefined),
+    removeReaction: vitest.fn().mockResolvedValue(undefined),
   };
 };
 
@@ -334,6 +343,7 @@ const newZulipServiceStub = () => {
     update: [] as ZulipUpdateHandler[],
     deletion: [] as ZulipDeletionHandler[],
     registration: [] as ZulipRegistrationHandler[],
+    reaction: [] as ZulipReactionHandler[],
   };
   const service = {
     ownUser: BOT,
@@ -342,6 +352,7 @@ const newZulipServiceStub = () => {
     onMessageUpdate: vitest.fn((handler: ZulipUpdateHandler) => handlers.update.push(handler)),
     onMessagesDeleted: vitest.fn((handler: ZulipDeletionHandler) => handlers.deletion.push(handler)),
     onQueueRegistered: vitest.fn((handler: ZulipRegistrationHandler) => handlers.registration.push(handler)),
+    onReaction: vitest.fn((handler: ZulipReactionHandler) => handlers.reaction.push(handler)),
   };
   return { service, handlers };
 };
@@ -1343,16 +1354,40 @@ describe(MirrorService.name, () => {
 
     it('should resolve unicode and custom emoji', async () => {
       discord.getEmotes.mockResolvedValue([
-        { identifier: 'PartyParrot:500000000000000001', name: 'PartyParrot', url: 'x', animated: false },
-        { identifier: 'a:Dance:500000000000000002', name: 'Dance', url: 'y', animated: true },
+        {
+          id: '500000000000000001',
+          identifier: 'PartyParrot:500000000000000001',
+          name: 'PartyParrot',
+          url: 'x',
+          animated: false,
+        },
+        { id: '500000000000000002', identifier: 'a:Dance:500000000000000002', name: 'Dance', url: 'y', animated: true },
+        { id: '500000000000000003', identifier: 'fire:500000000000000003', name: 'fire', url: 'z', animated: false },
+        {
+          id: '500000000000000004',
+          identifier: 'unsynced:500000000000000004',
+          name: 'unsynced',
+          url: 'w',
+          animated: false,
+        },
+      ]);
+      zulip.listEmoji.mockResolvedValue([
+        { id: '1', name: 'partyparrot', deactivated: false },
+        { id: '2', name: 'dance', deactivated: false },
+        { id: '3', name: 'fire2', deactivated: false },
       ]);
 
-      await fromZulip(zulipMessage({ content: 'nice :smile: :partyparrot: :dance: :unknown:' }));
+      await fromZulip(
+        zulipMessage({ content: 'nice :smile: :partyparrot: :dance: :fire: :fire2: :unsynced: :unknown:' }),
+      );
       await fromZulip(zulipMessage({ id: 1002, content: ':smile:' }));
 
-      expect(sent(0).content).toBe('nice 😄 <:PartyParrot:500000000000000001> <a:Dance:500000000000000002> :unknown:');
+      expect(sent(0).content).toBe(
+        'nice 😄 <:PartyParrot:500000000000000001> <a:Dance:500000000000000002> 🔥 <:fire:500000000000000003> :unsynced: :unknown:',
+      );
       expect(zulip.getEmojiCodes).toHaveBeenCalledOnce();
       expect(discord.getEmotes).toHaveBeenCalledOnce();
+      expect(zulip.listEmoji).toHaveBeenCalledOnce();
     });
 
     it('should leave emoji names as they are while the emoji table cannot be read', async () => {
@@ -2452,6 +2487,253 @@ describe(MirrorService.name, () => {
 
       expect(discord.editMirrorMessage).toHaveBeenCalledTimes(2);
       expect(discord.sendMirrorMessage).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('reactions', () => {
+    const SOURCE = '300000000000000001';
+    const EMOTE = '500000000000000003';
+    const thumbsUp = { id: null, name: '👍', animated: false };
+    const heart = { id: null, name: '❤', animated: false };
+    const byBot = (emoji: object) => ({ ...emoji, userId: BOT.userId });
+
+    const reactOnZulip = async (messageId: number) => {
+      for (const handler of stub.handlers.reaction) {
+        await handler({ op: 'add', userId: 20, messageId, emoji: { name: 'x', code: 'x', type: 'unicode_emoji' } });
+      }
+      await sut.whenIdle();
+    };
+
+    const reactOnDiscord = async (messageId = SOURCE) => {
+      sut.onDiscordReactionsChanged(DEV_CHANNEL, messageId);
+      await sut.whenIdle();
+    };
+
+    const zulipReactions = (reactions: object[]) =>
+      zulip.getMessage.mockResolvedValue({ id: 70, topic: '', streamId: DEV_STREAM, reactions } as never);
+
+    beforeEach(async () => {
+      await start();
+      discord.getEmotes.mockResolvedValue([
+        { id: EMOTE, identifier: `fire:${EMOTE}`, name: 'fire', url: 'x', animated: false },
+        {
+          id: '500000000000000004',
+          identifier: 'unsynced:500000000000000004',
+          name: 'unsynced',
+          url: 'y',
+          animated: false,
+        },
+      ]);
+      zulip.listEmoji.mockResolvedValue([{ id: '3', name: 'fire2', deactivated: false }]);
+    });
+
+    it('should write a Discord emote in a message as the realm emoji the emote sync made of it', async () => {
+      await fromDiscord(discordMessage({ id: '300000000000000005', content: `hot <:fire:${EMOTE}>` }));
+
+      expect(sentMessages()[0].content).toBe('**Contrib** (&#64;contrib123): hot :fire2:');
+    });
+
+    describe('Discord to Zulip', () => {
+      beforeEach(() => {
+        seedRow({ discordMessageId: SOURCE, origin: 'discord', discordWebhookId: null, zulipMessageId: 70 });
+        zulipReactions([]);
+      });
+
+      it('should react on the Zulip copy as the bot once a Discord user reacts, by the emoji Zulip names', async () => {
+        discord.getMirrorReactions.mockResolvedValue([
+          { emoji: thumbsUp, count: 3, me: false },
+          { emoji: { id: null, name: '❤️', animated: false }, count: 1, me: false },
+          { emoji: { id: null, name: '👍🏽', animated: false }, count: 1, me: false },
+        ]);
+
+        await reactOnDiscord();
+
+        expect(discord.getMirrorReactions).toHaveBeenCalledExactlyOnceWith({
+          channelId: DEV_CHANNEL,
+          threadId: null,
+          messageId: SOURCE,
+          webhookId: null,
+        });
+        expect(zulip.addReaction.mock.calls).toEqual([
+          [70, { name: '+1', code: '1f44d', type: 'unicode_emoji' }],
+          [70, { name: 'heart', code: '2764', type: 'unicode_emoji' }],
+        ]);
+        expect(zulip.removeReaction).not.toHaveBeenCalled();
+      });
+
+      it('should react with the realm emoji the emote sync made of a custom emote, renamed or not, and skip one it never made', async () => {
+        discord.getMirrorReactions.mockResolvedValue([
+          { emoji: { id: EMOTE, name: 'fire', animated: false }, count: 1, me: false },
+          { emoji: { id: '500000000000000004', name: 'unsynced', animated: false }, count: 1, me: false },
+        ]);
+
+        await reactOnDiscord();
+
+        expect(zulip.addReaction).toHaveBeenCalledExactlyOnceWith(70, {
+          name: 'fire2',
+          code: '3',
+          type: 'realm_emoji',
+        });
+      });
+
+      it("should take the bot's reaction back once no Discord user reacts with it, and leave Zulip users' alone", async () => {
+        discord.getMirrorReactions.mockResolvedValue([{ emoji: thumbsUp, count: 1, me: true }]);
+        zulipReactions([
+          byBot({ name: '+1', code: '1f44d', type: 'unicode_emoji' }),
+          { name: 'heart', code: '2764', type: 'unicode_emoji', userId: 20 },
+        ]);
+
+        await reactOnDiscord();
+
+        expect(zulip.addReaction).not.toHaveBeenCalled();
+        expect(zulip.removeReaction).toHaveBeenCalledExactlyOnceWith(70, {
+          name: '+1',
+          code: '1f44d',
+          type: 'unicode_emoji',
+        });
+      });
+
+      it('should count the reactions on every part of a split Zulip message', async () => {
+        seedRow({ discordMessageId: '800000000000000001', zulipMessageId: 71, part: 0 });
+        seedRow({ discordMessageId: '800000000000000002', zulipMessageId: 71, part: 1 });
+        discord.getMirrorReactions.mockImplementation(async ({ messageId }) =>
+          messageId === '800000000000000002' ? [{ emoji: thumbsUp, count: 1, me: false }] : [],
+        );
+
+        await reactOnDiscord('800000000000000001');
+
+        expect(discord.getMirrorReactions).toHaveBeenCalledTimes(2);
+        expect(zulip.getMessage).toHaveBeenCalledExactlyOnceWith(71);
+        expect(zulip.addReaction).toHaveBeenCalledExactlyOnceWith(71, expect.objectContaining({ name: '+1' }));
+      });
+
+      it('should sync once for changes queued before it runs', async () => {
+        sut.onDiscordReactionsChanged(DEV_CHANNEL, SOURCE);
+        sut.onDiscordReactionsChanged(DEV_CHANNEL, SOURCE);
+        await sut.whenIdle();
+        await reactOnDiscord();
+
+        expect(discord.getMirrorReactions).toHaveBeenCalledTimes(2);
+      });
+
+      it('should take a reaction Zulip already has, or has already lost, as done', async () => {
+        discord.getMirrorReactions.mockResolvedValue([{ emoji: thumbsUp, count: 1, me: false }]);
+        zulipReactions([byBot({ name: 'heart', code: '2764', type: 'unicode_emoji' })]);
+        zulip.addReaction.mockRejectedValue(
+          new ZulipApiError(400, 'REACTION_ALREADY_EXISTS', 'Reaction already exists.', 'POST'),
+        );
+        zulip.removeReaction.mockRejectedValue(
+          new ZulipApiError(400, 'REACTION_DOES_NOT_EXIST', "Reaction doesn't exist.", 'DELETE'),
+        );
+
+        await reactOnDiscord();
+
+        expect(zulip.addReaction).toHaveBeenCalledOnce();
+        expect(zulip.removeReaction).toHaveBeenCalledOnce();
+        expect(error()).not.toHaveBeenCalled();
+      });
+
+      it('should ignore a message that is not mirrored', async () => {
+        await reactOnDiscord('300000000000000999');
+
+        expect(discord.getMirrorReactions).not.toHaveBeenCalled();
+        expect(zulip.getMessage).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('Zulip to Discord', () => {
+      beforeEach(() => {
+        seedRow({ discordMessageId: '800000000000000001', zulipMessageId: 70, part: 0 });
+        seedRow({ discordMessageId: '800000000000000002', zulipMessageId: 70, part: 1 });
+      });
+
+      const target = { channelId: DEV_CHANNEL, threadId: null, messageId: '800000000000000001', webhookId: WEBHOOK };
+
+      it('should react on the first part of the Discord copy as the bot, leaving out its own Zulip reactions', async () => {
+        zulipReactions([
+          { name: 'heart', code: '2764', type: 'unicode_emoji', userId: 20 },
+          { name: 'heart', code: '2764', type: 'unicode_emoji', userId: 21 },
+          { name: 'fire2', code: '3', type: 'realm_emoji', userId: 20 },
+          { name: 'zulip', code: 'zulip', type: 'zulip_extra_emoji', userId: 20 },
+          { name: 'other', code: '9', type: 'realm_emoji', userId: 20 },
+          byBot({ name: '+1', code: '1f44d', type: 'unicode_emoji' }),
+        ]);
+
+        await reactOnZulip(70);
+
+        expect(discord.addMirrorReaction.mock.calls).toEqual([
+          [target, heart],
+          [target, { id: EMOTE, name: 'fire', animated: false }],
+        ]);
+        expect(discord.removeMirrorReaction).not.toHaveBeenCalled();
+      });
+
+      it('should change none of its reactions while the emotes cannot be matched', async () => {
+        discord.getMirrorReactions.mockResolvedValue([
+          { emoji: { id: EMOTE, name: 'fire', animated: false }, count: 2, me: true },
+        ]);
+        zulipReactions([{ name: 'fire2', code: '3', type: 'realm_emoji', userId: BOT.userId }]);
+        zulip.listEmoji.mockRejectedValueOnce(new ZulipApiError(401, 'UNAUTHORIZED', 'Invalid API key', 'GET'));
+        discord.getEmotes.mockResolvedValueOnce([]).mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
+
+        await reactOnZulip(70);
+        await reactOnZulip(70);
+        sut.onDiscordReactionsChanged(DEV_CHANNEL, '800000000000000001');
+        await sut.whenIdle();
+
+        expect(discord.removeMirrorReaction).not.toHaveBeenCalled();
+        expect(zulip.removeReaction).not.toHaveBeenCalled();
+        expect(error()).toHaveBeenCalledWith(
+          `Could not match the Discord emotes of guild ${GUILD} with the Zulip realm emoji: Zulip GET failed with 401 UNAUTHORIZED: Invalid API key`,
+        );
+      });
+
+      it('should try an emoji Discord does not know again with its variation selector', async () => {
+        zulipReactions([{ name: 'heart', code: '2764', type: 'unicode_emoji', userId: 20 }]);
+        discord.addMirrorReaction.mockRejectedValueOnce(new DiscordMirrorError('unknown-emoji', 10_014));
+
+        await reactOnZulip(70);
+
+        expect(discord.addMirrorReaction.mock.calls.map(([, emoji]) => emoji.name)).toEqual(['❤', '❤️']);
+        expect(error()).not.toHaveBeenCalled();
+      });
+
+      it('should take its reaction back once no Zulip user reacts with it, whatever form Discord reports it in', async () => {
+        zulipReactions([{ name: 'heart', code: '2764', type: 'unicode_emoji', userId: 20 }]);
+        discord.getMirrorReactions.mockResolvedValue([
+          { emoji: { id: null, name: '❤️', animated: false }, count: 2, me: true },
+          { emoji: thumbsUp, count: 1, me: true },
+          { emoji: { id: null, name: '🎉', animated: false }, count: 1, me: false },
+        ]);
+
+        await reactOnZulip(70);
+
+        expect(discord.addMirrorReaction).not.toHaveBeenCalled();
+        expect(discord.removeMirrorReaction).toHaveBeenCalledExactlyOnceWith(target, thumbsUp);
+      });
+
+      it('should look for the message in every pair, and touch only the one that has it', async () => {
+        zulipReactions([{ name: 'heart', code: '2764', type: 'unicode_emoji', userId: 20 }]);
+
+        await reactOnZulip(70);
+        await reactOnZulip(9999);
+
+        expect(zulip.getMessage).toHaveBeenCalledExactlyOnceWith(70);
+        expect(discord.addMirrorReaction).toHaveBeenCalledOnce();
+      });
+
+      it('should wait while Discord is not ready', async () => {
+        zulipReactions([{ name: 'heart', code: '2764', type: 'unicode_emoji', userId: 20 }]);
+        discord.isReady.mockReturnValue(false);
+
+        await reactOnZulip(70);
+        expect(discord.addMirrorReaction).not.toHaveBeenCalled();
+
+        discord.isReady.mockReturnValue(true);
+        await sut.onDiscordReady();
+        await sut.whenIdle();
+        expect(discord.addMirrorReaction).toHaveBeenCalledOnce();
+      });
     });
   });
 

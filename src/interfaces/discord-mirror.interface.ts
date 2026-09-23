@@ -56,6 +56,12 @@ export type DiscordMirrorTarget = {
 
 export type DiscordMirrorNotice = { messageId: string; pinned: boolean };
 
+/** `id` is set for a custom emote, whose name `name` is; otherwise `name` is the Unicode emoji. */
+export type DiscordReactionEmoji = { id: string | null; name: string | null; animated: boolean };
+
+/** `count` includes the bot's own reaction, which `me` says it has. */
+export type DiscordMirrorReaction = { emoji: DiscordReactionEmoji; count: number; me: boolean };
+
 export type DiscordTeamMember = { displayName: string; avatarUrl: string; roleIds: string[] };
 
 /** `messages` holds the mirror candidates of the page, oldest first; `oldestId` is the oldest message of any kind. */
@@ -72,6 +78,7 @@ export type DiscordMirrorErrorKind =
   | 'too-large'
   | 'forum'
   | 'replaced-webhook'
+  | 'unknown-emoji'
   | 'unavailable'
   | 'unreachable'
   | 'other';
@@ -110,6 +117,10 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
     pin: boolean,
   ): Promise<DiscordMirrorNotice>;
   unpinMirrorNotice(channelId: string, messageId: string): Promise<void>;
+  getMirrorReactions(target: DiscordMirrorTarget): Promise<DiscordMirrorReaction[]>;
+  /** As the bot; adding a reaction it has, or removing one it has not, changes nothing. */
+  addMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji): Promise<void>;
+  removeMirrorReaction(target: DiscordMirrorTarget, emoji: DiscordReactionEmoji): Promise<void>;
   /** `channelId` may be a thread. */
   fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
 }
