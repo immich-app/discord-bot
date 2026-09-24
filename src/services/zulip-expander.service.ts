@@ -13,6 +13,7 @@ const inOrder = (expanders: Iterable<ZulipExpanderKind>) => {
 @Injectable()
 export class ZulipExpanderService {
   private streams = new Map<number, Set<ZulipExpanderKind>>();
+  private writes = new Map<number, Promise<unknown>>();
 
   constructor(@Inject(IDatabaseRepository) private database: IDatabaseRepository) {}
 
@@ -39,25 +40,51 @@ export class ZulipExpanderService {
   }
 
   /** Resolves to the expanders that were off and are now on. */
-  async enable(streamId: number, expanders: ZulipExpanderKind[], createdBy: string) {
-    const added = await this.database.addZulipExpanders(streamId, expanders, createdBy);
-    for (const { expander } of added) {
-      this.cache(streamId, expander);
-    }
-    return inOrder(added.map(({ expander }) => expander));
+  enable(streamId: number, expanders: ZulipExpanderKind[], createdBy: string) {
+    return this.write(streamId, async () => {
+      const added = await this.database.addZulipExpanders(streamId, expanders, createdBy);
+      return inOrder(added.map(({ expander }) => expander));
+    });
   }
 
   /** Resolves to the expanders that were on and are now off. */
-  async disable(streamId: number, expanders: ZulipExpanderKind[]) {
-    const removed = await this.database.removeZulipExpanders(streamId, expanders);
-    const enabled = this.streams.get(streamId);
-    for (const { expander } of removed) {
-      enabled?.delete(expander);
+  disable(streamId: number, expanders: ZulipExpanderKind[]) {
+    return this.write(streamId, async () => {
+      const removed = await this.database.removeZulipExpanders(streamId, expanders);
+      return inOrder(removed.map(({ expander }) => expander));
+    });
+  }
+
+  /**
+   * A command the event loop stopped waiting for can still be writing when the next one runs, so a stream's writes
+   * run one at a time and its cache is read back from the table after each.
+   */
+  private write<T>(streamId: number, change: () => Promise<T>): Promise<T> {
+    const run = (this.writes.get(streamId) ?? Promise.resolve()).then(async () => {
+      try {
+        return await change();
+      } finally {
+        await this.reload(streamId);
+      }
+    });
+    const settled = run.catch(() => undefined);
+    this.writes.set(streamId, settled);
+    void settled.then(() => {
+      if (this.writes.get(streamId) === settled) {
+        this.writes.delete(streamId);
+      }
+    });
+    return run;
+  }
+
+  private async reload(streamId: number) {
+    const rows = await this.database.getZulipExpanders();
+    this.streams.delete(streamId);
+    for (const row of rows) {
+      if (row.streamId === streamId) {
+        this.cache(streamId, row.expander);
+      }
     }
-    if (enabled?.size === 0) {
-      this.streams.delete(streamId);
-    }
-    return inOrder(removed.map(({ expander }) => expander));
   }
 
   private cache(streamId: number, expander: ZulipExpanderKind) {

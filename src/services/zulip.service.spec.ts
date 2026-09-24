@@ -667,6 +667,7 @@ describe('ZulipService', () => {
         expect(Logger.prototype.warn).not.toHaveBeenCalled();
 
         expanderDatabase.addZulipExpanders.mockResolvedValue([expanderRow(997, 'github')]);
+        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(997, 'github')]);
         await expanders.enable(997, ['github'], 'Alice on Zulip (user 12)');
         polls[0].reject(badQueue());
         await nextPoll();

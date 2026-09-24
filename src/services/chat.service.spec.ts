@@ -1841,7 +1841,12 @@ describe('Bot test', () => {
 
     it('should follow a change to the expanders at once, with no query per message', async () => {
       databaseMock.removeZulipExpanders.mockResolvedValue([expanderRow(107, 'github')]);
+      const remaining = (await databaseMock.getZulipExpanders()).filter(
+        ({ streamId, expander }) => !(streamId === 107 && expander === 'github'),
+      );
+      databaseMock.getZulipExpanders.mockResolvedValue(remaining);
       await zulipExpanders.disable(107, ['github']);
+      const reads = databaseMock.getZulipExpanders.mock.calls.length;
 
       await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1 fixes #4242' }));
 
@@ -1851,7 +1856,7 @@ describe('Bot test', () => {
         topic: 'thumbnails',
         content: 'https://nitter.net/immich/status/1',
       });
-      expect(databaseMock.getZulipExpanders).toHaveBeenCalledOnce();
+      expect(databaseMock.getZulipExpanders).toHaveBeenCalledTimes(reads);
     });
 
     it('should reply with the expanded GitHub references in the same stream and topic', async () => {

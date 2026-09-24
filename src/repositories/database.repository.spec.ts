@@ -93,14 +93,27 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       rows.map(({ streamId, expander }) => `${streamId}:${expander}`);
 
     it('should seed both expanders in the Immich stream and every immich team stream', async () => {
-      await down(db);
-      await up(db);
-
-      const rows = await sut.getZulipExpanders();
-      expect(pairs(rows)).toEqual(
-        [54, 107, 108, 109, 110, 111, 112, 113].flatMap((streamId) => [`${streamId}:github`, `${streamId}:twitter`]),
-      );
-      expect(new Set(rows.map(({ createdBy }) => createdBy))).toEqual(new Set(['migration']));
+      const rolledBack = new Error('rolled back');
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await down(trx);
+          await up(trx);
+          const rows = await trx
+            .selectFrom('zulip_expander')
+            .selectAll()
+            .orderBy('streamId')
+            .orderBy('expander')
+            .execute();
+          expect(pairs(rows)).toEqual(
+            [54, 107, 108, 109, 110, 111, 112, 113].flatMap((streamId) => [
+              `${streamId}:github`,
+              `${streamId}:twitter`,
+            ]),
+          );
+          expect(new Set(rows.map(({ createdBy }) => createdBy))).toEqual(new Set(['migration']));
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
     });
 
     it('should add only what a stream does not have, and list by stream and expander', async () => {
