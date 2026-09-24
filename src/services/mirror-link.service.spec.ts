@@ -9,7 +9,7 @@ import {
 import { IZulipInterface, ZulipStream } from 'src/interfaces/zulip.interface';
 import { MirrorIdentity, MirrorLink, NewMirrorLink } from 'src/schema';
 import { MirrorActor, MirrorLinkService } from 'src/services/mirror-link.service';
-import { MirrorService } from 'src/services/mirror.service';
+import { BackfillOutcome, BackfillPlan, MirrorService } from 'src/services/mirror.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { afterEach, beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
 
@@ -97,7 +97,9 @@ describe(MirrorLinkService.name, () => {
     >
   >;
   let zulip: Mocked<Pick<IZulipInterface, 'getStream' | 'getSubscriptions' | 'sendMessage' | 'getUser'>>;
-  let mirror: Mocked<Pick<MirrorService, 'isActive' | 'enable' | 'disable' | 'refreshIdentities' | 'handlesChannel'>>;
+  let mirror: Mocked<
+    Pick<MirrorService, 'isActive' | 'enable' | 'disable' | 'refreshIdentities' | 'handlesChannel' | 'backfill'>
+  >;
 
   const zulipPosts = () => zulip.sendMessage.mock.calls.map(([payload]) => payload);
   const discordPosts = () => discord.sendMirrorNotice.mock.calls;
@@ -137,6 +139,7 @@ describe(MirrorLinkService.name, () => {
       disable: vitest.fn(),
       refreshIdentities: vitest.fn().mockResolvedValue(undefined),
       handlesChannel: vitest.fn().mockReturnValue(true),
+      backfill: vitest.fn(),
     };
     sut = new MirrorLinkService(
       db.repository as unknown as IDatabaseRepository,
@@ -656,6 +659,132 @@ describe(MirrorLinkService.name, () => {
       );
       expect(db.identities).toEqual([]);
       expect(mirror.refreshIdentities).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('backfill', () => {
+    const THREAD = '200000000000000001';
+    const plan = (overrides: Partial<BackfillPlan> = {}): BackfillPlan => ({
+      kind: 'text',
+      discordChannelId: CHANNEL,
+      threadId: null,
+      zulipStreamId: STREAM,
+      stream: 'immich-dev',
+      topic: '#dev',
+      ...overrides,
+    });
+
+    const run = async (actor: MirrorActor, planned: BackfillPlan, outcome: BackfillOutcome) => {
+      const acks: string[] = [];
+      mirror.backfill.mockImplementation(async (_, acknowledge) => {
+        await acknowledge(planned);
+        return { done: Promise.resolve(outcome) };
+      });
+      const result = await sut.backfill(
+        { target: { discordChannelId: CHANNEL, threadId: null }, actor },
+        async (ack) => {
+          acks.push(ack);
+        },
+      );
+      return { acks, report: 'done' in result ? await result.done : result.reply };
+    };
+
+    it('should describe what a Zulip backfill copies, and leave the report to the notices', async () => {
+      expect(
+        await run(BEA, plan({ threadId: THREAD, topic: 'Crash' }), { copied: 3, failed: 0, noticed: true }),
+      ).toEqual({
+        acks: [
+          `📜 Copying the messages of the Discord thread ${THREAD} that are not on Zulip yet into this topic, oldest first, up to the newest one now. Notices here mark where the history starts and where it ends, and new messages from Discord wait until it is done; a long history takes a while.`,
+        ],
+        report: undefined,
+      });
+      expect(Logger.prototype.log).toHaveBeenCalledWith('Zulip user 20 started a backfill of the Discord history');
+    });
+
+    it('should describe what a Discord backfill copies, and report the count', async () => {
+      expect(await run(ALEX, plan(), { copied: 3, failed: 1, noticed: true })).toEqual({
+        acks: [
+          '📜 Copying the messages of this channel that are not on Zulip yet into the topic `#dev` of the Zulip stream **#immich-dev** (120), oldest first, up to the newest one now. Notices there mark where the history starts and where it ends, and new messages here wait until it is done. A long history takes a while; the end notice on Zulip is the report.',
+        ],
+        report: 'Done: copied 3 messages to Zulip; 1 could not be copied, see the log.',
+      });
+    });
+
+    it('should say when the end notice could not be posted on Zulip', async () => {
+      const { report } = await run(ALEX, plan(), { copied: 3, failed: 0, noticed: true, endNoticeMissing: true });
+
+      expect(report).toBe(
+        'Done: copied 3 messages to Zulip; the end notice could not be posted on Zulip, see the log.',
+      );
+    });
+
+    it.each([
+      [plan({ topic: '' }), 'the general chat topic of the Zulip stream **#immich-dev** (120)', 'channel'],
+      [plan({ threadId: THREAD, topic: undefined }), 'a new topic of the Zulip stream **#immich-dev** (120)', 'thread'],
+      [
+        plan({ kind: 'forum', threadId: THREAD, topic: 'Idea', stream: undefined }),
+        'the topic `Idea` of the Zulip stream 120',
+        'post',
+      ],
+    ])('should name where a Discord backfill goes: %#', async (planned, where, what) => {
+      const { acks } = await run(ALEX, planned, { copied: 0, failed: 0, noticed: false });
+
+      expect(acks[0]).toContain(`the messages of this ${what} that are not on Zulip yet into ${where}, oldest first`);
+    });
+
+    it.each([
+      [
+        BEA,
+        { copied: 0, failed: 0, noticed: false },
+        'Nothing to backfill: every Discord message of this conversation is already on Zulip.',
+      ],
+      [ALEX, { copied: 0, failed: 0, noticed: false }, 'Nothing to backfill: every message here is already on Zulip.'],
+      [
+        BEA,
+        { copied: 0, failed: 0, noticed: false, stopped: 'off' as const },
+        'The backfill stopped before copying anything: the mirror of this channel went off, see the log.',
+      ],
+      [BEA, { copied: 5, failed: 0, noticed: true, stopped: 'off' as const }, undefined],
+      [
+        ALEX,
+        { copied: 5, failed: 0, noticed: true, stopped: 'gone' as const },
+        'The backfill stopped after copying 5 messages: the Discord channel or thread no longer exists.',
+      ],
+    ])('should report %#', async (actor, outcome, report) => {
+      expect((await run(actor, plan(), outcome)).report).toBe(report);
+    });
+
+    it.each([
+      ['discord', 'not-linked', 'This channel is not mirrored with Zulip, so there is nothing to backfill.'],
+      ['zulip', 'not-linked', 'This stream is not mirrored with a Discord channel, so there is nothing to backfill.'],
+      [
+        'zulip',
+        'no-conversation',
+        'This topic is not linked with a Discord channel or thread, so there is nothing to backfill from.',
+      ],
+      [
+        'discord',
+        'not-ready',
+        'The mirror of this channel is not running right now, so nothing can be backfilled; the log says why.',
+      ],
+      ['zulip', 'running', 'A backfill of this topic is already running; its end notice here says when it is done.'],
+      [
+        'discord',
+        'running',
+        'A backfill of this conversation is already running; its end notice on Zulip says when it is done.',
+      ],
+      ['zulip', 'off', 'The mirror is off in this deployment: Discord or Zulip is not configured.'],
+    ] as const)('should refuse on %s when %s', async (platform, refused, reply) => {
+      mirror.backfill.mockResolvedValue({ refused });
+      const acknowledge = vitest.fn();
+
+      expect(
+        await sut.backfill(
+          { target: { zulipStreamId: STREAM, topic: 'x' }, actor: platform === 'zulip' ? BEA : ALEX },
+          acknowledge,
+        ),
+      ).toEqual({ reply });
+      expect(acknowledge).not.toHaveBeenCalled();
     });
   });
 });

@@ -191,6 +191,15 @@ export class ZulipCommandService {
       administrators: true,
       run: ({ message }) => this.mirrorUnlink(message),
     },
+    'mirror-backfill': {
+      usage: 'mirror-backfill',
+      description:
+        'copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
+      positionals: 0,
+      options: [],
+      administrators: true,
+      run: ({ message }) => this.mirrorBackfill(message),
+    },
     'mirror-list': {
       usage: 'mirror-list',
       description: 'list the mirrored channels and streams, and the linked accounts',
@@ -365,6 +374,23 @@ export class ZulipCommandService {
   private async mirrorUnlink(message: StreamMessage) {
     const reply = await this.mirrorLinks.unlink({ zulipStreamId: message.streamId, actor: this.actorOf(message) });
     return this.linkReply(message, reply);
+  }
+
+  /** Acknowledged at once; the end notice in the topic is the report, and only a backfill with none is answered. */
+  private async mirrorBackfill(message: StreamMessage) {
+    const result = await this.mirrorLinks.backfill(
+      { target: { zulipStreamId: message.streamId, topic: message.topic }, actor: this.actorOf(message) },
+      async (ack) => {
+        await this.reply(message, ack);
+      },
+    );
+    if ('reply' in result) {
+      return result.reply;
+    }
+    void result.done
+      .then((report) => (report === undefined ? undefined : this.reply(message, report)))
+      .catch((error) => this.logger.error('Could not post the outcome of the Zulip command mirror-backfill', error));
+    return undefined;
   }
 
   private reply({ streamId, topic }: ZulipReceivedMessage, content: string) {

@@ -30,7 +30,7 @@ import {
   UpdateMirrorConversation,
   UpdateMirrorMessage,
 } from 'src/schema';
-import { MirrorService } from 'src/services/mirror.service';
+import { BackfillOutcome, BackfillPlan, BackfillTarget, MirrorService } from 'src/services/mirror.service';
 import {
   ZulipDeletionHandler,
   ZulipMessageHandler,
@@ -310,6 +310,9 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     archiveMirrorThread: vitest.fn().mockResolvedValue(undefined),
     getTeamMember: vitest.fn().mockResolvedValue(TEAM_MEMBER),
     fetchMirrorMessagesBefore: vitest.fn().mockResolvedValue({ messages: [], oldestId: null, full: false }),
+    fetchMirrorMessagesAfter: vitest
+      .fn()
+      .mockResolvedValue({ messages: [], reactedIds: [], newestId: null, full: false }),
     fetchMirrorMessage: vitest.fn().mockResolvedValue(undefined),
     listMirrorThreads: vitest.fn().mockResolvedValue([]),
     sendMirrorNotice: vitest.fn(),
@@ -5122,6 +5125,573 @@ describe(MirrorService.name, () => {
       expect(error()).toHaveBeenCalledWith(
         `${DEV_CHANNEL}: catch-up could not read Zulip stream ${DEV_STREAM}: Zulip GET failed with 403 BAD_REQUEST: Invalid channel ID`,
       );
+    });
+  });
+
+  describe('backfill', () => {
+    const THREAD = '200000000000000001';
+    const NEW_THREAD = '200000000000000009';
+    const MAIN: BackfillTarget = { discordChannelId: DEV_CHANNEL, threadId: null };
+    const snowflake = (at: number) => String((BigInt(at) - 1_420_070_400_000n) << 22n);
+    const iso = ({ createdTimestamp }: DiscordSourceMessage) => new Date(createdTimestamp).toISOString();
+    const opening = (dto: DiscordSourceMessage) =>
+      `📜 History from Discord from before the mirror follows (from <time:${iso(dto)}>)`;
+    const copyOf = (dto: DiscordSourceMessage) => `**Contrib** (&#64;contrib123) · <time:${iso(dto)}>: ${dto.content}`;
+    const contents = () => sentMessages().map(({ content }) => content);
+
+    const history = new Map<string, DiscordSourceMessage[]>();
+    const reacted = new Set<string>();
+    let base: number;
+
+    const old = (sequence: number, overrides: Partial<DiscordSourceMessage> = {}) => {
+      const at = base + sequence * 1000;
+      return discordMessage({ id: snowflake(at), createdTimestamp: at, content: `old ${sequence}`, ...overrides });
+    };
+    const inHistory = (location: string, ...messages: DiscordSourceMessage[]) =>
+      history.set(location, [...(history.get(location) ?? []), ...messages]);
+    const mirrored = (...messages: DiscordSourceMessage[]) => {
+      for (const [index, { id }] of messages.entries()) {
+        seedRow({ discordMessageId: id, origin: 'discord', discordWebhookId: null, zulipMessageId: 10_000 + index });
+      }
+    };
+
+    const started = async (
+      target: BackfillTarget = MAIN,
+      acknowledge = vitest.fn<(plan: BackfillPlan) => Promise<void>>().mockResolvedValue(undefined),
+    ) => {
+      const result = await sut.backfill(target, acknowledge);
+      if (!('done' in result)) {
+        throw new Error(`refused: ${result.refused}`);
+      }
+      return result;
+    };
+
+    const finish = async ({ done }: { done: Promise<BackfillOutcome> }) => {
+      let outcome: BackfillOutcome | undefined;
+      void done.then((value) => (outcome = value));
+      for (let second = 0; second < 600 && outcome === undefined; second++) {
+        await vitest.advanceTimersByTimeAsync(1000);
+      }
+      await sut.whenIdle();
+      return outcome;
+    };
+
+    beforeEach(async () => {
+      base = Date.now() - 30 * DAY;
+      history.clear();
+      reacted.clear();
+      discord.fetchMirrorMessagesAfter.mockImplementation(async (channelId, afterId, limit) => {
+        const page = (history.get(channelId) ?? [])
+          .filter(({ id }) => BigInt(id) > BigInt(afterId))
+          .toSorted((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
+          .slice(0, limit);
+        return {
+          messages: page,
+          reactedIds: page.filter(({ id }) => reacted.has(id)).map(({ id }) => id),
+          newestId: page.at(-1)?.id ?? null,
+          full: page.length === limit,
+        };
+      });
+      zulip.getStream.mockResolvedValue({ streamId: DEV_STREAM, name: 'immich-dev', inviteOnly: false });
+      await start();
+      vitest.useFakeTimers();
+    });
+
+    it('should copy what is missing, oldest first, between two notices, silently and marked with its time', async () => {
+      const first = old(1, {
+        content: `<@${TEAM_DISCORD_ID}> look`,
+        mentions: { users: { [TEAM_DISCORD_ID]: 'Alex' }, roles: {}, channels: {} },
+      });
+      const second = old(2);
+      const third = old(3, {
+        author: { id: TEAM_DISCORD_ID, username: 'alex', displayName: 'Alex' },
+        content: 'thanks',
+      });
+      inHistory(DEV_CHANNEL, first, second, third);
+      mirrored(second);
+      const acknowledge = vitest.fn<(plan: BackfillPlan) => Promise<void>>().mockResolvedValue(undefined);
+      const now = Date.now();
+
+      const outcome = await finish(await started(MAIN, acknowledge));
+
+      expect(acknowledge).toHaveBeenCalledExactlyOnceWith({
+        kind: 'text',
+        discordChannelId: DEV_CHANNEL,
+        threadId: null,
+        zulipStreamId: DEV_STREAM,
+        stream: 'immich-dev',
+        topic: '#dev',
+      });
+      expect(discord.fetchMirrorMessagesAfter.mock.calls).toEqual([[DEV_CHANNEL, '100000000000000000', 100]]);
+      expect(sentMessages()).toEqual([
+        { stream: DEV_STREAM, topic: '#dev', content: opening(first) },
+        {
+          stream: DEV_STREAM,
+          topic: '#dev',
+          content: `**Contrib** (&#64;contrib123) · <time:${iso(first)}>: &#64;Alex look`,
+        },
+        { stream: DEV_STREAM, topic: '#dev', content: `@_**|${TEAM_ZULIP_ID}** · <time:${iso(third)}>: thanks` },
+        { stream: DEV_STREAM, topic: '#dev', content: '📜 End of the history from Discord: 2 messages' },
+      ]);
+      expect(outcome).toEqual({ copied: 2, failed: 0, noticed: true });
+      expect(db.messages.filter(({ zulipMessageId }) => zulipMessageId < 10_000)).toEqual([
+        expect.objectContaining({ discordMessageId: first.id, origin: 'discord', zulipMessageId: 5002 }),
+        expect.objectContaining({ discordMessageId: third.id, origin: 'discord', zulipMessageId: 5003 }),
+      ]);
+      expect(log()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: backfilling Discord channel ${DEV_CHANNEL} up to message ${snowflake(now)}`,
+      );
+      expect(log()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: backfill of Discord channel ${DEV_CHANNEL} done: copied 2 messages, 0 failed`,
+      );
+    });
+
+    describe('notices whose send fails', () => {
+      const badGateway = () => new ZulipApiError(502, 'UNKNOWN_ERROR', 'Bad Gateway', 'POST /messages');
+      const sendsOf = (content: string) => contents().filter((sent) => sent === content).length;
+      const botMessage = (content: string) => ({ id: 1, senderId: BOT.userId, content }) as never;
+
+      it('should not post the opening notice again when the send that failed had gone through', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        zulip.sendMessage.mockRejectedValueOnce(badGateway());
+        zulip.getMessages.mockResolvedValueOnce([botMessage(opening(first))]);
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(opening(first))).toBe(1);
+        expect(contents()).toContain(copyOf(first));
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+      });
+
+      it('should post the opening notice again when the send that failed had not gone through', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        zulip.sendMessage.mockRejectedValueOnce(badGateway());
+        zulip.getMessages.mockResolvedValue([]);
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(opening(first))).toBe(2);
+        expect(contents().filter((sent) => sent === copyOf(first))).toHaveLength(1);
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+      });
+
+      it('should try the end notice again before the history counts as done', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        const end = '📜 End of the history from Discord: 1 message';
+        zulip.getMessages.mockResolvedValue([]);
+        zulip.sendMessage.mockImplementation(async ({ content }) => {
+          if (content === end && sendsOf(end) === 1) {
+            throw badGateway();
+          }
+          return { id: 7000 + contents().length };
+        });
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(end)).toBe(2);
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+      });
+
+      it('should report the end notice missing once it gives up on it, and let the waiting messages go', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        const end = '📜 End of the history from Discord: 1 message';
+        zulip.getMessages.mockResolvedValue([]);
+        zulip.sendMessage.mockImplementation(async ({ content }) => {
+          if (content === end) {
+            throw badGateway();
+          }
+          return { id: 7000 + contents().length };
+        });
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(end)).toBe(3);
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true, endNoticeMissing: true });
+        expect(error()).toHaveBeenCalledWith(
+          `${DEV_CHANNEL}: gave up on the end notice of the backfill of Discord channel ${DEV_CHANNEL}; live messages go on without it`,
+        );
+      });
+    });
+
+    it('should stream the history a page at a time, skipping a page that is mirrored in one read', async () => {
+      const messages = Array.from({ length: 101 }, (_, index) => old(index + 1));
+      inHistory(DEV_CHANNEL, ...messages);
+      mirrored(...messages.slice(0, 100));
+
+      const outcome = await finish(await started());
+
+      expect(discord.fetchMirrorMessagesAfter.mock.calls).toEqual([
+        [DEV_CHANNEL, '100000000000000000', 100],
+        [DEV_CHANNEL, messages[99].id, 100],
+      ]);
+      expect(db.repository.getMirrorMessagesByDiscordIds).toHaveBeenCalledWith(
+        messages.slice(0, 100).map(({ id }) => id),
+        { withDeleted: true },
+      );
+      expect(contents()).toEqual([
+        opening(messages[100]),
+        copyOf(messages[100]),
+        '📜 End of the history from Discord: 1 message',
+      ]);
+      expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+    });
+
+    it('should stop at the newest message there was when it started, leaving the rest to the live path', async () => {
+      const messages = Array.from({ length: 99 }, (_, index) => old(index + 1));
+      const later = discordMessage({ id: snowflake(Date.now() + 5000), content: 'later' });
+      inHistory(DEV_CHANNEL, ...messages, later);
+      mirrored(...messages.slice(1));
+
+      await finish(await started());
+
+      expect(discord.fetchMirrorMessagesAfter).toHaveBeenCalledOnce();
+      expect(contents()).toEqual([
+        opening(messages[0]),
+        copyOf(messages[0]),
+        '📜 End of the history from Discord: 1 message',
+      ]);
+    });
+
+    it('should post nothing when nothing is missing', async () => {
+      const messages = [old(1), old(2)];
+      inHistory(DEV_CHANNEL, ...messages);
+      mirrored(...messages);
+
+      expect(await finish(await started())).toEqual({ copied: 0, failed: 0, noticed: false });
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should hold the live creates of the location until the history is in, and let the others through', async () => {
+      const first = old(1);
+      const second = old(2);
+      inHistory(DEV_CHANNEL, first, second);
+      seedThread();
+      const live = discordMessage({ id: snowflake(Date.now() + 1000), content: 'live' });
+      const elsewhere = discordMessage({
+        id: snowflake(Date.now() + 2000),
+        threadId: THREAD,
+        threadName: 'Crash on upload',
+        content: 'elsewhere',
+      });
+      discord.fetchMirrorMessage.mockResolvedValue({ ...live, content: 'live, edited' });
+
+      const backfill = await started();
+      sut.onDiscordMessage(live);
+      sut.onDiscordMessage(elsewhere);
+      await finish(backfill);
+
+      expect(sentMessages().map(({ topic, content }) => [topic, content])).toEqual([
+        ['Crash on upload', '**Contrib** (&#64;contrib123): elsewhere'],
+        ['#dev', opening(first)],
+        ['#dev', copyOf(first)],
+        ['#dev', copyOf(second)],
+        ['#dev', '📜 End of the history from Discord: 2 messages'],
+        ['#dev', '**Contrib** (&#64;contrib123): live, edited'],
+      ]);
+      expect(discord.fetchMirrorMessage).toHaveBeenCalledWith(DEV_CHANNEL, live.id);
+      expect(discord.getMirrorReactions).toHaveBeenCalledExactlyOnceWith({
+        channelId: DEV_CHANNEL,
+        threadId: null,
+        messageId: live.id,
+        webhookId: null,
+      });
+    });
+
+    it('should drop a held create whose message was deleted while it waited', async () => {
+      const first = old(1);
+      inHistory(DEV_CHANNEL, first);
+      discord.fetchMirrorMessage.mockResolvedValue(undefined);
+
+      const backfill = await started();
+      sut.onDiscordMessage(discordMessage({ id: snowflake(Date.now() + 1000), content: 'deleted' }));
+      await finish(backfill);
+
+      expect(contents()).toEqual([opening(first), copyOf(first), '📜 End of the history from Discord: 1 message']);
+    });
+
+    it('should mirror the reactions of a copied message that has some', async () => {
+      const first = old(1);
+      const second = old(2);
+      inHistory(DEV_CHANNEL, first, second);
+      reacted.add(first.id);
+      discord.getMirrorReactions.mockResolvedValue([
+        { emoji: { id: null, name: '👍', animated: false }, count: 2, me: false },
+      ]);
+
+      await finish(await started());
+
+      expect(discord.getMirrorReactions).toHaveBeenCalledExactlyOnceWith({
+        channelId: DEV_CHANNEL,
+        threadId: null,
+        messageId: first.id,
+        webhookId: null,
+      });
+      expect(zulip.addReaction).toHaveBeenCalledExactlyOnceWith(5002, {
+        name: '+1',
+        code: '1f44d',
+        type: 'unicode_emoji',
+      });
+    });
+
+    it('should open the topic of a thread that has none, with the notice before its first message', async () => {
+      const first = old(1, { threadId: NEW_THREAD, threadName: 'Old bug' });
+      const second = old(2, { threadId: NEW_THREAD, threadName: 'Old bug' });
+      inHistory(NEW_THREAD, first, second);
+      const acknowledge = vitest.fn<(plan: BackfillPlan) => Promise<void>>().mockResolvedValue(undefined);
+
+      await finish(await started({ discordChannelId: DEV_CHANNEL, threadId: NEW_THREAD }, acknowledge));
+
+      expect(acknowledge.mock.calls[0][0]).toEqual(expect.objectContaining({ threadId: NEW_THREAD, topic: undefined }));
+      expect(discord.fetchMirrorMessagesAfter.mock.calls[0]).toEqual([NEW_THREAD, '200000000000000008', 100]);
+      expect(zulip.getMessages.mock.calls).toEqual([[{ stream: DEV_STREAM, topic: 'Old bug', numBefore: 1 }]]);
+      expect(sentMessages().map(({ topic, content }) => [topic, content])).toEqual([
+        ['Old bug', opening(first)],
+        ['Old bug', copyOf(first)],
+        ['Old bug', copyOf(second)],
+        ['Old bug', '📜 End of the history from Discord: 2 messages'],
+      ]);
+      expect(db.conversations).toEqual([
+        expect.objectContaining({ discordThreadId: NEW_THREAD, zulipTopic: 'Old bug', zulipAnchorMessageId: 5002 }),
+      ]);
+    });
+
+    it('should backfill the Discord location a Zulip topic mirrors', async () => {
+      seedThread();
+      const acknowledge = vitest.fn<(plan: BackfillPlan) => Promise<void>>().mockResolvedValue(undefined);
+
+      await finish(await started({ zulipStreamId: DEV_STREAM, topic: '#dev' }, acknowledge));
+      await finish(await started({ zulipStreamId: DEV_STREAM, topic: 'crash on upload' }, acknowledge));
+
+      expect(acknowledge.mock.calls.map(([{ threadId, topic }]) => ({ threadId, topic }))).toEqual([
+        { threadId: null, topic: '#dev' },
+        { threadId: THREAD, topic: 'Crash on upload' },
+      ]);
+      expect(discord.fetchMirrorMessagesAfter.mock.calls.map(([location]) => location)).toEqual([DEV_CHANNEL, THREAD]);
+    });
+
+    it('should know the general chat topic of a command as the empty main topic', async () => {
+      await sut.enable(link({ discordChannelId: '100000000000000003', zulipStreamId: 903, mainTopic: '' }));
+      await sut.whenIdle();
+      const acknowledge = vitest.fn<(plan: BackfillPlan) => Promise<void>>().mockResolvedValue(undefined);
+
+      await finish(await started({ zulipStreamId: 903, topic: 'general chat' }, acknowledge));
+
+      expect(acknowledge.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ discordChannelId: '100000000000000003', threadId: null, topic: '' }),
+      );
+    });
+
+    it('should refuse what it cannot backfill', async () => {
+      const acknowledge = vitest.fn();
+
+      expect(await sut.backfill({ discordChannelId: '100000000000000009', threadId: null }, acknowledge)).toEqual({
+        refused: 'not-linked',
+      });
+      expect(await sut.backfill({ discordChannelId: FORUM, threadId: null }, acknowledge)).toEqual({
+        refused: 'not-linked',
+      });
+      expect(await sut.backfill({ zulipStreamId: 999, topic: 'x' }, acknowledge)).toEqual({ refused: 'not-linked' });
+      expect(await sut.backfill({ zulipStreamId: DEV_STREAM, topic: 'lunch' }, acknowledge)).toEqual({
+        refused: 'no-conversation',
+      });
+      discord.isReady.mockReturnValue(false);
+      expect(await sut.backfill(MAIN, acknowledge)).toEqual({ refused: 'not-ready' });
+      expect(acknowledge).not.toHaveBeenCalled();
+    });
+
+    it('should refuse while the mirror is off in the deployment', async () => {
+      const off = new MirrorService(
+        zulip,
+        discord,
+        db.repository as unknown as IDatabaseRepository,
+        stub.service as unknown as ZulipService,
+      );
+
+      expect(await off.backfill(MAIN, vitest.fn())).toEqual({ refused: 'off' });
+    });
+
+    it('should run one backfill per location at a time', async () => {
+      inHistory(DEV_CHANNEL, old(1));
+      const acknowledge = vitest.fn<(plan: BackfillPlan) => Promise<void>>().mockResolvedValue(undefined);
+
+      const backfill = await started();
+
+      expect(await sut.backfill({ zulipStreamId: DEV_STREAM, topic: '#dev' }, acknowledge)).toEqual({
+        refused: 'running',
+      });
+      const thread = await started({ discordChannelId: DEV_CHANNEL, threadId: THREAD });
+      await finish(backfill);
+      await finish(thread);
+      await finish(await started());
+    });
+
+    it('should call it off when the acknowledgement fails, and let the held creates through', async () => {
+      inHistory(DEV_CHANNEL, old(1));
+      const live = discordMessage({ id: snowflake(Date.now() + 1000), content: 'live' });
+      discord.fetchMirrorMessage.mockResolvedValue(live);
+
+      await expect(
+        sut.backfill(MAIN, async () => {
+          sut.onDiscordMessage(live);
+          await sut.whenIdle();
+          throw new Error('Unknown interaction');
+        }),
+      ).rejects.toThrow('Unknown interaction');
+      await sut.whenIdle();
+
+      expect(contents()).toEqual(['**Contrib** (&#64;contrib123): live']);
+      expect(discord.fetchMirrorMessagesAfter).not.toHaveBeenCalled();
+      await finish(await started());
+    });
+
+    it('should stop when the pair goes off, and carry on from there when run again', async () => {
+      const messages = [old(1), old(2), old(3)];
+      inHistory(DEV_CHANNEL, ...messages);
+
+      const backfill = await started();
+      await sut.whenIdle();
+      discord.getMirrorChannel.mockResolvedValue(undefined);
+      await sut.onDiscordReady();
+
+      expect(await finish(backfill)).toEqual({ copied: 1, failed: 0, noticed: true, stopped: 'off' });
+      expect(contents()).toEqual([
+        opening(messages[0]),
+        copyOf(messages[0]),
+        '📜 The history from Discord stops here for now, after 1 message: the mirror of this channel went off, see the log. `mirror-backfill` carries on from here.',
+      ]);
+      expect(log()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: backfill of Discord channel ${DEV_CHANNEL} stopped (off): copied 1 message, 0 failed`,
+      );
+
+      discord.getMirrorChannel.mockImplementation(async (channelId: string) => mirrorChannel(channelId));
+      await sut.onDiscordReady();
+      await sut.whenIdle();
+      zulip.sendMessage.mockClear();
+
+      expect(await finish(await started())).toEqual({ copied: 2, failed: 0, noticed: true });
+      expect(contents()).toEqual([
+        opening(messages[1]),
+        copyOf(messages[1]),
+        copyOf(messages[2]),
+        '📜 End of the history from Discord: 2 messages',
+      ]);
+    });
+
+    it.each([
+      ['shuts down', 'shutdown', () => sut.onModuleDestroy()],
+      ['is unlinked', 'unlinked', () => sut.disable(DEV_CHANNEL)],
+    ] as const)('should stop at once, posting nothing more, when the pair %s', async (_, stopped, stop) => {
+      const messages = [old(1), old(2)];
+      inHistory(DEV_CHANNEL, ...messages);
+
+      const backfill = await started();
+      await sut.whenIdle();
+      await stop();
+
+      expect(await backfill.done).toEqual({ copied: 1, failed: 0, noticed: true, stopped });
+      await vitest.advanceTimersByTimeAsync(60_000);
+      expect(contents()).toEqual([opening(messages[0]), copyOf(messages[0])]);
+    });
+
+    it('should wait out an outage and copy the message it could not', async () => {
+      const first = old(1);
+      const second = old(2);
+      inHistory(DEV_CHANNEL, first, second);
+      zulip.sendMessage
+        .mockImplementationOnce(async () => ({ id: 4000 }))
+        .mockRejectedValueOnce(new TypeError('fetch failed', { cause: refused() }));
+
+      expect(await finish(await started())).toEqual({ copied: 2, failed: 0, noticed: true });
+      expect(contents()).toEqual([
+        opening(first),
+        copyOf(first),
+        copyOf(first),
+        copyOf(second),
+        '📜 End of the history from Discord: 2 messages',
+      ]);
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up again in 30 seconds`);
+    });
+
+    it('should count a message Zulip refuses and carry on', async () => {
+      const first = old(1);
+      const second = old(2);
+      inHistory(DEV_CHANNEL, first, second);
+      zulip.sendMessage
+        .mockImplementationOnce(async () => ({ id: 4000 }))
+        .mockRejectedValueOnce(new ZulipApiError(400, 'BAD_REQUEST', 'Invalid message', 'POST /messages'));
+
+      expect(await finish(await started())).toEqual({ copied: 1, failed: 1, noticed: true });
+      expect(contents().at(-1)).toBe(
+        '📜 End of the history from Discord: 1 message; 1 could not be copied, see the log',
+      );
+    });
+
+    it('should stop when the Discord location is gone', async () => {
+      discord.fetchMirrorMessagesAfter.mockRejectedValue(new DiscordMirrorError('unknown-channel'));
+
+      expect(await finish(await started({ discordChannelId: DEV_CHANNEL, threadId: THREAD }))).toEqual({
+        copied: 0,
+        failed: 0,
+        noticed: false,
+        stopped: 'gone',
+      });
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should keep the mentions of a message older than the link silent through an edit', async () => {
+      const NEW_CHANNEL = '100000000000000003';
+      await sut.enable(
+        link({
+          discordChannelId: NEW_CHANNEL,
+          zulipStreamId: 903,
+          mainTopic: '#new',
+          createdAt: new Date(Date.now() - DAY),
+        }),
+      );
+      await sut.whenIdle();
+      const mention = { users: { [TEAM_DISCORD_ID]: 'Alex' }, roles: {}, channels: {} };
+      for (const [id, zulipMessageId] of [
+        ['300000000000000091', 91],
+        ['300000000000000092', 92],
+      ] as const) {
+        seedRow({
+          discordMessageId: id,
+          origin: 'discord',
+          discordChannelId: NEW_CHANNEL,
+          discordWebhookId: null,
+          zulipStreamId: 903,
+          zulipMessageId,
+          zulipHeader: '**Contrib** (&#64;contrib123)',
+        });
+      }
+
+      sut.onDiscordMessageEdited(
+        discordMessage({
+          id: '300000000000000091',
+          channelId: NEW_CHANNEL,
+          createdTimestamp: Date.now() - 2 * DAY,
+          content: `<@${TEAM_DISCORD_ID}> look`,
+          mentions: mention,
+        }),
+      );
+      sut.onDiscordMessageEdited(
+        discordMessage({
+          id: '300000000000000092',
+          channelId: NEW_CHANNEL,
+          content: `<@${TEAM_DISCORD_ID}> look`,
+          mentions: mention,
+        }),
+      );
+      await sut.whenIdle();
+
+      expect(zulip.updateMessage.mock.calls).toEqual([
+        [91, { content: '**Contrib** (&#64;contrib123): &#64;Alex look' }],
+        [92, { content: `**Contrib** (&#64;contrib123): @**|${TEAM_ZULIP_ID}** look` }],
+      ]);
     });
   });
 

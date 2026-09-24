@@ -105,10 +105,24 @@ const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const FILE_TRANSFER_BUDGET_MS = 120_000;
 const DISCORD_MESSAGE_LENGTH = 2000;
+const BACKFILL_PAGE = 100;
+const BACKFILL_PACE_MS = 500;
+const BACKFILL_NOTICE_LOOKBACK = 5;
+const BACKFILL_END_ATTEMPTS = 3;
 const URLS = /https?:\/\/[^\s<>)]+/g;
 const CUSTOM_EMOTE_IDS = /<a?:\w+:(\d+)>/g;
 const CHANNEL_MENTION = /<#(\d+)>/g;
 const THREAD_DELETED_NOTICE = 'The Discord thread for this topic was deleted; the next message here starts a new one.';
+
+const BACKFILL_STOPS: Record<BackfillStop, string> = {
+  off: 'the mirror of this channel went off, see the log',
+  unlinked: 'the channel was unlinked',
+  shutdown: 'the bot shut down',
+  gone: 'the Discord channel or thread no longer exists',
+  failed: 'reading Discord or posting to Zulip failed, see the log',
+};
+
+export const describeBackfillStop = (stop: BackfillStop) => BACKFILL_STOPS[stop];
 
 const NOTICE_REASONS: Partial<Record<DiscordMirrorErrorKind, string>> = {
   forbidden: 'the bot is missing permissions in the Discord channel',
@@ -145,7 +159,63 @@ type PairState = {
   held: Record<Side, Op[]>;
   unheard: Record<Side, boolean>;
   resumeTimer?: NodeJS.Timeout;
+  /** By Discord channel or thread ID. */
+  backfills: Map<string, Backfill>;
 };
+
+export type BackfillTarget =
+  { discordChannelId: string; threadId: string | null } | { zulipStreamId: number; topic: string };
+
+/** `topic` is left out for a thread that has no Zulip topic yet, which the backfill opens. */
+export type BackfillPlan = {
+  kind: 'text' | 'forum';
+  discordChannelId: string;
+  threadId: string | null;
+  zulipStreamId: number;
+  stream?: string;
+  topic?: string;
+};
+
+export type BackfillRefusal = 'off' | 'not-linked' | 'no-conversation' | 'not-ready' | 'running';
+
+export type BackfillStop = 'off' | 'unlinked' | 'shutdown' | 'gone' | 'failed';
+
+/** `noticed` is whether the history notices were posted, which `copied` and `failed` then count between. */
+export type BackfillOutcome = {
+  copied: number;
+  failed: number;
+  noticed: boolean;
+  stopped?: BackfillStop;
+  endNoticeMissing?: true;
+};
+
+type Backfill = {
+  location: string;
+  threadId: string | null;
+  /** Nothing newer than the moment the backfill started is copied: the live path mirrors it. */
+  until: bigint;
+  after: bigint;
+  more: boolean;
+  /** The part of the current page not copied yet, never more than a page. */
+  page: DiscordSourceMessage[];
+  reacted: Set<string>;
+  copied: number;
+  failed: number;
+  /** The topic claimed for a thread that has none, which the start notice holds until the first copy opens it. */
+  newTopic?: string;
+  noticed: boolean;
+  endAttempts: number;
+  endNoticeMissing?: true;
+  /** A notice whose last send may have gone through, read back before it is sent again. */
+  unsure?: string;
+  /** Live creates for the location, which wait until the history is in. */
+  held: Op[];
+  timer?: NodeJS.Timeout;
+  finished: boolean;
+  resolve: (outcome: BackfillOutcome) => void;
+};
+
+type CreateOutcome = 'created' | 'skipped' | 'held' | 'retry' | 'failed';
 
 type Side = 'Discord' | 'Zulip';
 
@@ -410,6 +480,7 @@ export class MirrorService implements OnModuleDestroy {
     state.queue.close();
     clearTimeout(state.retryTimer);
     clearTimeout(state.resumeTimer);
+    this.abandonBackfills(state, 'unlinked');
     this.verifiedConversations.clear();
     this.logger.log(`${state.pair.key}: unlinked from Zulip stream ${state.pair.zulipStreamId}`);
   }
@@ -428,6 +499,101 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Copies the Discord messages of one location that have no copy yet, oldest first, up to the newest one now, a
+   * message per queue op. `acknowledge` is called before anything is copied: live creates for the location already
+   * wait, and one that throws calls the backfill off.
+   */
+  async backfill(
+    target: BackfillTarget,
+    acknowledge: (plan: BackfillPlan) => Promise<void>,
+  ): Promise<{ refused: BackfillRefusal } | { done: Promise<BackfillOutcome> }> {
+    if (!this.active) {
+      return { refused: 'off' };
+    }
+    const found = await this.backfillLocation(target);
+    if ('refused' in found) {
+      return found;
+    }
+    const { state, threadId, topic } = found;
+    const { pair } = state;
+    const location = threadId ?? pair.discordChannelId;
+    if (!this.discordReady(state) || !this.zulip.isInitialised()) {
+      return { refused: 'not-ready' };
+    }
+    if (state.backfills.has(location)) {
+      return { refused: 'running' };
+    }
+
+    let resolve: (outcome: BackfillOutcome) => void = () => {};
+    const done = new Promise<BackfillOutcome>((settle) => (resolve = settle));
+    const backfill: Backfill = {
+      location,
+      threadId,
+      until: snowflakeAt(Date.now()),
+      after: BigInt(location) - 1n,
+      more: true,
+      page: [],
+      reacted: new Set(),
+      copied: 0,
+      failed: 0,
+      noticed: false,
+      endAttempts: 0,
+      held: [],
+      finished: false,
+      resolve,
+    };
+    state.backfills.set(location, backfill);
+    try {
+      await acknowledge({
+        kind: pair.kind,
+        discordChannelId: pair.discordChannelId,
+        threadId,
+        zulipStreamId: pair.zulipStreamId,
+        stream: await this.streamName(pair.zulipStreamId),
+        topic,
+      });
+    } catch (error) {
+      state.backfills.delete(location);
+      state.queue.pushNext(backfill.held);
+      throw error;
+    }
+    this.logger.log(`${pair.key}: backfilling Discord channel ${location} up to message ${backfill.until}`);
+    this.nextBackfillStep(state, backfill);
+    return { done };
+  }
+
+  private async backfillLocation(
+    target: BackfillTarget,
+  ): Promise<{ refused: BackfillRefusal } | { state: PairState; threadId: string | null; topic?: string }> {
+    if ('zulipStreamId' in target) {
+      const state = this.pairs.find(({ pair }) => pair.zulipStreamId === target.zulipStreamId);
+      if (!state) {
+        return { refused: 'not-linked' };
+      }
+      const key = topicKey(this.fromZulipTopic(target.topic));
+      if (isMainTopic(state.pair, key)) {
+        return { state, threadId: null, topic: state.pair.mainTopic! };
+      }
+      const conversation = await this.database.getMirrorConversationByZulipTopic(state.pair.zulipStreamId, key);
+      return conversation?.discordThreadId
+        ? { state, threadId: conversation.discordThreadId, topic: conversation.zulipTopic }
+        : { refused: 'no-conversation' };
+    }
+    const state = this.pairs.find(({ pair }) => pair.discordChannelId === target.discordChannelId);
+    if (!state || (target.threadId === null && state.pair.mainTopic === null)) {
+      return { refused: 'not-linked' };
+    }
+    if (target.threadId === null) {
+      return { state, threadId: null, topic: state.pair.mainTopic! };
+    }
+    const conversation = await this.database.getMirrorConversationByDiscord(
+      state.pair.discordChannelId,
+      target.threadId,
+    );
+    return { state, threadId: target.threadId, topic: conversation?.zulipTopic };
+  }
+
   private newPairState(pair: EnabledPair): PairState {
     return {
       pair,
@@ -442,6 +608,7 @@ export class MirrorService implements OnModuleDestroy {
       retryDelayMs: CATCH_UP_RETRY_MS,
       held: { Discord: [], Zulip: [] },
       unheard: { Discord: false, Zulip: false },
+      backfills: new Map(),
     };
   }
 
@@ -486,7 +653,9 @@ export class MirrorService implements OnModuleDestroy {
 
   onDiscordMessage(dto: DiscordSourceMessage) {
     const state = this.byChannel(dto.channelId);
-    state?.queue.push(`Discord message ${dto.id}`, () => this.mirrorDiscordMessage(state, dto));
+    state?.queue.push(`Discord message ${dto.id}`, async () => {
+      await this.mirrorDiscordMessage(state, dto);
+    });
   }
 
   onDiscordMessageEdited(dto: DiscordSourceMessage) {
@@ -540,6 +709,7 @@ export class MirrorService implements OnModuleDestroy {
       state.queue.close();
       clearTimeout(state.retryTimer);
       clearTimeout(state.resumeTimer);
+      this.abandonBackfills(state, 'shutdown');
     }
     let timer: NodeJS.Timeout | undefined;
     const grace = new Promise<void>((resolve) => {
@@ -839,7 +1009,9 @@ export class MirrorService implements OnModuleDestroy {
     state.queue.pushNext([
       ...recentDiscord.map((dto) => ({
         label: `Discord message ${dto.id}`,
-        run: () => this.mirrorDiscordMessage(state, dto, generation),
+        run: async () => {
+          await this.mirrorDiscordMessage(state, dto, generation);
+        },
       })),
       ...recentZulip.map((message) => ({
         label: `Zulip message ${message.id}`,
@@ -1281,25 +1453,27 @@ export class MirrorService implements OnModuleDestroy {
    * A refusal is final, and an outage is no reason to give up on a message. Anything else before the message went out,
    * such as a database failure, is tried again, but only so often.
    */
+  /** Resolves to whether the create is tried again. */
   private createFailed(state: PairState, source: string, error: unknown, attempt: CreateAttempt, turnAway: () => void) {
     if (attempt.posted || attempt.uncertain) {
       this.failedCreates.set(source, MAX_CREATE_ATTEMPTS);
-      return;
+      return false;
     }
     if (isExpected(error) && !isTransient(error)) {
-      return;
+      return false;
     }
     if (!isOutage(error)) {
       const attempts = (this.failedCreates.get(source) ?? 0) + 1;
       this.failedCreates.set(source, attempts);
       if (attempts >= MAX_CREATE_ATTEMPTS) {
         this.logger.error(`${state.pair.key}: gave up on ${source} after ${attempts} attempts`);
-        return;
+        return false;
       }
     }
     turnAway();
     this.lostTrack(state);
     this.retryCatchUp(state);
+    return true;
   }
 
   /** A catch-up that cannot read a side shows the failures so far were an outage, not the messages. */
@@ -2418,7 +2592,7 @@ export class MirrorService implements OnModuleDestroy {
     }
     const content = zulipMirrorContent(
       lead,
-      toZulipMirrorBody(dto, await this.renderContext(dto)),
+      toZulipMirrorBody(this.editedBody(state, dto), await this.renderContext(dto)),
       row.zulipAttachments ?? '',
     );
     try {
@@ -2551,29 +2725,47 @@ export class MirrorService implements OnModuleDestroy {
     return undefined;
   }
 
-  private async mirrorDiscordMessage(state: PairState, dto: DiscordSourceMessage, generation?: number) {
+  /**
+   * A backfilled message renders every mention silently and is marked with its time; `topic` is the one the backfill
+   * claimed for a thread that has none yet.
+   */
+  private async mirrorDiscordMessage(
+    state: PairState,
+    source: DiscordSourceMessage,
+    generation?: number,
+    backfill?: { topic?: string },
+  ): Promise<CreateOutcome> {
     const { pair } = state;
+    const holding = backfill ? undefined : state.backfills.get(source.threadId ?? source.channelId);
+    if (holding) {
+      holding.held.push({
+        label: `Discord message ${source.id}`,
+        run: () => this.mirrorHeld(state, source, generation),
+      });
+      return 'held';
+    }
+    const dto = backfill ? { ...source, silent: true } : source;
     const turnAway = () =>
       this.turnAway(state, { discord: new Map([[dto.threadId ?? dto.channelId, BigInt(dto.id)]]), zulip: new Set() });
     if (!this.zulip.isInitialised()) {
       turnAway();
       this.notReady(state, 'Zulip');
-      return;
+      return 'retry';
     }
-    const source = `Discord message ${dto.id}`;
-    if (!this.mayCreate(state, source, generation, turnAway)) {
-      return;
+    const label = `Discord message ${dto.id}`;
+    if (!this.mayCreate(state, label, generation, turnAway)) {
+      return (this.failedCreates.get(label) ?? 0) >= MAX_CREATE_ATTEMPTS ? 'failed' : 'retry';
     }
 
     const attempt: CreateAttempt = { posted: false, uncertain: false };
     try {
       if ((await this.database.getMirrorMessagesByDiscordIds([dto.id], { withDeleted: true })).length > 0) {
-        return;
+        return 'skipped';
       }
       let conversation: MirrorConversation | undefined;
       if (dto.threadId === null) {
         if (pair.mainTopic === null) {
-          return;
+          return 'skipped';
         }
         conversation = await this.mainConversation(state);
       } else {
@@ -2584,18 +2776,19 @@ export class MirrorService implements OnModuleDestroy {
       const ctx = await this.renderContext(dto);
       const body = toZulipMirrorBody(dto, ctx);
       if (body.trim() === '' && dto.attachments.length === 0) {
-        return;
+        return 'skipped';
       }
       const topic =
         conversation?.zulipTopic ??
+        backfill?.topic ??
         (await this.claimTopic(state, toZulipTopicName(dto.threadName ?? '', dto.threadId!), dto.threadId!));
       if (topic === undefined) {
         this.logger.error(`${pair.key}: found no free Zulip topic for Discord thread ${dto.threadId}`);
-        return;
+        return 'failed';
       }
 
       const reply = await this.replyTarget(dto, topic);
-      const late = Date.now() - dto.createdTimestamp > LATE_MS;
+      const late = backfill !== undefined || Date.now() - dto.createdTimestamp > LATE_MS;
       const header = zulipAuthorHeader(dto, { ...ctx, reply, late });
       const context = conversation || pair.kind !== 'text' ? '' : await this.threadContext(state, dto.threadId!, ctx);
       const tags = !conversation && pair.kind === 'forum' && dto.id === dto.threadId ? (dto.threadTags ?? []) : [];
@@ -2605,7 +2798,7 @@ export class MirrorService implements OnModuleDestroy {
       );
       const attachments = toZulipAttachmentLines(await this.uploadAttachments(state, dto), dto.jumpUrl);
       if (body.trim() === '' && attachments === '') {
-        return;
+        return 'skipped';
       }
 
       const { id } = await this.creating(attempt, () =>
@@ -2637,10 +2830,299 @@ export class MirrorService implements OnModuleDestroy {
       if (conversation.discordThreadId !== null && conversation.zulipAnchorMessageId === null) {
         await this.database.updateMirrorConversation(conversation.id, { zulipAnchorMessageId: id });
       }
-      this.created(state, source);
+      this.created(state, label);
+      return 'created';
     } catch (error) {
-      this.createFailed(state, source, error, attempt, turnAway);
+      const retry = this.createFailed(state, label, error, attempt, turnAway);
       this.fail(`${pair.key}: could not mirror Discord message ${dto.id} to Zulip`, error);
+      return retry ? 'retry' : 'failed';
+    }
+  }
+
+  /** Behind whatever is queued, so that the pair's other conversations keep flowing. */
+  private nextBackfillStep(state: PairState, backfill: Backfill, delayMs = 0) {
+    if (backfill.finished) {
+      return;
+    }
+    const push = () =>
+      state.queue.push(`backfill of Discord channel ${backfill.location}`, () => this.backfillStep(state, backfill));
+    if (delayMs === 0) {
+      push();
+      return;
+    }
+    backfill.timer = setTimeout(() => {
+      backfill.timer = undefined;
+      push();
+    }, delayMs);
+    backfill.timer.unref();
+  }
+
+  /** One page read or one message copied. */
+  private async backfillStep(state: PairState, backfill: Backfill) {
+    const { pair } = state;
+    if (backfill.finished) {
+      return;
+    }
+    if (state.status === 'disabled') {
+      await this.endBackfill(state, backfill, 'off');
+      return;
+    }
+    if (!state.caughtUp || !this.discordReady(state) || !this.zulip.isInitialised()) {
+      if (this.throttle(`backfill-waits:${pair.key}`, THROTTLE_MS)) {
+        this.logger.warn(`${pair.key}: a backfill waits until both sides are ready and caught up`);
+      }
+      this.nextBackfillStep(state, backfill, RESUME_MS);
+      return;
+    }
+
+    if (backfill.page.length === 0) {
+      if (!backfill.more) {
+        await this.endBackfill(state, backfill);
+        return;
+      }
+      try {
+        await this.readBackfillPage(backfill);
+      } catch (error) {
+        if (isMirrorError(error, 'unknown-channel')) {
+          await this.endBackfill(state, backfill, 'gone');
+          return;
+        }
+        this.fail(`${pair.key}: a backfill could not read Discord channel ${backfill.location}`, error);
+        if (!isTransient(error)) {
+          await this.endBackfill(state, backfill, 'failed');
+          return;
+        }
+        this.nextBackfillStep(state, backfill, RESUME_MS);
+        return;
+      }
+      this.nextBackfillStep(state, backfill);
+      return;
+    }
+
+    const [dto] = backfill.page;
+    if (!backfill.noticed && !(await this.startBackfillNotice(state, backfill, dto))) {
+      return;
+    }
+    const outcome = await this.mirrorDiscordMessage(state, dto, state.generation, { topic: backfill.newTopic });
+    if (outcome === 'retry') {
+      this.nextBackfillStep(state, backfill, RESUME_MS);
+      return;
+    }
+    backfill.page.shift();
+    if (outcome === 'created') {
+      backfill.copied++;
+      if (backfill.reacted.has(dto.id)) {
+        this.queueReactionSync(state, `reactions of Discord message ${dto.id}`, () =>
+          this.reactionsToZulip(state, dto.id),
+        );
+      }
+    } else if (outcome === 'failed') {
+      backfill.failed++;
+    }
+    this.nextBackfillStep(state, backfill, outcome === 'created' ? BACKFILL_PACE_MS : 0);
+  }
+
+  /** Streams forwards: only the part of one page not mirrored yet is kept. */
+  private async readBackfillPage(backfill: Backfill) {
+    const page = await this.discordMirror.fetchMirrorMessagesAfter(
+      backfill.location,
+      String(backfill.after),
+      BACKFILL_PAGE,
+    );
+    const newest = page.newestId === null ? undefined : BigInt(page.newestId);
+    backfill.more = page.full && newest !== undefined && newest < backfill.until;
+    backfill.after = newest ?? backfill.after;
+    const wanted = page.messages.filter(({ id }) => BigInt(id) <= backfill.until);
+    const mirrored = new Set(
+      (
+        await this.database.getMirrorMessagesByDiscordIds(
+          wanted.map(({ id }) => id),
+          { withDeleted: true },
+        )
+      ).map(({ discordMessageId }) => discordMessageId),
+    );
+    backfill.page = wanted.filter(({ id }) => !mirrored.has(id));
+    backfill.reacted = new Set(page.reactedIds);
+  }
+
+  /** The topic the history goes to; a thread that has none claims one, which the start notice then holds. */
+  private async backfillTopic(state: PairState, backfill: Backfill, first?: DiscordSourceMessage) {
+    const { pair } = state;
+    if (backfill.threadId === null) {
+      return pair.mainTopic!;
+    }
+    const found = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, backfill.threadId);
+    const conversation = found && (await this.verifyConversation(state, found));
+    if (conversation) {
+      return conversation.zulipTopic;
+    }
+    if (first) {
+      backfill.newTopic ??= await this.claimTopic(
+        state,
+        toZulipTopicName(first.threadName ?? '', backfill.threadId),
+        backfill.threadId,
+      );
+    }
+    return backfill.newTopic;
+  }
+
+  /** Resolves to whether the notice is in; otherwise the backfill is ended or tried again later. */
+  private async startBackfillNotice(state: PairState, backfill: Backfill, first: DiscordSourceMessage) {
+    const { pair } = state;
+    try {
+      const topic = await this.backfillTopic(state, backfill, first);
+      if (topic === undefined) {
+        this.logger.error(`${pair.key}: found no free Zulip topic for Discord thread ${backfill.threadId}`);
+        await this.endBackfill(state, backfill, 'failed');
+        return false;
+      }
+      const content = `📜 History from Discord from before the mirror follows (from <time:${new Date(first.createdTimestamp).toISOString()}>)`;
+      const posted = await this.postBackfillNotice(state, backfill, topic, content);
+      if (posted === 'posted') {
+        backfill.noticed = true;
+        return true;
+      }
+      if (posted === 'retry') {
+        this.nextBackfillStep(state, backfill, RESUME_MS);
+      } else {
+        await this.endBackfill(state, backfill, 'failed');
+      }
+      return false;
+    } catch (error) {
+      this.fail(`${pair.key}: could not post the backfill notice in Zulip stream ${pair.zulipStreamId}`, error);
+      if (isTransient(error)) {
+        this.nextBackfillStep(state, backfill, RESUME_MS);
+      } else {
+        await this.endBackfill(state, backfill, 'failed');
+      }
+      return false;
+    }
+  }
+
+  /** A send whose outcome is unknown is read back, so a notice is neither posted twice nor taken as missing. */
+  private async postBackfillNotice(
+    state: PairState,
+    backfill: Backfill,
+    topic: string,
+    content: string,
+  ): Promise<'posted' | 'retry' | 'failed'> {
+    const { pair } = state;
+    const landed = async () => {
+      const self = this.zulipService.ownUser?.userId;
+      const recent = await this.retryZulip(() =>
+        this.zulip.getMessages({ stream: pair.zulipStreamId, topic, numBefore: BACKFILL_NOTICE_LOOKBACK }),
+      );
+      return recent.some((message) => message.senderId === self && message.content === content);
+    };
+    try {
+      if (backfill.unsure === content && (await landed())) {
+        backfill.unsure = undefined;
+        return 'posted';
+      }
+      await this.zulip.sendMessage({ stream: pair.zulipStreamId, topic, content });
+      backfill.unsure = undefined;
+      return 'posted';
+    } catch (error) {
+      this.fail(`${pair.key}: could not post a backfill notice in Zulip stream ${pair.zulipStreamId}`, error);
+      if (mayHaveBeenCarriedOut(error)) {
+        backfill.unsure = content;
+        try {
+          if (await landed()) {
+            backfill.unsure = undefined;
+            return 'posted';
+          }
+        } catch {
+          return 'retry';
+        }
+      }
+      return isTransient(error) ? 'retry' : 'failed';
+    }
+  }
+
+  /** The end notice goes in before the live creates that waited, which then run next, in order. */
+  private async endBackfill(state: PairState, backfill: Backfill, stopped?: BackfillStop) {
+    const { pair } = state;
+    const { copied, failed, noticed } = backfill;
+    if (noticed) {
+      const count = `${plural(copied, 'message')}${failed > 0 ? `; ${failed} could not be copied, see the log` : ''}`;
+      const content =
+        stopped === undefined
+          ? `📜 End of the history from Discord: ${count}`
+          : `📜 The history from Discord stops here for now, after ${count}: ${BACKFILL_STOPS[stopped]}.${stopped === 'gone' ? '' : ' `mirror-backfill` carries on from here.'}`;
+      let posted: 'posted' | 'retry' | 'failed';
+      try {
+        const topic = await this.backfillTopic(state, backfill);
+        posted = topic === undefined ? 'failed' : await this.postBackfillNotice(state, backfill, topic, content);
+      } catch (error) {
+        this.fail(`${pair.key}: could not post the end of a backfill in Zulip stream ${pair.zulipStreamId}`, error);
+        posted = isTransient(error) ? 'retry' : 'failed';
+      }
+      backfill.endAttempts++;
+      if (posted === 'retry' && state.status !== 'disabled' && backfill.endAttempts < BACKFILL_END_ATTEMPTS) {
+        backfill.timer = setTimeout(() => {
+          backfill.timer = undefined;
+          state.queue.push(`end of the backfill of Discord channel ${backfill.location}`, () =>
+            backfill.finished ? Promise.resolve() : this.endBackfill(state, backfill, stopped),
+          );
+        }, RESUME_MS);
+        backfill.timer.unref();
+        return;
+      }
+      if (posted !== 'posted') {
+        this.logger.error(
+          `${pair.key}: gave up on the end notice of the backfill of Discord channel ${backfill.location}; live messages go on without it`,
+        );
+        backfill.endNoticeMissing = true;
+      }
+    }
+    this.finishBackfill(state, backfill, stopped);
+    state.queue.pushNext(backfill.held);
+  }
+
+  private finishBackfill(state: PairState, backfill: Backfill, stopped?: BackfillStop) {
+    if (backfill.finished) {
+      return;
+    }
+    backfill.finished = true;
+    clearTimeout(backfill.timer);
+    state.backfills.delete(backfill.location);
+    const { copied, failed, noticed, endNoticeMissing } = backfill;
+    this.logger.log(
+      `${state.pair.key}: backfill of Discord channel ${backfill.location} ${stopped ? `stopped (${stopped})` : 'done'}: copied ${plural(copied, 'message')}, ${failed} failed`,
+    );
+    backfill.resolve({
+      copied,
+      failed,
+      noticed,
+      ...(stopped ? { stopped } : {}),
+      ...(endNoticeMissing ? { endNoticeMissing } : {}),
+    });
+  }
+
+  /** The queue is closed, so nothing is posted and the creates that waited go with it. */
+  private abandonBackfills(state: PairState, stopped: BackfillStop) {
+    for (const backfill of state.backfills.values()) {
+      this.finishBackfill(state, backfill, stopped);
+    }
+  }
+
+  /** Read afresh: an edit or deletion while it waited found no copy to change. */
+  private async mirrorHeld(state: PairState, dto: DiscordSourceMessage, generation: number | undefined) {
+    if ((await this.database.getMirrorMessagesByDiscordIds([dto.id], { withDeleted: true })).length > 0) {
+      return;
+    }
+    let current: DiscordSourceMessage | undefined = dto;
+    try {
+      current = await this.discordMirror.fetchMirrorMessage(dto.threadId ?? dto.channelId, dto.id);
+    } catch (error) {
+      this.logger.warn(
+        `${state.pair.key}: could not read Discord message ${dto.id} again after the backfill, so it is mirrored as it was sent: ${describe(error)}`,
+      );
+    }
+    if (current && (await this.mirrorDiscordMessage(state, current, generation)) === 'created') {
+      this.queueReactionSync(state, `reactions of Discord message ${dto.id}`, () =>
+        this.reactionsToZulip(state, dto.id),
+      );
     }
   }
 
@@ -2729,7 +3211,7 @@ export class MirrorService implements OnModuleDestroy {
 
     const content = zulipMirrorContent(
       row.zulipHeader ?? '',
-      toZulipMirrorBody(dto, await this.renderContext(dto)),
+      toZulipMirrorBody(this.editedBody(state, dto), await this.renderContext(dto)),
       row.zulipAttachments ?? '',
     );
     try {
@@ -2750,6 +3232,11 @@ export class MirrorService implements OnModuleDestroy {
       }
     }
     await this.database.updateMirrorMessages([dto.id], { sourceHash: hash });
+  }
+
+  /** Only a backfill copies a message older than the link, and its mentions stay silent through an edit. */
+  private editedBody(state: PairState, dto: DiscordSourceMessage) {
+    return dto.createdTimestamp < state.pair.linkedAt ? { ...dto, silent: true } : dto;
   }
 
   private async deleteFromDiscord(state: PairState, messageIds: string[]) {

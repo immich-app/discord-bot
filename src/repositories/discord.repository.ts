@@ -2,14 +2,18 @@ import { Logger } from '@nestjs/common';
 import {
   ChannelType,
   DiscordAPIError,
+  FetchMessagesOptions,
   HTTPError,
   IntentsBitField,
+  Message,
   MessageCreateOptions,
   MessageFlags,
+  MessageType,
   Partials,
   PermissionsString,
   RESTJSONErrorCodes,
   Routes,
+  TextBasedChannel,
   ThreadAutoArchiveDuration,
   Webhook,
   WebhookClient,
@@ -21,6 +25,7 @@ import {
   DiscordMirrorChannel,
   DiscordMirrorError,
   DiscordMirrorErrorKind,
+  DiscordMirrorForwardPage,
   DiscordMirrorNotice,
   DiscordMirrorPage,
   DiscordMirrorReaction,
@@ -110,6 +115,8 @@ const ARCHIVED_THREADS = 50;
 const DISCORD_EPOCH = 1_420_070_400_000;
 const AVATAR_TIMEOUT_MS = 10_000;
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+const REPLY_TARGETS_BUDGET_MS = 20_000;
+const REPLY_TARGETS_CONCURRENCY = 5;
 
 const mirrorPermissions: PermissionsString[] = [
   'ViewChannel',
@@ -676,23 +683,85 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     limit: number,
   ): Promise<DiscordMirrorPage> {
     try {
-      const channel = await bot.channels.fetch(channelId);
-      if (!channel?.isTextBased() || channel.isDMBased()) {
-        throw new DiscordMirrorError('unknown-channel');
-      }
-
-      const page = await channel.messages.fetch(beforeId === undefined ? { limit } : { before: beforeId, limit });
-      const messages = [...page.values()].sort(bySnowflake);
+      const messages = await this.fetchMirrorPage(
+        channelId,
+        beforeId === undefined ? { limit } : { before: beforeId, limit },
+      );
       return {
-        messages: messages
-          .filter((message) => isMirrorCandidate(message, (id) => this.isOwnMirrorWebhook(id)))
-          .map(toDiscordSourceMessage),
+        messages: messages.filter((message) => this.isCandidate(message)).map(toDiscordSourceMessage),
         oldestId: messages[0]?.id ?? null,
         full: messages.length === limit,
       };
     } catch (error) {
       throw toMirrorError(error);
     }
+  }
+
+  async fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordMirrorForwardPage> {
+    try {
+      const messages = await this.fetchMirrorPage(channelId, { after: afterId, limit }, true);
+      const candidates = messages.filter((message) => this.isCandidate(message));
+      return {
+        messages: candidates.map(toDiscordSourceMessage),
+        reactedIds: candidates.filter(({ reactions }) => reactions.cache.size > 0).map(({ id }) => id),
+        newestId: messages.at(-1)?.id ?? null,
+        full: messages.length === limit,
+      };
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  /** Oldest first. */
+  private async fetchMirrorPage(channelId: string, options: FetchMessagesOptions, withReplyTargets = false) {
+    const channel = await bot.channels.fetch(channelId);
+    if (!channel?.isTextBased() || channel.isDMBased()) {
+      throw new DiscordMirrorError('unknown-channel');
+    }
+    const messages = [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
+    if (withReplyTargets) {
+      await this.cacheReplyTargets(channel, messages);
+    }
+    return messages;
+  }
+
+  /**
+   * A reply names its author from the cache, which holds only recent messages, so the ones old replies answer are read
+   * in; within a time budget, so a page of replies cannot hold up the queue it runs in.
+   */
+  private async cacheReplyTargets(channel: TextBasedChannel, messages: Message[]) {
+    const missing = [
+      ...new Set(
+        messages.flatMap(({ type, reference }) =>
+          type === MessageType.Reply &&
+          reference?.messageId &&
+          reference.channelId === channel.id &&
+          !channel.messages.cache.has(reference.messageId)
+            ? [reference.messageId]
+            : [],
+        ),
+      ),
+    ];
+    const deadline = Date.now() + REPLY_TARGETS_BUDGET_MS;
+    const next = async (): Promise<void> => {
+      const messageId = missing.shift();
+      if (messageId === undefined || Date.now() >= deadline) {
+        return;
+      }
+      await channel.messages.fetch(messageId).catch(() => undefined);
+      await next();
+    };
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, REPLY_TARGETS_BUDGET_MS);
+    });
+    const workers = Array.from({ length: REPLY_TARGETS_CONCURRENCY }, () => next());
+    await Promise.race([Promise.all(workers), expired]);
+    clearTimeout(timer);
+  }
+
+  private isCandidate(message: Message): message is Message<true> {
+    return isMirrorCandidate(message, (id) => this.isOwnMirrorWebhook(id));
   }
 
   private async findOrCreateMirrorWebhook(channelId: string): Promise<Webhook> {

@@ -900,6 +900,127 @@ describe(DiscordRepository.name, () => {
       });
     });
 
+    it('should read the message an old reply answers, once, so the reply can name its author', async () => {
+      const cache = new Collection<string, unknown>();
+      const original = makeMessage('900000000000000001', {
+        content: 'the question',
+        member: { displayName: 'Asker' },
+      });
+      const reply = (id: string) =>
+        makeMessage(id, {
+          type: MessageType.Reply,
+          reference: { messageId: '900000000000000001', channelId },
+          reactions: { cache: new Collection() },
+        });
+      channel.messages = {
+        ...channel.messages,
+        cache,
+        fetch: vitest.fn(async (options: unknown) => {
+          if (typeof options === 'string') {
+            cache.set(options, original);
+            return original;
+          }
+          return new Collection([
+            ['1000000000000000001', reply('1000000000000000001')],
+            ['1000000000000000002', reply('1000000000000000002')],
+          ]);
+        }),
+      } as never;
+
+      const page = await sut.fetchMirrorMessagesAfter(channelId, '999999999999999999', 100);
+
+      expect(channel.messages.fetch).toHaveBeenCalledWith('900000000000000001');
+      expect(vitest.mocked(channel.messages.fetch).mock.calls.filter(([arg]) => typeof arg === 'string')).toHaveLength(
+        1,
+      );
+      expect(page.messages.map(({ replyTo }) => replyTo)).toEqual([
+        { messageId: '900000000000000001', authorDisplayName: 'Asker', content: 'the question' },
+        { messageId: '900000000000000001', authorDisplayName: 'Asker', content: 'the question' },
+      ]);
+    });
+
+    it('should give up on the messages old replies answer after 20 seconds, and leave those replies without an author', async () => {
+      vitest.useFakeTimers();
+      const reply = makeMessage('1000000000000000001', {
+        type: MessageType.Reply,
+        reference: { messageId: '900000000000000001', channelId },
+        reactions: { cache: new Collection() },
+      });
+      channel.messages = {
+        ...channel.messages,
+        cache: new Collection(),
+        fetch: vitest.fn((options: unknown) =>
+          typeof options === 'string'
+            ? new Promise(() => {})
+            : Promise.resolve(new Collection([['1000000000000000001', reply]])),
+        ),
+      } as never;
+
+      const reading = sut.fetchMirrorMessagesAfter(channelId, '999999999999999999', 100);
+      await vitest.advanceTimersByTimeAsync(20_000);
+
+      await expect(reading).resolves.toMatchObject({
+        messages: [{ replyTo: { messageId: '900000000000000001', authorDisplayName: null, content: null } }],
+      });
+      vitest.useRealTimers();
+    });
+
+    it('should not read what replies answer when catching up', async () => {
+      const reply = makeMessage('1000000000000000001', {
+        type: MessageType.Reply,
+        reference: { messageId: '900000000000000001', channelId },
+      });
+      channel.messages = {
+        ...channel.messages,
+        cache: new Collection(),
+        fetch: vitest.fn().mockResolvedValue(new Collection([['1000000000000000001', reply]])),
+      } as never;
+
+      await sut.fetchMirrorMessagesBefore(channelId, undefined, 100);
+
+      expect(channel.messages.fetch).toHaveBeenCalledExactlyOnceWith({ limit: 100 });
+    });
+
+    it('should read forwards after a message, oldest first, with the candidates that have reactions', async () => {
+      await resolveWebhook();
+      const reacted = { reactions: { cache: new Collection([['👍', {}]]) } };
+      const none = { reactions: { cache: new Collection() } };
+      channel.messages.fetch.mockResolvedValue(
+        new Collection([
+          ['1000000000000000003', makeMessage('1000000000000000003', { webhookId: '700000000000000001', ...reacted })],
+          ['1000000000000000001', makeMessage('1000000000000000001', reacted)],
+          ['1000000000000000002', makeMessage('1000000000000000002', none)],
+        ]),
+      );
+
+      const page = await sut.fetchMirrorMessagesAfter(channelId, '999999999999999999', 3);
+
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ after: '999999999999999999', limit: 3 });
+      expect(page.messages.map(({ id }) => id)).toEqual(['1000000000000000001', '1000000000000000002']);
+      expect(page).toMatchObject({ reactedIds: ['1000000000000000001'], newestId: '1000000000000000003', full: true });
+    });
+
+    it('should read nothing past the newest message', async () => {
+      channel.messages.fetch.mockResolvedValue(new Collection());
+
+      await expect(sut.fetchMirrorMessagesAfter(channelId, '1000000000000000003', 100)).resolves.toEqual({
+        messages: [],
+        reactedIds: [],
+        newestId: null,
+        full: false,
+      });
+    });
+
+    it('should refuse a channel without messages when reading forwards, and map errors', async () => {
+      channel.messages.fetch.mockRejectedValueOnce(apiError(50_001, 403));
+      await expect(sut.fetchMirrorMessagesAfter(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
+
+      bot.channels.fetch.mockResolvedValue({ isTextBased: () => false, isDMBased: () => false });
+      await expect(sut.fetchMirrorMessagesAfter(channelId, '1', 50)).rejects.toMatchObject({
+        kind: 'unknown-channel',
+      });
+    });
+
     it('should map errors', async () => {
       channel.messages.fetch.mockRejectedValue(apiError(50_001, 403));
       await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
