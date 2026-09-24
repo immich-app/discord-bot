@@ -12,6 +12,7 @@ import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 import { RSSFeedTable } from 'src/schema/tables/rss-feeds.table';
 import { ScheduledMessageTable } from 'src/schema/tables/scheduled-messages.table';
 import { SponsorTable } from 'src/schema/tables/sponsor.table';
+import { ZulipExpanderTable } from 'src/schema/tables/zulip-expander.table';
 
 @Extensions(['uuid-ossp'])
 @Database({ name: 'discord-bot' })
@@ -29,6 +30,7 @@ export class DiscordBotDatabase {
     MirrorMessageTable,
     MirrorLinkTable,
     MirrorIdentityTable,
+    ZulipExpanderTable,
   ];
 }
 
@@ -75,6 +77,8 @@ export type NewMirrorLink = Insertable<MirrorLinkTable>;
 export type MirrorIdentity = Selectable<MirrorIdentityTable>;
 export type NewMirrorIdentity = Insertable<MirrorIdentityTable>;
 
+export type ZulipExpander = Selectable<ZulipExpanderTable>;
+
 export interface Database {
   payment: PaymentTable;
   sponsor: SponsorTable;
@@ -88,4 +92,5 @@ export interface Database {
   mirror_message: MirrorMessageTable;
   mirror_link: MirrorLinkTable;
   mirror_identity: MirrorIdentityTable;
+  zulip_expander: ZulipExpanderTable;
 }

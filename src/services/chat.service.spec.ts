@@ -13,8 +13,10 @@ import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { ZulipExpander } from 'src/schema';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -135,6 +137,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getMirrorIdentities: vitest.fn(),
   setMirrorIdentity: vitest.fn(),
   removeMirrorIdentity: vitest.fn(),
+  getZulipExpanders: vitest.fn(),
+  addZulipExpander: vitest.fn(),
+  removeZulipExpander: vitest.fn(),
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
@@ -205,6 +210,7 @@ describe('Bot test', () => {
   let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
   let zulipServiceMock: ReturnType<typeof newZulipServiceMock>;
+  let zulipExpanders: ZulipExpanderService;
   let fetchMock: ReturnType<typeof vitest.fn>;
 
   beforeEach(() => {
@@ -217,6 +223,7 @@ describe('Bot test', () => {
     mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
     zulipServiceMock = newZulipServiceMock();
+    zulipExpanders = new ZulipExpanderService(databaseMock);
     // 7TV and BTTV lookups go through the global fetch.
     fetchMock = vitest.fn();
     vitest.stubGlobal('fetch', fetchMock);
@@ -232,6 +239,7 @@ describe('Bot test', () => {
       zulipMock,
       zulipServiceMock as unknown as ZulipService,
       new NotificationService(discordMock, mattermostMock, zulipMock),
+      zulipExpanders,
     );
   });
 
@@ -1748,6 +1756,10 @@ describe('Bot test', () => {
     });
 
     it('should subscribe the Zulip expanders to the event loop', async () => {
+      databaseMock.getZulipExpanders.mockResolvedValue([
+        { streamId: 107, createdBy: 'migration', createdAt: new Date(0) },
+      ]);
+      await zulipExpanders.init();
       await sut.init();
 
       expect(zulipServiceMock.onMessage).toHaveBeenCalledOnce();
@@ -1784,13 +1796,58 @@ describe('Bot test', () => {
   });
 
   describe('onZulipMessage', () => {
-    beforeEach(() => {
-      zulipMock.sendMessage.mockResolvedValue({ id: 901 });
+    const expanderRow = (streamId: number): ZulipExpander => ({
+      streamId,
+      createdBy: 'migration',
+      createdAt: new Date(0),
     });
 
-    it('should run in the Immich stream and every immich team stream', () => {
-      expect(Constants.Zulip.Expanders.GithubReferences).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
-      expect(Constants.Zulip.Expanders.TwitterMirror).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
+    beforeEach(async () => {
+      zulipMock.sendMessage.mockResolvedValue({ id: 901 });
+      databaseMock.getZulipExpanders.mockResolvedValue(
+        [54, 107, 108, 109, 110, 111, 112, 113, 120].map((streamId) => expanderRow(streamId)),
+      );
+      await zulipExpanders.init();
+    });
+
+    it('should mirror x.com links but ask GitHub nothing in a stream without GitHub expansion', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 121, content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 121,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should expand GitHub references in a stream turned on after the seed', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 120, content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 120,
+        topic: 'thumbnails',
+        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should follow a change to GitHub expansion at once, with no query per message', async () => {
+      databaseMock.removeZulipExpander.mockResolvedValue(true);
+      const remaining = (await databaseMock.getZulipExpanders()).filter(({ streamId }) => streamId !== 107);
+      databaseMock.getZulipExpanders.mockResolvedValue(remaining);
+      await zulipExpanders.disable(107);
+      const reads = databaseMock.getZulipExpanders.mock.calls.length;
+
+      await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 107,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+      expect(databaseMock.getZulipExpanders).toHaveBeenCalledTimes(reads);
     });
 
     it('should reply with the expanded GitHub references in the same stream and topic', async () => {
@@ -1918,8 +1975,19 @@ describe('Bot test', () => {
     it.each([
       { name: 'FUTO staff', streamId: Constants.Zulip.Streams.FUTOStaff },
       { name: 'an unknown stream', streamId: 999 },
-    ])('should do nothing in $name', async ({ streamId }) => {
+    ])('should expand nothing from GitHub in $name, and still mirror x.com links there', async ({ streamId }) => {
       await sut.onZulipMessage(zulipMessage({ streamId, content: '#4242 https://x.com/immich/status/1' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: streamId,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should send nothing in a stream without GitHub expansion when there is no x.com link', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 999, content: 'see #4242' }));
 
       expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();

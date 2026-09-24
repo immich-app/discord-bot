@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { DateTime, Settings } from 'luxon';
 import { Constants } from 'src/constants';
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { HolidayDto, IHolidaysInterface } from 'src/interfaces/holidays.interface';
 import {
   IZulipInterface,
@@ -12,6 +13,8 @@ import {
   ZulipReceivedMessage,
 } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { ZulipExpander } from 'src/schema';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { afterEach, beforeEach, describe, expect, it, Mock, Mocked, vitest } from 'vitest';
 
@@ -83,17 +86,27 @@ const setNow = (iso: string) => {
   Settings.now = () => millis;
 };
 
+const expanderRow = (streamId: number): ZulipExpander => ({
+  streamId,
+  createdBy: 'migration',
+  createdAt: new Date(0),
+});
+
+const SEEDED_EXPANDERS = [54, 107, 108, 109, 110, 111, 112, 113].map((streamId) => expanderRow(streamId));
+
 const NOTICE = "Tomorrow is a federal holiday: Independence Day. There won't be any meetings tomorrow.";
 
 describe('ZulipService', () => {
   let sut: ZulipService;
   let holidaysMock: Mocked<IHolidaysInterface>;
   let zulipMock: Mocked<IZulipInterface>;
+  let expanderDatabase: Mocked<Pick<IDatabaseRepository, 'getZulipExpanders' | 'addZulipExpander'>>;
+  let expanders: ZulipExpanderService;
 
   const originalNow = Settings.now;
   const originalZone = Settings.defaultZone;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // "Tomorrow" is resolved in the default zone, so pin it for deterministic dates.
     Settings.defaultZone = 'utc';
     // The cron fires at 22:00; this is the evening before Independence Day.
@@ -101,7 +114,13 @@ describe('ZulipService', () => {
 
     holidaysMock = newHolidaysMock();
     zulipMock = newZulipMock();
-    sut = new ZulipService(holidaysMock, zulipMock);
+    expanderDatabase = {
+      getZulipExpanders: vitest.fn().mockResolvedValue(SEEDED_EXPANDERS),
+      addZulipExpander: vitest.fn(),
+    };
+    expanders = new ZulipExpanderService(expanderDatabase as unknown as IDatabaseRepository);
+    await expanders.init();
+    sut = new ZulipService(holidaysMock, zulipMock, expanders);
   });
 
   afterEach(() => {
@@ -625,20 +644,49 @@ describe('ZulipService', () => {
         );
       });
 
-      it('should check every stream of every expander, not only the team streams, naming an unnamed one by its ID', async () => {
-        const mirror = Constants.Zulip.Expanders.TwitterMirror;
-        mirror.push(999);
-        try {
-          await sut.init();
-          await flush();
-        } finally {
-          mirror.pop();
-        }
+      it('should check every stream GitHub expansion is on in, not only the team streams, naming an unnamed one by its ID', async () => {
+        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(999)]);
+        await expanders.init();
 
-        expect(Logger.prototype.warn).toHaveBeenCalledOnce();
-        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+        await sut.init();
+        await flush();
+
+        expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
           'The Zulip bot is not subscribed to stream 999: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it',
         );
+      });
+
+      it('should check a stream GitHub expansion was turned on in since the last registration at the next one', async () => {
+        await sut.init();
+        await flush();
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
+
+        expanderDatabase.addZulipExpander.mockResolvedValue(true);
+        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(997)]);
+        await expanders.enable(997, 'Alice on Zulip (user 12)');
+        polls[0].reject(badQueue());
+        await nextPoll();
+
+        expect(zulipMock.registerQueue).toHaveBeenCalledTimes(2);
+        expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
+          'The Zulip bot is not subscribed to stream 997: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it',
+        );
+      });
+
+      it('should not check a stream once GitHub expansion is off there and it takes no commands', async () => {
+        expanderDatabase.getZulipExpanders.mockResolvedValue(
+          SEEDED_EXPANDERS.filter(({ streamId }) => streamId !== Constants.Zulip.Streams.Immich),
+        );
+        await expanders.init();
+        zulipMock.registerQueue.mockResolvedValue({
+          queue: { queueId: 'q1', lastEventId: -1 },
+          subscribedStreamIds: [...Object.values(Constants.Zulip.TeamStreams)],
+        });
+
+        await sut.init();
+        await flush();
+
+        expect(Logger.prototype.warn).not.toHaveBeenCalled();
       });
     });
 

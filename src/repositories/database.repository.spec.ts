@@ -1,6 +1,7 @@
 import { Kysely, sql } from 'kysely';
 import { DatabaseRepository } from 'src/repositories/database.repository';
 import { Database } from 'src/schema';
+import { down, up } from 'src/schema/migrations/1790263846796-ZulipExpanders';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -10,7 +11,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link and mirror_identity rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity and zulip_expander rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -18,6 +19,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
   beforeEach(async () => {
     await db.deleteFrom('mirror_link').execute();
     await db.deleteFrom('mirror_identity').execute();
+    await db.deleteFrom('zulip_expander').execute();
   });
 
   afterAll(async () => {
@@ -83,6 +85,53 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       });
       expect(await sut.removeMirrorIdentity({ zulipUserId: 12 })).toBeUndefined();
       expect(await sut.getMirrorIdentities()).toEqual([]);
+    });
+  });
+
+  describe('zulip expanders', () => {
+    const streams = (rows: { streamId: number }[]) => rows.map(({ streamId }) => streamId);
+
+    it('should seed GitHub expansion in the Immich stream and every immich team stream', async () => {
+      const rolledBack = new Error('rolled back');
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await down(trx);
+          await up(trx);
+          const rows = await trx.selectFrom('zulip_expander').selectAll().orderBy('streamId').execute();
+          expect(streams(rows)).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
+          expect(new Set(rows.map(({ createdBy }) => createdBy))).toEqual(new Set(['migration']));
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+    });
+
+    it('should add a stream once, keep who added it first, and list by stream', async () => {
+      expect(await sut.addZulipExpander(120, 'Alice on Zulip (user 12)')).toBe(true);
+      expect(await sut.addZulipExpander(120, 'Bob on Zulip (user 13)')).toBe(false);
+      expect(await sut.addZulipExpander(54, 'Bob on Zulip (user 13)')).toBe(true);
+
+      const rows = await sut.getZulipExpanders();
+      expect(rows).toEqual([
+        { streamId: 54, createdBy: 'Bob on Zulip (user 13)', createdAt: expect.any(Date) },
+        { streamId: 120, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
+      ]);
+    });
+
+    it('should remove only that stream, and resolve to whether it was there', async () => {
+      await sut.addZulipExpander(120, 'Alice');
+      await sut.addZulipExpander(121, 'Alice');
+
+      expect(await sut.removeZulipExpander(120)).toBe(true);
+      expect(await sut.removeZulipExpander(120)).toBe(false);
+      expect(streams(await sut.getZulipExpanders())).toEqual([121]);
+    });
+
+    it('should refuse a second row of the same stream', async () => {
+      await db.insertInto('zulip_expander').values({ streamId: 120, createdBy: 'Alice' }).execute();
+
+      await expect(
+        db.insertInto('zulip_expander').values({ streamId: 120, createdBy: 'Bob' }).execute(),
+      ).rejects.toThrow('zulip_expander_pkey');
     });
   });
 

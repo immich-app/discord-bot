@@ -38,6 +38,7 @@ import {
   UpdateMirrorMessage,
   UpdateRSSFeed,
   UpdateScheduledMessage,
+  ZulipExpander,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
@@ -546,5 +547,28 @@ export class DatabaseRepository implements IDatabaseRepository {
         ? query.where('zulipUserId', '=', owner.zulipUserId)
         : query.where('discordUserId', '=', owner.discordUserId);
     return matching.returningAll().executeTakeFirst();
+  }
+
+  getZulipExpanders(): Promise<ZulipExpander[]> {
+    return this.db.selectFrom('zulip_expander').selectAll().orderBy('streamId').execute();
+  }
+
+  async addZulipExpander(streamId: number, createdBy: string): Promise<boolean> {
+    const added = await this.db
+      .insertInto('zulip_expander')
+      .values({ streamId, createdBy })
+      .onConflict((oc) => oc.column('streamId').doNothing())
+      .returning('streamId')
+      .executeTakeFirst();
+    return added !== undefined;
+  }
+
+  async removeZulipExpander(streamId: number): Promise<boolean> {
+    const removed = await this.db
+      .deleteFrom('zulip_expander')
+      .where('streamId', '=', streamId)
+      .returning('streamId')
+      .executeTakeFirst();
+    return removed !== undefined;
   }
 }

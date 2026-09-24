@@ -15,6 +15,7 @@ import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mi
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
@@ -31,8 +32,13 @@ const SUPPRESS_EMBEDS_IGNORED =
 /** Zulip's roles are ordered: 100 is an owner, 200 an administrator. */
 const ZULIP_ADMINISTRATOR_ROLE = 200;
 
-const NOT_AN_ADMINISTRATOR =
-  'Only Zulip organization administrators and owners can change or list the Discord-Zulip mirror.';
+const MIRROR = 'change or list the Discord-Zulip mirror';
+
+const GITHUB_EXPANSION =
+  'issue, pull request and discussion links and `#1234` to their titles, file permalinks to code';
+
+const NOT_SUBSCRIBED =
+  '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
 
 const EMOTE_SYNC_SERVER = `the ${Constants.Discord.EmoteSyncServer.name} Discord server (${Constants.Discord.EmoteSyncServer.id})`;
 
@@ -74,8 +80,8 @@ type Command = {
   description: string;
   positionals: number;
   options: string[];
-  /** Taken in any stream, from organization administrators and owners only. */
-  administrators?: true;
+  /** Taken in any stream, from organization administrators and owners only; what they alone can do, for the refusal. */
+  administrators?: string;
   run: (context: CommandContext) => Promise<string | undefined>;
 };
 
@@ -180,7 +186,7 @@ export class ZulipCommandService {
         "start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
       positionals: 0,
       options: ['topic'],
-      administrators: true,
+      administrators: MIRROR,
       run: (context) => this.mirrorLink(context),
     },
     'mirror-unlink': {
@@ -188,7 +194,7 @@ export class ZulipCommandService {
       description: 'stop mirroring this stream with its Discord channel, and announce it on both sides',
       positionals: 0,
       options: [],
-      administrators: true,
+      administrators: MIRROR,
       run: ({ message }) => this.mirrorUnlink(message),
     },
     'mirror-backfill': {
@@ -197,7 +203,7 @@ export class ZulipCommandService {
         'copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
       positionals: 0,
       options: [],
-      administrators: true,
+      administrators: MIRROR,
       run: ({ message }) => this.mirrorBackfill(message),
     },
     'mirror-list': {
@@ -205,8 +211,16 @@ export class ZulipCommandService {
       description: 'list the mirrored channels and streams, and the linked accounts',
       positionals: 0,
       options: [],
-      administrators: true,
+      administrators: MIRROR,
       run: () => this.mirrorLinks.list('zulip'),
+    },
+    expanders: {
+      usage: 'expanders <on|off|list>',
+      description: `turn GitHub expansion (${GITHUB_EXPANSION}) on or off in this stream, or \`list\` the streams it is on in; x.com links are mirrored on nitter.net in every stream`,
+      positionals: 1,
+      options: [],
+      administrators: 'change or list GitHub expansion',
+      run: (context) => this.expanders(context),
     },
     'discord-unlink': {
       usage: 'discord-unlink',
@@ -235,6 +249,7 @@ export class ZulipCommandService {
     private scheduledMessageService: ScheduledMessageService,
     private rssService: RSSService,
     private mirrorLinks: MirrorLinkService,
+    private zulipExpanders: ZulipExpanderService,
   ) {}
 
   async init() {
@@ -300,7 +315,7 @@ export class ZulipCommandService {
     }
     try {
       if (command.administrators && !(await this.isAdministrator(message.senderId))) {
-        return NOT_AN_ADMINISTRATOR;
+        return `Only Zulip organization administrators and owners can ${command.administrators}.`;
       }
       return await command.run({ message, args, options });
     } catch (error) {
@@ -398,14 +413,17 @@ export class ZulipCommandService {
   }
 
   private help() {
-    const lines = Object.values(this.commands).map(({ usage, description }) => `- ${code(usage)}: ${description}`);
+    const lines = Object.values(this.commands).map(
+      ({ usage, description, administrators }) =>
+        `- ${code(usage)}${administrators ? ' (administrators)' : ''}: ${description}`,
+    );
     return [
       'Mention me at the start of a message in a team stream, then one of:',
       ...lines,
       // The blank line ends the list: without it, Markdown reads the next line as the last item's continuation.
       '',
       `Arguments are positional or ${code('key=value')}; quote a value with spaces (${code('text="two words"')}). Every reply is posted here, in the topic.`,
-      `The ${code('mirror-*')} commands are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
+      `The commands marked (administrators) are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
     ].join('\n');
   }
 
@@ -615,6 +633,56 @@ export class ZulipCommandService {
     return [
       'RSS feeds of this stream:',
       ...feeds.map(({ url, topic }) => `- ${code(url)} in ${describeTopic(topic)}`),
+    ].join('\n');
+  }
+
+  private async expanders({ message, args }: CommandContext) {
+    const action = args[0]?.toLowerCase();
+    const { streamId } = message;
+    if (action === 'list') {
+      return this.expanderList();
+    }
+    if (action === 'off') {
+      const removed = await this.zulipExpanders.disable(streamId);
+      return removed
+        ? 'Turned off GitHub expansion in this stream.'
+        : 'Nothing changed: GitHub expansion was already off in this stream.';
+    }
+    if (action !== 'on') {
+      return this.usage('expanders');
+    }
+    const subscriptions = await this.zulip.getSubscriptions();
+    const added = await this.zulipExpanders.enable(
+      streamId,
+      `${message.senderFullName} on Zulip (user ${message.senderId})`,
+    );
+    const reply = added
+      ? 'Turned on GitHub expansion in this stream.'
+      : 'Nothing changed: GitHub expansion was already on in this stream.';
+    return subscriptions.some((subscription) => subscription.streamId === streamId)
+      ? reply
+      : `${reply}\n${NOT_SUBSCRIBED}`;
+  }
+
+  private async expanderList() {
+    const streams = this.zulipExpanders.list();
+    if (streams.length === 0) {
+      return 'GitHub expansion is on in no stream.';
+    }
+    const [subscriptions, names] = await Promise.all([
+      this.zulip.getSubscriptions().catch(() => undefined),
+      Promise.all(streams.map((streamId) => this.zulip.getStream(streamId).catch(() => undefined))),
+    ]);
+    const subscribed = subscriptions && new Set(subscriptions.map(({ streamId }) => streamId));
+    return [
+      `GitHub expansion (${GITHUB_EXPANSION}) is on in:`,
+      ...streams.map((streamId, index) => {
+        const stream = names[index];
+        const name = stream ? `**#${neutraliseZulipMentions(stream.name)}** (${streamId})` : `stream ${streamId}`;
+        const warning =
+          subscribed && !subscribed.has(streamId) ? ' (⚠ I am not subscribed, so nothing reaches me there)' : '';
+        return `- ${name}${warning}`;
+      }),
     ].join('\n');
   }
 

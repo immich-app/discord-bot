@@ -262,10 +262,6 @@ export const Constants = {
       zulipStreams.ImmichPullRequests,
       zulipStreams.ImmichAlerts,
     ],
-    Expanders: {
-      GithubReferences: [zulipStreams.Immich, ...Object.values(zulipTeamStreams)],
-      TwitterMirror: [zulipStreams.Immich, ...Object.values(zulipTeamStreams)],
-    },
     /** Zulip has no per-channel bot permissions, so this list is the only authorisation for commands. */
     Commands: Object.values(zulipTeamStreams),
     TeamStreams: zulipTeamStreams,
