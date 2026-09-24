@@ -5246,6 +5246,56 @@ describe(MirrorService.name, () => {
       );
     });
 
+    describe('notices whose send fails', () => {
+      const badGateway = () => new ZulipApiError(502, 'UNKNOWN_ERROR', 'Bad Gateway', 'POST /messages');
+      const sendsOf = (content: string) => contents().filter((sent) => sent === content).length;
+      const botMessage = (content: string) => ({ id: 1, senderId: BOT.userId, content }) as never;
+
+      it('should not post the opening notice again when the send that failed had gone through', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        zulip.sendMessage.mockRejectedValueOnce(badGateway());
+        zulip.getMessages.mockResolvedValueOnce([botMessage(opening(first))]);
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(opening(first))).toBe(1);
+        expect(contents()).toContain(copyOf(first));
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+      });
+
+      it('should post the opening notice again when the send that failed had not gone through', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        zulip.sendMessage.mockRejectedValueOnce(badGateway());
+        zulip.getMessages.mockResolvedValue([]);
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(opening(first))).toBe(2);
+        expect(contents().filter((sent) => sent === copyOf(first))).toHaveLength(1);
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+      });
+
+      it('should try the end notice again before the history counts as done', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        const end = '📜 End of the history from Discord: 1 message';
+        zulip.getMessages.mockResolvedValue([]);
+        zulip.sendMessage.mockImplementation(async ({ content }) => {
+          if (content === end && sendsOf(end) === 1) {
+            throw badGateway();
+          }
+          return { id: 7000 + contents().length };
+        });
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(end)).toBe(2);
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
+      });
+    });
+
     it('should stream the history a page at a time, skipping a page that is mirrored in one read', async () => {
       const messages = Array.from({ length: 101 }, (_, index) => old(index + 1));
       inHistory(DEV_CHANNEL, ...messages);
