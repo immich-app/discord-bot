@@ -1,5 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChannelType, Message, PartialMessage, TextBasedChannel } from 'discord.js';
+import {
+  ChannelType,
+  DiscordAPIError,
+  Message,
+  PartialMessage,
+  RESTJSONErrorCodes,
+  TextBasedChannel,
+} from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import { Constants } from 'src/constants';
 import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
@@ -7,6 +14,15 @@ import { MirrorService } from 'src/services/mirror.service';
 
 const parentOf = (channel: TextBasedChannel | null) =>
   channel && !channel.isDMBased() ? mirrorLocation(channel).channelId : undefined;
+
+const GONE_OR_HIDDEN = new Set<unknown>([
+  RESTJSONErrorCodes.UnknownMessage,
+  RESTJSONErrorCodes.UnknownChannel,
+  RESTJSONErrorCodes.MissingAccess,
+  RESTJSONErrorCodes.MissingPermissions,
+]);
+
+const isGoneOrHidden = (error: unknown) => error instanceof DiscordAPIError && GONE_OR_HIDDEN.has(error.code);
 
 /** Priority 0 runs these before every other handler of the same event, so the mirror enqueues in emission order. */
 @Discord()
@@ -23,10 +39,19 @@ export class DiscordMirrorEvents {
     }
   }
 
+  /** discord.js types the new message as complete, but one it had not cached can come partial, without an author. */
   @On({ event: 'messageUpdate', priority: 0 })
   onMessageUpdate([, message]: ArgsOf<'messageUpdate'>) {
-    if (this.isCandidate(message) && this.mirror.handlesChannel(mirrorLocation(message.channel).channelId)) {
-      this.mirror.onDiscordMessageEdited(toDiscordSourceMessage(message));
+    const updated = message as Message | PartialMessage;
+    if (updated.partial) {
+      const channelId = parentOf(updated.channel);
+      if (channelId && this.mirror.handlesChannel(channelId)) {
+        this.mirror.onDiscordMessageEditedUnread(channelId, updated.id, () => this.readEdited(updated));
+      }
+      return;
+    }
+    if (this.isCandidate(updated) && this.mirror.handlesChannel(mirrorLocation(updated.channel).channelId)) {
+      this.mirror.onDiscordMessageEdited(toDiscordSourceMessage(updated));
     }
   }
 
@@ -91,6 +116,20 @@ export class DiscordMirrorEvents {
 
   private isCandidate(message: Message): message is Message<true> {
     return isMirrorCandidate(message, (webhookId) => this.mirror.isOwnWebhook(webhookId));
+  }
+
+  private async readEdited(message: PartialMessage) {
+    let full: Message;
+    try {
+      full = await message.fetch();
+    } catch (error) {
+      if (!isGoneOrHidden(error)) {
+        throw error;
+      }
+      this.logger.debug(`Discord message ${message.id} in channel ${message.channelId} was edited and cannot be read`);
+      return undefined;
+    }
+    return this.isCandidate(full) ? toDiscordSourceMessage(full) : undefined;
   }
 
   /** The bot's own reactions are the mirror's, never mirrored back. */

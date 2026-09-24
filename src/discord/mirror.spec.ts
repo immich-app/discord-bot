@@ -1,5 +1,13 @@
 import { Logger } from '@nestjs/common';
-import { AnyThreadChannel, ChannelType, Collection, Message, TextBasedChannel } from 'discord.js';
+import {
+  AnyThreadChannel,
+  ChannelType,
+  Collection,
+  DiscordAPIError,
+  Message,
+  RESTJSONErrorCodes,
+  TextBasedChannel,
+} from 'discord.js';
 import { MetadataStorage } from 'discordx';
 import { Constants } from 'src/constants';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
@@ -38,6 +46,7 @@ describe(DiscordMirrorEvents.name, () => {
       | 'isOwnWebhook'
       | 'onDiscordMessage'
       | 'onDiscordMessageEdited'
+      | 'onDiscordMessageEditedUnread'
       | 'onDiscordMessagesDeleted'
       | 'onDiscordThreadRenamed'
       | 'onDiscordThreadDeleted'
@@ -50,12 +59,15 @@ describe(DiscordMirrorEvents.name, () => {
   >;
 
   beforeEach(() => {
+    vitest.clearAllMocks();
     vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    vitest.spyOn(Logger.prototype, 'debug').mockImplementation(() => {});
     mirror = {
       handlesChannel: vitest.fn((channelId: string) => channelId === PARENT),
       isOwnWebhook: vitest.fn((webhookId: string) => webhookId === '700000000000000001'),
       onDiscordMessage: vitest.fn(),
       onDiscordMessageEdited: vitest.fn(),
+      onDiscordMessageEditedUnread: vitest.fn(),
       onDiscordMessagesDeleted: vitest.fn(),
       onDiscordThreadRenamed: vitest.fn(),
       onDiscordThreadDeleted: vitest.fn(),
@@ -127,6 +139,110 @@ describe(DiscordMirrorEvents.name, () => {
     sut.onMessageCreate([message]);
 
     expect(mirror.onDiscordMessage).not.toHaveBeenCalled();
+  });
+
+  describe('an edit that arrives partial', () => {
+    const fetched = { id: dto.id, channel: guildChannel } as unknown as Message<true>;
+    const partial = (fetch: () => Promise<Message>, channel: unknown = guildChannel) =>
+      ({ id: dto.id, channelId: THREAD, channel, partial: true, author: null, content: null, fetch }) as never;
+    const apiError = (code: number) =>
+      new DiscordAPIError({ code, message: `Error ${code}` }, code, 404, 'GET', 'https://discord.com/api', {});
+
+    const readOf = () => {
+      expect(mirror.onDiscordMessageEditedUnread).toHaveBeenCalledExactlyOnceWith(PARENT, dto.id, expect.any(Function));
+      return mirror.onDiscordMessageEditedUnread.mock.calls[0][2];
+    };
+
+    it('should be queued without being read, and read when its turn comes, then filtered and converted', async () => {
+      const fetch = vitest.fn().mockResolvedValue(fetched);
+
+      sut.onMessageUpdate([message, partial(fetch)]);
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(isMirrorCandidate).not.toHaveBeenCalled();
+      expect(mirror.onDiscordMessageEdited).not.toHaveBeenCalled();
+      await expect(readOf()()).resolves.toBe(dto);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(isMirrorCandidate).toHaveBeenCalledExactlyOnceWith(fetched, expect.any(Function));
+      expect(toDiscordSourceMessage).toHaveBeenCalledExactlyOnceWith(fetched);
+    });
+
+    it('should drop it once read when it is not a mirror candidate', async () => {
+      vitest.mocked(isMirrorCandidate).mockReturnValue(false);
+
+      sut.onMessageUpdate([message, partial(vitest.fn().mockResolvedValue(fetched))]);
+
+      await expect(readOf()()).resolves.toBeUndefined();
+      expect(toDiscordSourceMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['deleted', RESTJSONErrorCodes.UnknownMessage],
+      ['in a channel that is gone', RESTJSONErrorCodes.UnknownChannel],
+      ['hidden from the bot', RESTJSONErrorCodes.MissingAccess],
+      ['in a channel the bot may not read', RESTJSONErrorCodes.MissingPermissions],
+    ])('should drop it quietly when the message is %s', async (_, code) => {
+      sut.onMessageUpdate([message, partial(vitest.fn().mockRejectedValue(apiError(code)))]);
+
+      await expect(readOf()()).resolves.toBeUndefined();
+      expect(Logger.prototype.debug).toHaveBeenCalledExactlyOnceWith(
+        `Discord message ${dto.id} in channel ${THREAD} was edited and cannot be read`,
+      );
+      expect(Logger.prototype.error).not.toHaveBeenCalled();
+    });
+
+    it('should leave any other failure to read it to the queue', async () => {
+      const error = apiError(RESTJSONErrorCodes.UnknownAccount);
+      sut.onMessageUpdate([message, partial(vitest.fn().mockRejectedValue(error))]);
+
+      await expect(readOf()()).rejects.toBe(error);
+      expect(Logger.prototype.debug).not.toHaveBeenCalled();
+    });
+
+    it.each<[string, unknown]>([
+      ['outside a mirrored channel', { id: '100000000000000555', isDMBased: () => false }],
+      ['in an uncached channel', null],
+      ['in a direct message', { isDMBased: () => true }],
+    ])('should drop it %s without reading it', (_, channel) => {
+      vitest
+        .mocked(mirrorLocation)
+        .mockReturnValue({ channelId: '100000000000000555', threadId: null, threadName: null });
+      const fetch = vitest.fn();
+
+      sut.onMessageUpdate([message, partial(fetch, channel)]);
+
+      expect(mirror.onDiscordMessageEditedUnread).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('should pass on deletions and reactions of messages it never cached, which come partial', () => {
+    const partial = {
+      id: dto.id,
+      channel: guildChannel,
+      guildId: Constants.Discord.Servers[0],
+      client: { user: { id: '500000000000000001' } },
+      partial: true,
+      author: null,
+      content: null,
+    } as never;
+
+    sut.onMessageDelete([partial]);
+    sut.onMessageDeleteBulk([new Collection([[dto.id, partial]]), guildChannel] as never);
+    sut.onReactionAdd([
+      { message: partial, partial: true },
+      { id: '400000000000000001', partial: true },
+    ] as never);
+    sut.onReactionRemoveAll([partial, new Collection()] as never);
+
+    expect(mirror.onDiscordMessagesDeleted.mock.calls).toEqual([
+      [PARENT, [dto.id]],
+      [PARENT, [dto.id]],
+    ]);
+    expect(mirror.onDiscordReactionsChanged.mock.calls).toEqual([
+      [PARENT, dto.id],
+      [PARENT, dto.id],
+    ]);
   });
 
   it('should pass deletions on by ID', () => {

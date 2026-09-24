@@ -663,6 +663,24 @@ export class MirrorService implements OnModuleDestroy {
     state?.queue.push(`edit of Discord message ${dto.id}`, () => this.editFromDiscord(state, dto));
   }
 
+  /**
+   * For an edit whose message arrived incomplete. It is read when its turn comes, so it keeps its place among the
+   * pair's other changes and a deletion queued after it still runs after it; `read` resolves to `undefined` to drop it.
+   */
+  onDiscordMessageEditedUnread(
+    channelId: string,
+    messageId: string,
+    read: () => Promise<DiscordSourceMessage | undefined>,
+  ) {
+    const state = this.byChannel(channelId);
+    state?.queue.push(`edit of Discord message ${messageId}`, async () => {
+      const dto = await read();
+      if (dto) {
+        await this.editFromDiscord(state, dto);
+      }
+    });
+  }
+
   onDiscordMessagesDeleted(channelId: string, messageIds: string[]) {
     const state = this.byChannel(channelId);
     if (state && messageIds.length > 0) {

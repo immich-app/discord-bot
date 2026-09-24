@@ -2467,6 +2467,40 @@ describe(MirrorService.name, () => {
       expect(db.messages[0].sourceHash).not.toBe(db.repository.createMirrorMessages.mock.calls[0][0][0].sourceHash);
     });
 
+    it('should read an edit that arrived incomplete when its turn comes, ahead of a deletion queued after it', async () => {
+      await fromDiscord(discordMessage());
+      const events: string[] = [];
+      zulip.updateMessage.mockImplementation(async () => void events.push('edit'));
+      zulip.deleteMessage.mockImplementation(async () => void events.push('delete'));
+      const read = vitest.fn(async () => {
+        events.push('read');
+        return discordMessage({ content: 'hello again' });
+      });
+
+      sut.onDiscordMessageEditedUnread(DEV_CHANNEL, '300000000000000001', read);
+      sut.onDiscordMessagesDeleted(DEV_CHANNEL, ['300000000000000001']);
+      expect(read).not.toHaveBeenCalled();
+      await sut.whenIdle();
+
+      expect(events).toEqual(['read', 'edit', 'delete']);
+      expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(5001, {
+        content: '**Contrib** (&#64;contrib123): hello again',
+      });
+    });
+
+    it('should drop an edit that arrived incomplete when it cannot be read', async () => {
+      await fromDiscord(discordMessage());
+
+      sut.onDiscordMessageEditedUnread(DEV_CHANNEL, '300000000000000001', async () => undefined);
+      sut.onDiscordMessageEditedUnread('100000000000000555', '300000000000000001', () => {
+        throw new Error('not read outside a mirrored channel');
+      });
+      await sut.whenIdle();
+
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+      expect(error()).not.toHaveBeenCalled();
+    });
+
     it('should only log when Zulip refuses a late edit', async () => {
       await fromDiscord(discordMessage());
       const hash = db.messages[0].sourceHash;
