@@ -8,6 +8,7 @@ import {
   Message,
   MessageCreateOptions,
   MessageFlags,
+  MessageType,
   Partials,
   PermissionsString,
   RESTJSONErrorCodes,
@@ -708,13 +709,27 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
-  /** Oldest first. */
+  /** Oldest first, with the messages they reply to cached, so that an old reply still names its author. */
   private async fetchMirrorPage(channelId: string, options: FetchMessagesOptions) {
     const channel = await bot.channels.fetch(channelId);
     if (!channel?.isTextBased() || channel.isDMBased()) {
       throw new DiscordMirrorError('unknown-channel');
     }
-    return [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
+    const messages = [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
+    const missing = new Set(
+      messages.flatMap(({ type, reference }) =>
+        type === MessageType.Reply &&
+        reference?.messageId &&
+        reference.channelId === channelId &&
+        !channel.messages.cache.has(reference.messageId)
+          ? [reference.messageId]
+          : [],
+      ),
+    );
+    for (const messageId of missing) {
+      await channel.messages.fetch(messageId).catch(() => undefined);
+    }
+    return messages;
   }
 
   private isCandidate(message: Message): message is Message<true> {

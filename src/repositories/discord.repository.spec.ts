@@ -900,6 +900,45 @@ describe(DiscordRepository.name, () => {
       });
     });
 
+    it('should read the message an old reply answers, once, so the reply can name its author', async () => {
+      const cache = new Collection<string, unknown>();
+      const original = makeMessage('900000000000000001', {
+        content: 'the question',
+        member: { displayName: 'Asker' },
+      });
+      const reply = (id: string) =>
+        makeMessage(id, {
+          type: MessageType.Reply,
+          reference: { messageId: '900000000000000001', channelId },
+          reactions: { cache: new Collection() },
+        });
+      channel.messages = {
+        ...channel.messages,
+        cache,
+        fetch: vitest.fn(async (options: unknown) => {
+          if (typeof options === 'string') {
+            cache.set(options, original);
+            return original;
+          }
+          return new Collection([
+            ['1000000000000000001', reply('1000000000000000001')],
+            ['1000000000000000002', reply('1000000000000000002')],
+          ]);
+        }),
+      } as never;
+
+      const page = await sut.fetchMirrorMessagesAfter(channelId, '999999999999999999', 100);
+
+      expect(channel.messages.fetch).toHaveBeenCalledWith('900000000000000001');
+      expect(vitest.mocked(channel.messages.fetch).mock.calls.filter(([arg]) => typeof arg === 'string')).toHaveLength(
+        1,
+      );
+      expect(page.messages.map(({ replyTo }) => replyTo)).toEqual([
+        { messageId: '900000000000000001', authorDisplayName: 'Asker', content: 'the question' },
+        { messageId: '900000000000000001', authorDisplayName: 'Asker', content: 'the question' },
+      ]);
+    });
+
     it('should read forwards after a message, oldest first, with the candidates that have reactions', async () => {
       await resolveWebhook();
       const reacted = { reactions: { cache: new Collection([['👍', {}]]) } };
