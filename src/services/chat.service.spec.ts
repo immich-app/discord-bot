@@ -14,7 +14,6 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ZulipExpander } from 'src/schema';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
 import { ZulipExpanderService } from 'src/services/zulip-expander.service';
@@ -139,8 +138,8 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   setMirrorIdentity: vitest.fn(),
   removeMirrorIdentity: vitest.fn(),
   getZulipExpanders: vitest.fn(),
-  addZulipExpanders: vitest.fn(),
-  removeZulipExpanders: vitest.fn(),
+  addZulipExpander: vitest.fn(),
+  removeZulipExpander: vitest.fn(),
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
@@ -1758,7 +1757,7 @@ describe('Bot test', () => {
 
     it('should subscribe the Zulip expanders to the event loop', async () => {
       databaseMock.getZulipExpanders.mockResolvedValue([
-        { streamId: 107, expander: 'github', createdBy: 'migration', createdAt: new Date(0) },
+        { streamId: 107, createdBy: 'migration', createdAt: new Date(0) },
       ]);
       await zulipExpanders.init();
       await sut.init();
@@ -1797,41 +1796,25 @@ describe('Bot test', () => {
   });
 
   describe('onZulipMessage', () => {
-    const expanderRow = (streamId: number, expander: ZulipExpanderKind): ZulipExpander => ({
+    const expanderRow = (streamId: number): ZulipExpander => ({
       streamId,
-      expander,
       createdBy: 'migration',
       createdAt: new Date(0),
     });
-    const SEEDED = [54, 107, 108, 109, 110, 111, 112, 113].flatMap((streamId) => [
-      expanderRow(streamId, 'github'),
-      expanderRow(streamId, 'twitter'),
-    ]);
 
     beforeEach(async () => {
       zulipMock.sendMessage.mockResolvedValue({ id: 901 });
-      databaseMock.getZulipExpanders.mockResolvedValue([
-        ...SEEDED,
-        expanderRow(120, 'github'),
-        expanderRow(121, 'twitter'),
-      ]);
+      databaseMock.getZulipExpanders.mockResolvedValue(
+        [54, 107, 108, 109, 110, 111, 112, 113, 120].map((streamId) => expanderRow(streamId)),
+      );
       await zulipExpanders.init();
     });
 
-    it('should expand GitHub references alone in a stream with only the GitHub expander on', async () => {
-      await sut.onZulipMessage(zulipMessage({ streamId: 120, content: 'https://x.com/immich/status/1 fixes #4242' }));
-
-      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
-        stream: 120,
-        topic: 'thumbnails',
-        content: 'https://github.com/immich-app/immich/pull/4242',
-      });
-    });
-
-    it('should mirror x.com links alone in a stream with only the Twitter expander on, without a GitHub call', async () => {
+    it('should mirror x.com links but ask GitHub nothing in a stream without GitHub expansion', async () => {
       await sut.onZulipMessage(zulipMessage({ streamId: 121, content: 'https://x.com/immich/status/1 fixes #4242' }));
 
       expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: 121,
         topic: 'thumbnails',
@@ -1839,13 +1822,21 @@ describe('Bot test', () => {
       });
     });
 
-    it('should follow a change to the expanders at once, with no query per message', async () => {
-      databaseMock.removeZulipExpanders.mockResolvedValue([expanderRow(107, 'github')]);
-      const remaining = (await databaseMock.getZulipExpanders()).filter(
-        ({ streamId, expander }) => !(streamId === 107 && expander === 'github'),
-      );
+    it('should expand GitHub references in a stream turned on after the seed', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 120, content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 120,
+        topic: 'thumbnails',
+        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should follow a change to GitHub expansion at once, with no query per message', async () => {
+      databaseMock.removeZulipExpander.mockResolvedValue(true);
+      const remaining = (await databaseMock.getZulipExpanders()).filter(({ streamId }) => streamId !== 107);
       databaseMock.getZulipExpanders.mockResolvedValue(remaining);
-      await zulipExpanders.disable(107, ['github']);
+      await zulipExpanders.disable(107);
       const reads = databaseMock.getZulipExpanders.mock.calls.length;
 
       await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1 fixes #4242' }));
@@ -1984,8 +1975,19 @@ describe('Bot test', () => {
     it.each([
       { name: 'FUTO staff', streamId: Constants.Zulip.Streams.FUTOStaff },
       { name: 'an unknown stream', streamId: 999 },
-    ])('should do nothing in $name', async ({ streamId }) => {
+    ])('should expand nothing from GitHub in $name, and still mirror x.com links there', async ({ streamId }) => {
       await sut.onZulipMessage(zulipMessage({ streamId, content: '#4242 https://x.com/immich/status/1' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: streamId,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should send nothing in a stream without GitHub expansion when there is no x.com link', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 999, content: 'see #4242' }));
 
       expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();

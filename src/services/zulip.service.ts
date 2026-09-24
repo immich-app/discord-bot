@@ -249,7 +249,7 @@ export class ZulipService implements OnModuleDestroy {
   }
 
   private listeningStreams() {
-    return new Set([...this.expanders.list().map(({ streamId }) => streamId), ...Constants.Zulip.Commands]);
+    return new Set([...this.expanders.list(), ...Constants.Zulip.Commands]);
   }
 
   private async releaseQueue() {

@@ -30,7 +30,6 @@ import {
   ZulipExpander,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
 
@@ -120,8 +119,8 @@ export interface IDatabaseRepository {
   /** Resolves to the removed identity, `undefined` when there was none. */
   removeMirrorIdentity(owner: MirrorIdentityOwner): Promise<MirrorIdentity | undefined>;
   getZulipExpanders(): Promise<ZulipExpander[]>;
-  /** Resolves to the rows it added, leaving out the expanders the stream already had. */
-  addZulipExpanders(streamId: number, expanders: ZulipExpanderKind[], createdBy: string): Promise<ZulipExpander[]>;
-  /** Resolves to the rows it removed. */
-  removeZulipExpanders(streamId: number, expanders: ZulipExpanderKind[]): Promise<ZulipExpander[]>;
+  /** Resolves to whether the stream was added, `false` when it was there already. */
+  addZulipExpander(streamId: number, createdBy: string): Promise<boolean>;
+  /** Resolves to whether the stream was there to remove. */
+  removeZulipExpander(streamId: number): Promise<boolean>;
 }

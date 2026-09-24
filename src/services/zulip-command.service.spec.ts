@@ -8,7 +8,6 @@ import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
 import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
 import { NewRSSFeed, NewScheduledMessage, RSSFeed, ScheduledMessage, UpdateRSSFeed, ZulipExpander } from 'src/schema';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ChatService, EmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import {
@@ -117,8 +116,6 @@ const newFakeDatabase = () => {
   const scheduled: ScheduledMessage[] = [];
   const feeds: RSSFeed[] = [];
   const expanders: ZulipExpander[] = [];
-  const hasExpander = (streamId: number, expander: ZulipExpanderKind) =>
-    expanders.some((row) => row.streamId === streamId && row.expander === expander);
   const findFeed = (url: string, channelId: string, service: RSSFeed['service']) =>
     feeds.findIndex((feed) => feed.url === url && feed.channelId === channelId && feed.service === service);
   return {
@@ -126,17 +123,19 @@ const newFakeDatabase = () => {
     feeds,
     expanders,
     getZulipExpanders: () => Promise.resolve(expanders.map((row) => ({ ...row }))),
-    addZulipExpanders: (streamId: number, kinds: ZulipExpanderKind[], createdBy: string) => {
-      const added = kinds
-        .filter((expander) => !hasExpander(streamId, expander))
-        .map((expander) => ({ streamId, expander, createdBy, createdAt: new Date() }));
-      expanders.push(...added);
-      return Promise.resolve(added);
+    addZulipExpander: (streamId: number, createdBy: string) => {
+      if (expanders.some((row) => row.streamId === streamId)) {
+        return Promise.resolve(false);
+      }
+      expanders.push({ streamId, createdBy, createdAt: new Date() });
+      return Promise.resolve(true);
     },
-    removeZulipExpanders: (streamId: number, kinds: ZulipExpanderKind[]) => {
-      const removed = expanders.filter((row) => row.streamId === streamId && kinds.includes(row.expander));
-      expanders.splice(0, expanders.length, ...expanders.filter((row) => !removed.includes(row)));
-      return Promise.resolve(removed);
+    removeZulipExpander: (streamId: number) => {
+      const index = expanders.findIndex((row) => row.streamId === streamId);
+      if (index !== -1) {
+        expanders.splice(index, 1);
+      }
+      return Promise.resolve(index !== -1);
     },
     getScheduledMessages: (service?: ScheduledMessage['service']) =>
       Promise.resolve(scheduled.filter((row) => service === undefined || row.service === service)),
@@ -244,7 +243,7 @@ const HELP = [
   '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on|off|list> [github|twitter]` (administrators): turn the GitHub expander (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) or the Twitter one (x.com links to nitter.net) on or off in this stream, both without a name; `list` lists every stream with an expander on',
+  '- `expanders <on|off|list>` (administrators): turn GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) on or off in this stream, or `list` the streams it is on in; x.com links are mirrored on nitter.net in every stream',
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
@@ -1812,107 +1811,68 @@ describe('ZulipCommandService', () => {
 
   describe('expanders', () => {
     const ADMIN = { userId: 12, fullName: 'Alice', role: 200 };
-    const NOT_AN_ADMINISTRATOR = 'Only Zulip organization administrators and owners can change or list the expanders.';
+    const NOT_AN_ADMINISTRATOR =
+      'Only Zulip organization administrators and owners can change or list GitHub expansion.';
     const NOT_SUBSCRIBED =
       '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
-    const LEGEND =
-      'Expanders on Zulip (GitHub: issue, pull request and discussion links and `#1234` to their titles, file permalinks to code; Twitter: x.com links to nitter.net):';
-    const row = (streamId: number, expander: ZulipExpanderKind): ZulipExpander => ({
-      streamId,
-      expander,
-      createdBy: 'migration',
-      createdAt: new Date(0),
-    });
+    const HEADER =
+      'GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) is on in:';
+    const USAGE = 'Usage: `expanders <on|off|list>`';
+    const row = (streamId: number): ZulipExpander => ({ streamId, createdBy: 'migration', createdAt: new Date(0) });
     const contents = () => replies().map(({ content }) => content);
-    const stored = () => database.expanders.map(({ streamId, expander }) => `${streamId}:${expander}`).sort();
+    const stored = () => database.expanders.map(({ streamId }) => streamId).sort((a, b) => a - b);
 
     beforeEach(async () => {
       zulipMock.getUser.mockResolvedValue(ADMIN);
       zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 107 }, { streamId: 120 }]);
-      database.expanders.push(row(107, 'github'), row(107, 'twitter'));
+      database.expanders.push(row(107));
       await zulipExpanders.init();
     });
 
-    it('should turn both on in this stream, in any stream, and store who did it', async () => {
+    it('should turn GitHub expansion on in this stream, in any stream, and store who did it', async () => {
       await send('@**Immich** expanders on', { streamId: 120, topic: 'setup' });
 
       expect(replies()).toEqual([
-        {
-          stream: 120,
-          topic: 'setup',
-          content: 'Turned on the GitHub and Twitter expanders in this stream. On here now: GitHub, Twitter.',
-        },
+        { stream: 120, topic: 'setup', content: 'Turned on GitHub expansion in this stream.' },
       ]);
-      expect(stored()).toEqual(['107:github', '107:twitter', '120:github', '120:twitter']);
-      expect(database.expanders.filter(({ streamId }) => streamId === 120).map(({ createdBy }) => createdBy)).toEqual([
-        'Alice on Zulip (user 12)',
-        'Alice on Zulip (user 12)',
+      expect(database.expanders).toEqual([
+        row(107),
+        { streamId: 120, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
       ]);
-      expect(zulipExpanders.isEnabled(120, 'github')).toBe(true);
-      expect(zulipExpanders.isEnabled(120, 'twitter')).toBe(true);
+      expect(zulipExpanders.isEnabled(120)).toBe(true);
     });
 
-    it('should turn one on, whatever the case, and say what else is on', async () => {
-      await send('@**Immich** expanders on GitHub', { streamId: 120 });
-      await send('@**Immich** EXPANDERS ON twitter', { streamId: 120 });
-
-      expect(contents()).toEqual([
-        'Turned on the GitHub expander in this stream. On here now: GitHub.',
-        'Turned on the Twitter expander in this stream. On here now: GitHub, Twitter.',
-      ]);
-      expect(stored()).toEqual(['107:github', '107:twitter', '120:github', '120:twitter']);
-    });
-
-    it('should say which were already on', async () => {
-      await send('@**Immich** expanders on github', { streamId: 120 });
-      await send('@**Immich** expanders on', { streamId: 120 });
-      await send('@**Immich** expanders on');
-      await send('@**Immich** expanders on twitter');
-
-      expect(contents()).toEqual([
-        'Turned on the GitHub expander in this stream. On here now: GitHub.',
-        'Turned on the Twitter expander in this stream; the GitHub expander was already on. On here now: GitHub, Twitter.',
-        'Nothing changed: the GitHub and Twitter expanders were already on in this stream. On here now: GitHub, Twitter.',
-        'Nothing changed: the Twitter expander was already on in this stream. On here now: GitHub, Twitter.',
-      ]);
-    });
-
-    it('should turn one or both off, and say which were already off', async () => {
-      await send('@**Immich** expanders off twitter');
-      await send('@**Immich** expanders off twitter');
-      await send('@**Immich** expanders off');
+    it('should say when it was already on or off, whatever the case of the command', async () => {
+      await send('@**Immich** EXPANDERS ON');
+      await send('@**Immich** expanders Off');
       await send('@**Immich** expanders off');
 
       expect(contents()).toEqual([
-        'Turned off the Twitter expander in this stream. On here now: GitHub.',
-        'Nothing changed: the Twitter expander was already off in this stream. On here now: GitHub.',
-        'Turned off the GitHub expander in this stream; the Twitter expander was already off. On here now: nothing.',
-        'Nothing changed: the GitHub and Twitter expanders were already off in this stream. On here now: nothing.',
+        'Nothing changed: GitHub expansion was already on in this stream.',
+        'Turned off GitHub expansion in this stream.',
+        'Nothing changed: GitHub expansion was already off in this stream.',
       ]);
       expect(stored()).toEqual([]);
-      expect(zulipExpanders.isEnabled(107, 'github')).toBe(false);
-      expect(zulipExpanders.list()).toEqual([]);
+      expect(zulipExpanders.isEnabled(107)).toBe(false);
     });
 
     it('should change this stream only', async () => {
-      await send('@**Immich** expanders on twitter', { streamId: 120 });
-      await send('@**Immich** expanders off github', { streamId: 107 });
+      await send('@**Immich** expanders on', { streamId: 120 });
+      await send('@**Immich** expanders off', { streamId: 107 });
 
-      expect(zulipExpanders.list()).toEqual([
-        { streamId: 107, expanders: ['twitter'] },
-        { streamId: 120, expanders: ['twitter'] },
-      ]);
+      expect(zulipExpanders.list()).toEqual([120]);
+      expect(stored()).toEqual([120]);
     });
 
-    it('should warn when it turns one on in a stream the bot is not subscribed to, and not when it turns one off', async () => {
-      await send('@**Immich** expanders on github', { streamId: 130 });
-      await send('@**Immich** expanders on github', { streamId: 130 });
+    it('should warn when it turns expansion on in a stream the bot is not subscribed to, and not when it turns it off', async () => {
+      await send('@**Immich** expanders on', { streamId: 130 });
+      await send('@**Immich** expanders on', { streamId: 130 });
       await send('@**Immich** expanders off', { streamId: 130 });
 
       expect(contents()).toEqual([
-        `Turned on the GitHub expander in this stream. On here now: GitHub.\n${NOT_SUBSCRIBED}`,
-        `Nothing changed: the GitHub expander was already on in this stream. On here now: GitHub.\n${NOT_SUBSCRIBED}`,
-        'Turned off the GitHub expander in this stream; the Twitter expander was already off. On here now: nothing.',
+        `Turned on GitHub expansion in this stream.\n${NOT_SUBSCRIBED}`,
+        `Nothing changed: GitHub expansion was already on in this stream.\n${NOT_SUBSCRIBED}`,
+        'Turned off GitHub expansion in this stream.',
       ]);
       expect(zulipMock.getSubscriptions).toHaveBeenCalledTimes(2);
     });
@@ -1923,30 +1883,27 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** expanders on', { streamId: 120 });
 
       expect(contents()).toEqual(['`expanders` failed: `Zulip is down`']);
-      expect(stored()).toEqual(['107:github', '107:twitter']);
-      expect(zulipExpanders.isEnabled(120, 'github')).toBe(false);
+      expect(stored()).toEqual([107]);
+      expect(zulipExpanders.isEnabled(120)).toBe(false);
     });
 
     it('should keep the cache as it was when the table refuses the change', async () => {
-      vitest.spyOn(database, 'addZulipExpanders').mockRejectedValue(new Error('connection terminated'));
+      vitest.spyOn(database, 'addZulipExpander').mockRejectedValue(new Error('connection terminated'));
 
       await send('@**Immich** expanders on', { streamId: 120 });
 
       expect(contents()).toEqual(['`expanders` failed: `connection terminated`']);
-      expect(zulipExpanders.list()).toEqual([{ streamId: 107, expanders: ['github', 'twitter'] }]);
+      expect(zulipExpanders.list()).toEqual([107]);
     });
 
-    it('should list every stream with its expanders, by name and ID, and mark one the bot is not subscribed to', async () => {
-      database.expanders.push(row(54, 'github'), row(130, 'twitter'), row(140, 'github'));
+    it('should list every stream by name and ID, and mark one the bot is not subscribed to', async () => {
+      database.expanders.push(row(54), row(130), row(140));
       await zulipExpanders.init();
+      const names: Record<number, string> = { 54: 'Immich', 107: 'immich-general', 130: '@**all** news' };
       zulipMock.getStream.mockImplementation((streamId) =>
         streamId === 140
           ? Promise.reject(new Error('Invalid channel ID'))
-          : Promise.resolve({
-              streamId,
-              name: { 54: 'Immich', 107: 'immich-general', 130: '@**all** news' }[streamId]!,
-              inviteOnly: false,
-            }),
+          : Promise.resolve({ streamId, name: names[streamId], inviteOnly: false }),
       );
       zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 54 }, { streamId: 107 }]);
 
@@ -1954,11 +1911,11 @@ describe('ZulipCommandService', () => {
 
       expect(contents()).toEqual([
         [
-          LEGEND,
-          '- **#Immich** (54): GitHub',
-          '- **#immich-general** (107): GitHub, Twitter',
-          '- **#@​**all** news** (130): Twitter (⚠ I am not subscribed, so nothing reaches me there)',
-          '- stream 140: GitHub (⚠ I am not subscribed, so nothing reaches me there)',
+          HEADER,
+          '- **#Immich** (54)',
+          '- **#immich-general** (107)',
+          '- **#@​**all** news** (130) (⚠ I am not subscribed, so nothing reaches me there)',
+          '- stream 140 (⚠ I am not subscribed, so nothing reaches me there)',
         ].join('\n'),
       ]);
     });
@@ -1969,14 +1926,14 @@ describe('ZulipCommandService', () => {
 
       await send('@**Immich** expanders list');
 
-      expect(contents()).toEqual([`${LEGEND}\n- **#immich-general** (107): GitHub, Twitter`]);
+      expect(contents()).toEqual([`${HEADER}\n- **#immich-general** (107)`]);
     });
 
-    it('should say when no stream has an expander on', async () => {
+    it('should say when GitHub expansion is on in no stream', async () => {
       await send('@**Immich** expanders off');
       await send('@**Immich** expanders list');
 
-      expect(contents()[1]).toBe('No stream has an expander on.');
+      expect(contents()[1]).toBe('GitHub expansion is on in no stream.');
       expect(zulipMock.getStream).not.toHaveBeenCalled();
     });
 
@@ -1996,10 +1953,10 @@ describe('ZulipCommandService', () => {
       expect(zulipMock.getUser).toHaveBeenCalledTimes(3);
       expect(zulipMock.getUser).toHaveBeenCalledWith(12);
       if (allowed) {
-        expect(stored()).toEqual(['120:github', '120:twitter']);
+        expect(stored()).toEqual([120]);
         expect(contents()).toHaveLength(3);
       } else {
-        expect(stored()).toEqual(['107:github', '107:twitter']);
+        expect(stored()).toEqual([107]);
         expect(contents()).toEqual(Array(3).fill(NOT_AN_ADMINISTRATOR));
       }
     });
@@ -2007,16 +1964,15 @@ describe('ZulipCommandService', () => {
     it.each([
       '@**Immich** expanders',
       '@**Immich** expanders toggle',
-      '@**Immich** expanders on mastodon',
-      '@**Immich** expanders on github twitter',
-      '@**Immich** expanders list github',
-      '@**Immich** expanders on github extra words',
+      '@**Immich** expanders on github',
+      '@**Immich** expanders off twitter',
+      '@**Immich** expanders list all',
       '@**Immich** expanders on expander=github',
     ])('should answer %j with the usage and change nothing', async (content) => {
       await send(content, { streamId: 120 });
 
-      expect(contents()).toEqual(['Usage: `expanders <on|off|list> [github|twitter]`']);
-      expect(stored()).toEqual(['107:github', '107:twitter']);
+      expect(contents()).toEqual([USAGE]);
+      expect(stored()).toEqual([107]);
       expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
     });
   });

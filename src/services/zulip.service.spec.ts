@@ -14,7 +14,6 @@ import {
 } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ZulipExpander } from 'src/schema';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { afterEach, beforeEach, describe, expect, it, Mock, Mocked, vitest } from 'vitest';
@@ -87,17 +86,13 @@ const setNow = (iso: string) => {
   Settings.now = () => millis;
 };
 
-const expanderRow = (streamId: number, expander: ZulipExpanderKind): ZulipExpander => ({
+const expanderRow = (streamId: number): ZulipExpander => ({
   streamId,
-  expander,
   createdBy: 'migration',
   createdAt: new Date(0),
 });
 
-const SEEDED_EXPANDERS = [54, 107, 108, 109, 110, 111, 112, 113].flatMap((streamId) => [
-  expanderRow(streamId, 'github'),
-  expanderRow(streamId, 'twitter'),
-]);
+const SEEDED_EXPANDERS = [54, 107, 108, 109, 110, 111, 112, 113].map((streamId) => expanderRow(streamId));
 
 const NOTICE = "Tomorrow is a federal holiday: Independence Day. There won't be any meetings tomorrow.";
 
@@ -105,7 +100,7 @@ describe('ZulipService', () => {
   let sut: ZulipService;
   let holidaysMock: Mocked<IHolidaysInterface>;
   let zulipMock: Mocked<IZulipInterface>;
-  let expanderDatabase: Mocked<Pick<IDatabaseRepository, 'getZulipExpanders' | 'addZulipExpanders'>>;
+  let expanderDatabase: Mocked<Pick<IDatabaseRepository, 'getZulipExpanders' | 'addZulipExpander'>>;
   let expanders: ZulipExpanderService;
 
   const originalNow = Settings.now;
@@ -121,7 +116,7 @@ describe('ZulipService', () => {
     zulipMock = newZulipMock();
     expanderDatabase = {
       getZulipExpanders: vitest.fn().mockResolvedValue(SEEDED_EXPANDERS),
-      addZulipExpanders: vitest.fn(),
+      addZulipExpander: vitest.fn(),
     };
     expanders = new ZulipExpanderService(expanderDatabase as unknown as IDatabaseRepository);
     await expanders.init();
@@ -649,8 +644,8 @@ describe('ZulipService', () => {
         );
       });
 
-      it('should check every stream the expanders are configured in, not only the team streams, naming an unnamed one by its ID', async () => {
-        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(999, 'twitter')]);
+      it('should check every stream GitHub expansion is on in, not only the team streams, naming an unnamed one by its ID', async () => {
+        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(999)]);
         await expanders.init();
 
         await sut.init();
@@ -661,14 +656,14 @@ describe('ZulipService', () => {
         );
       });
 
-      it('should check a stream whose expander was turned on since the last registration at the next one', async () => {
+      it('should check a stream GitHub expansion was turned on in since the last registration at the next one', async () => {
         await sut.init();
         await flush();
         expect(Logger.prototype.warn).not.toHaveBeenCalled();
 
-        expanderDatabase.addZulipExpanders.mockResolvedValue([expanderRow(997, 'github')]);
-        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(997, 'github')]);
-        await expanders.enable(997, ['github'], 'Alice on Zulip (user 12)');
+        expanderDatabase.addZulipExpander.mockResolvedValue(true);
+        expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(997)]);
+        await expanders.enable(997, 'Alice on Zulip (user 12)');
         polls[0].reject(badQueue());
         await nextPoll();
 
@@ -678,7 +673,7 @@ describe('ZulipService', () => {
         );
       });
 
-      it('should not check a stream once no expander is on there and it takes no commands', async () => {
+      it('should not check a stream once GitHub expansion is off there and it takes no commands', async () => {
         expanderDatabase.getZulipExpanders.mockResolvedValue(
           SEEDED_EXPANDERS.filter(({ streamId }) => streamId !== Constants.Zulip.Streams.Immich),
         );

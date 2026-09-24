@@ -9,14 +9,13 @@ import {
 } from 'src/format';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { topicKey } from 'src/mirror/names';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mirror-link.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
-import { ZULIP_EXPANDERS, ZulipExpanderService } from 'src/services/zulip-expander.service';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
@@ -35,20 +34,8 @@ const ZULIP_ADMINISTRATOR_ROLE = 200;
 
 const MIRROR = 'change or list the Discord-Zulip mirror';
 
-const EXPANDER_NAMES: Record<ZulipExpanderKind, string> = { github: 'GitHub', twitter: 'Twitter' };
-
-const describeExpanders = (expanders: ZulipExpanderKind[]) =>
-  expanders.length === 1
-    ? `the ${EXPANDER_NAMES[expanders[0]]} expander`
-    : `the ${expanders.map((expander) => EXPANDER_NAMES[expander]).join(' and ')} expanders`;
-
-const wasOrWere = (expanders: ZulipExpanderKind[]) => (expanders.length === 1 ? 'was' : 'were');
-
-const listExpanders = (expanders: ZulipExpanderKind[]) =>
-  expanders.map((expander) => EXPANDER_NAMES[expander]).join(', ');
-
-const onHere = (expanders: ZulipExpanderKind[]) =>
-  `On here now: ${expanders.length === 0 ? 'nothing' : listExpanders(expanders)}.`;
+const GITHUB_EXPANSION =
+  'issue, pull request and discussion links and `#1234` to their titles, file permalinks to code';
 
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -228,12 +215,11 @@ export class ZulipCommandService {
       run: () => this.mirrorLinks.list('zulip'),
     },
     expanders: {
-      usage: 'expanders <on|off|list> [github|twitter]',
-      description:
-        'turn the GitHub expander (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) or the Twitter one (x.com links to nitter.net) on or off in this stream, both without a name; `list` lists every stream with an expander on',
-      positionals: 2,
+      usage: 'expanders <on|off|list>',
+      description: `turn GitHub expansion (${GITHUB_EXPANSION}) on or off in this stream, or \`list\` the streams it is on in; x.com links are mirrored on nitter.net in every stream`,
+      positionals: 1,
       options: [],
-      administrators: 'change or list the expanders',
+      administrators: 'change or list GitHub expansion',
       run: (context) => this.expanders(context),
     },
     'discord-unlink': {
@@ -651,64 +637,51 @@ export class ZulipCommandService {
   }
 
   private async expanders({ message, args }: CommandContext) {
-    const [action, name] = args.map((arg) => arg.toLowerCase());
-    if (action === 'list' && name === undefined) {
+    const action = args[0]?.toLowerCase();
+    const { streamId } = message;
+    if (action === 'list') {
       return this.expanderList();
     }
-    const expanders = name === undefined ? ZULIP_EXPANDERS : ZULIP_EXPANDERS.filter((expander) => expander === name);
-    if ((action !== 'on' && action !== 'off') || expanders.length === 0) {
-      return this.usage('expanders');
-    }
-    const { streamId } = message;
     if (action === 'off') {
-      const removed = await this.zulipExpanders.disable(streamId, expanders);
-      return this.expanderChange('off', expanders, removed, streamId);
+      const removed = await this.zulipExpanders.disable(streamId);
+      return removed
+        ? 'Turned off GitHub expansion in this stream.'
+        : 'Nothing changed: GitHub expansion was already off in this stream.';
+    }
+    if (action !== 'on') {
+      return this.usage('expanders');
     }
     const subscriptions = await this.zulip.getSubscriptions();
     const added = await this.zulipExpanders.enable(
       streamId,
-      expanders,
       `${message.senderFullName} on Zulip (user ${message.senderId})`,
     );
-    const reply = this.expanderChange('on', expanders, added, streamId);
+    const reply = added
+      ? 'Turned on GitHub expansion in this stream.'
+      : 'Nothing changed: GitHub expansion was already on in this stream.';
     return subscriptions.some((subscription) => subscription.streamId === streamId)
       ? reply
       : `${reply}\n${NOT_SUBSCRIBED}`;
   }
 
-  private expanderChange(
-    action: 'on' | 'off',
-    asked: ZulipExpanderKind[],
-    changed: ZulipExpanderKind[],
-    streamId: number,
-  ) {
-    const unchanged = asked.filter((expander) => !changed.includes(expander));
-    const already = `${describeExpanders(unchanged)} ${wasOrWere(unchanged)} already ${action}`;
-    const summary =
-      changed.length === 0
-        ? `Nothing changed: ${already} in this stream.`
-        : `Turned ${action} ${describeExpanders(changed)} in this stream${unchanged.length === 0 ? '' : `; ${already}`}.`;
-    return `${summary} ${onHere(this.zulipExpanders.enabledIn(streamId))}`;
-  }
-
   private async expanderList() {
     const streams = this.zulipExpanders.list();
     if (streams.length === 0) {
-      return 'No stream has an expander on.';
+      return 'GitHub expansion is on in no stream.';
     }
     const [subscriptions, names] = await Promise.all([
       this.zulip.getSubscriptions().catch(() => undefined),
-      Promise.all(streams.map(({ streamId }) => this.zulip.getStream(streamId).catch(() => undefined))),
+      Promise.all(streams.map((streamId) => this.zulip.getStream(streamId).catch(() => undefined))),
     ]);
     const subscribed = subscriptions && new Set(subscriptions.map(({ streamId }) => streamId));
     return [
-      'Expanders on Zulip (GitHub: issue, pull request and discussion links and `#1234` to their titles, file permalinks to code; Twitter: x.com links to nitter.net):',
-      ...streams.map(({ streamId, expanders }, index) => {
+      `GitHub expansion (${GITHUB_EXPANSION}) is on in:`,
+      ...streams.map((streamId, index) => {
         const stream = names[index];
         const name = stream ? `**#${neutraliseZulipMentions(stream.name)}** (${streamId})` : `stream ${streamId}`;
         const warning =
           subscribed && !subscribed.has(streamId) ? ' (⚠ I am not subscribed, so nothing reaches me there)' : '';
-        return `- ${name}: ${listExpanders(expanders)}${warning}`;
+        return `- ${name}${warning}`;
       }),
     ].join('\n');
   }

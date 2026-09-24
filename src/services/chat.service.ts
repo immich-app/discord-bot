@@ -241,16 +241,14 @@ ${messageParts.join('\n')}`,
     }
 
     const parts: string[] = [];
-    if (this.zulipExpanders.isEnabled(streamId, 'github')) {
+    if (this.zulipExpanders.isEnabled(streamId)) {
       // Snippets are not neutralised: Zulip renders no mention inside a code fence,
       // and a zero-width space would corrupt the code.
       const snippets = await this.handleGithubFileReferences(content, true);
       const links = await this.handleGithubThreadReferences({ content }, true);
       parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
     }
-    if (this.zulipExpanders.isEnabled(streamId, 'twitter')) {
-      parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
-    }
+    parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
 
     if (parts.length !== 0) {
       await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });

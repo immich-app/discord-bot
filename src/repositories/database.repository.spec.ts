@@ -1,7 +1,7 @@
 import { Kysely, sql } from 'kysely';
 import { DatabaseRepository } from 'src/repositories/database.repository';
 import { Database } from 'src/schema';
-import { down, up } from 'src/schema/migrations/1790261314170-ZulipExpanders';
+import { down, up } from 'src/schema/migrations/1790263846796-ZulipExpanders';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -89,67 +89,48 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
   });
 
   describe('zulip expanders', () => {
-    const pairs = (rows: { streamId: number; expander: string }[]) =>
-      rows.map(({ streamId, expander }) => `${streamId}:${expander}`);
+    const streams = (rows: { streamId: number }[]) => rows.map(({ streamId }) => streamId);
 
-    it('should seed both expanders in the Immich stream and every immich team stream', async () => {
+    it('should seed GitHub expansion in the Immich stream and every immich team stream', async () => {
       const rolledBack = new Error('rolled back');
       await expect(
         db.transaction().execute(async (trx) => {
           await down(trx);
           await up(trx);
-          const rows = await trx
-            .selectFrom('zulip_expander')
-            .selectAll()
-            .orderBy('streamId')
-            .orderBy('expander')
-            .execute();
-          expect(pairs(rows)).toEqual(
-            [54, 107, 108, 109, 110, 111, 112, 113].flatMap((streamId) => [
-              `${streamId}:github`,
-              `${streamId}:twitter`,
-            ]),
-          );
+          const rows = await trx.selectFrom('zulip_expander').selectAll().orderBy('streamId').execute();
+          expect(streams(rows)).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
           expect(new Set(rows.map(({ createdBy }) => createdBy))).toEqual(new Set(['migration']));
           throw rolledBack;
         }),
       ).rejects.toBe(rolledBack);
     });
 
-    it('should add only what a stream does not have, and list by stream and expander', async () => {
-      expect(pairs(await sut.addZulipExpanders(120, ['twitter'], 'Alice on Zulip (user 12)'))).toEqual(['120:twitter']);
+    it('should add a stream once, keep who added it first, and list by stream', async () => {
+      expect(await sut.addZulipExpander(120, 'Alice on Zulip (user 12)')).toBe(true);
+      expect(await sut.addZulipExpander(120, 'Bob on Zulip (user 13)')).toBe(false);
+      expect(await sut.addZulipExpander(54, 'Bob on Zulip (user 13)')).toBe(true);
 
-      const added = await sut.addZulipExpanders(120, ['github', 'twitter'], 'Bob on Zulip (user 13)');
-
-      expect(added).toEqual([
-        { streamId: 120, expander: 'github', createdBy: 'Bob on Zulip (user 13)', createdAt: expect.any(Date) },
-      ]);
-      await sut.addZulipExpanders(54, ['github'], 'Bob on Zulip (user 13)');
       const rows = await sut.getZulipExpanders();
-      expect(pairs(rows)).toEqual(['54:github', '120:github', '120:twitter']);
-      expect(rows.find(({ streamId, expander }) => streamId === 120 && expander === 'twitter')?.createdBy).toBe(
-        'Alice on Zulip (user 12)',
-      );
-    });
-
-    it('should remove only what it names in that stream, and resolve to what it removed', async () => {
-      await sut.addZulipExpanders(120, ['github', 'twitter'], 'Alice');
-      await sut.addZulipExpanders(121, ['github', 'twitter'], 'Alice');
-
-      expect(pairs(await sut.removeZulipExpanders(120, ['twitter']))).toEqual(['120:twitter']);
-      expect(await sut.removeZulipExpanders(120, ['twitter'])).toEqual([]);
-      expect(pairs(await sut.removeZulipExpanders(121, ['github', 'twitter'])).sort()).toEqual([
-        '121:github',
-        '121:twitter',
+      expect(rows).toEqual([
+        { streamId: 54, createdBy: 'Bob on Zulip (user 13)', createdAt: expect.any(Date) },
+        { streamId: 120, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
       ]);
-      expect(pairs(await sut.getZulipExpanders())).toEqual(['120:github']);
     });
 
-    it('should refuse a second row of the same stream and expander', async () => {
-      await db.insertInto('zulip_expander').values({ streamId: 120, expander: 'github', createdBy: 'Alice' }).execute();
+    it('should remove only that stream, and resolve to whether it was there', async () => {
+      await sut.addZulipExpander(120, 'Alice');
+      await sut.addZulipExpander(121, 'Alice');
+
+      expect(await sut.removeZulipExpander(120)).toBe(true);
+      expect(await sut.removeZulipExpander(120)).toBe(false);
+      expect(streams(await sut.getZulipExpanders())).toEqual([121]);
+    });
+
+    it('should refuse a second row of the same stream', async () => {
+      await db.insertInto('zulip_expander').values({ streamId: 120, createdBy: 'Alice' }).execute();
 
       await expect(
-        db.insertInto('zulip_expander').values({ streamId: 120, expander: 'github', createdBy: 'Bob' }).execute(),
+        db.insertInto('zulip_expander').values({ streamId: 120, createdBy: 'Bob' }).execute(),
       ).rejects.toThrow('zulip_expander_pkey');
     });
   });

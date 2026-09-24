@@ -1,42 +1,32 @@
 import { Logger } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { ZulipExpander } from 'src/schema';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
 
-const row = (streamId: number, expander: ZulipExpanderKind): ZulipExpander => ({
-  streamId,
-  expander,
-  createdBy: 'migration',
-  createdAt: new Date(0),
-});
+const row = (streamId: number): ZulipExpander => ({ streamId, createdBy: 'migration', createdAt: new Date(0) });
 
 describe(ZulipExpanderService.name, () => {
-  let database: Mocked<Pick<IDatabaseRepository, 'getZulipExpanders' | 'addZulipExpanders' | 'removeZulipExpanders'>>;
+  let database: Mocked<Pick<IDatabaseRepository, 'getZulipExpanders' | 'addZulipExpander' | 'removeZulipExpander'>>;
   let sut: ZulipExpanderService;
 
   let table: ZulipExpander[];
 
   beforeEach(async () => {
-    table = [row(107, 'twitter'), row(54, 'github'), row(107, 'github')];
-    const has = (streamId: number, expander: ZulipExpanderKind) =>
-      table.some((existing) => existing.streamId === streamId && existing.expander === expander);
+    table = [row(107), row(54)];
     database = {
       getZulipExpanders: vitest.fn(async () => [...table]),
-      addZulipExpanders: vitest.fn(async (streamId, expanders) => {
-        const added = expanders
-          .filter((expander) => !has(streamId, expander))
-          .map((expander) => row(streamId, expander));
-        table.push(...added);
-        return added;
+      addZulipExpander: vitest.fn(async (streamId) => {
+        if (table.some((existing) => existing.streamId === streamId)) {
+          return false;
+        }
+        table.push(row(streamId));
+        return true;
       }),
-      removeZulipExpanders: vitest.fn(async (streamId, expanders) => {
-        const removed = table.filter(
-          (existing) => existing.streamId === streamId && expanders.includes(existing.expander),
-        );
-        table = table.filter((existing) => !removed.includes(existing));
-        return removed;
+      removeZulipExpander: vitest.fn(async (streamId) => {
+        const before = table.length;
+        table = table.filter((existing) => existing.streamId !== streamId);
+        return table.length !== before;
       }),
     };
     sut = new ZulipExpanderService(database as unknown as IDatabaseRepository);
@@ -47,87 +37,80 @@ describe(ZulipExpanderService.name, () => {
     const fresh = new ZulipExpanderService(database as unknown as IDatabaseRepository);
 
     expect(fresh.list()).toEqual([]);
-    expect(fresh.isEnabled(107, 'github')).toBe(false);
+    expect(fresh.isEnabled(107)).toBe(false);
   });
 
   it('should load the table once, at init, and answer from the cache', () => {
-    expect(sut.isEnabled(107, 'github')).toBe(true);
-    expect(sut.isEnabled(107, 'twitter')).toBe(true);
-    expect(sut.isEnabled(54, 'github')).toBe(true);
-    expect(sut.isEnabled(54, 'twitter')).toBe(false);
-    expect(sut.isEnabled(999, 'github')).toBe(false);
+    expect(sut.isEnabled(107)).toBe(true);
+    expect(sut.isEnabled(54)).toBe(true);
+    expect(sut.isEnabled(999)).toBe(false);
     expect(database.getZulipExpanders).toHaveBeenCalledOnce();
   });
 
-  it('should list every stream with an expander on, by stream ID, the expanders in a fixed order', () => {
-    expect(sut.list()).toEqual([
-      { streamId: 54, expanders: ['github'] },
-      { streamId: 107, expanders: ['github', 'twitter'] },
-    ]);
-    expect(sut.enabledIn(107)).toEqual(['github', 'twitter']);
-    expect(sut.enabledIn(999)).toEqual([]);
+  it('should list the streams by ID', () => {
+    expect(sut.list()).toEqual([54, 107]);
   });
 
-  it('should enable, resolve to what the table took and cache it at once', async () => {
-    expect(await sut.enable(54, ['github', 'twitter'], 'Alice on Zulip (user 12)')).toEqual(['twitter']);
+  it('should enable, resolve to whether the table took it and cache it at once', async () => {
+    expect(await sut.enable(120, 'Alice on Zulip (user 12)')).toBe(true);
+    expect(await sut.enable(120, 'Alice on Zulip (user 12)')).toBe(false);
 
-    expect(database.addZulipExpanders).toHaveBeenCalledExactlyOnceWith(
-      54,
-      ['github', 'twitter'],
-      'Alice on Zulip (user 12)',
-    );
-    expect(sut.isEnabled(54, 'twitter')).toBe(true);
-    expect(sut.enabledIn(54)).toEqual(['github', 'twitter']);
+    expect(database.addZulipExpander).toHaveBeenCalledWith(120, 'Alice on Zulip (user 12)');
+    expect(sut.isEnabled(120)).toBe(true);
+    expect(sut.list()).toEqual([54, 107, 120]);
   });
 
-  it('should disable, resolve to what the table removed and drop a stream left with nothing', async () => {
-    expect(await sut.disable(107, ['twitter'])).toEqual(['twitter']);
-    expect(sut.enabledIn(107)).toEqual(['github']);
+  it('should disable, resolve to whether the table had it and drop it at once', async () => {
+    expect(await sut.disable(107)).toBe(true);
+    expect(await sut.disable(107)).toBe(false);
 
-    expect(await sut.disable(54, ['github', 'twitter'])).toEqual(['github']);
-
-    expect(database.removeZulipExpanders).toHaveBeenLastCalledWith(54, ['github', 'twitter']);
-    expect(sut.list()).toEqual([{ streamId: 107, expanders: ['github'] }]);
+    expect(database.removeZulipExpander).toHaveBeenLastCalledWith(107);
+    expect(sut.isEnabled(107)).toBe(false);
+    expect(sut.list()).toEqual([54]);
   });
 
   it('should leave the cache as it was when the table refuses a change', async () => {
-    database.addZulipExpanders.mockRejectedValue(new Error('connection terminated'));
+    database.addZulipExpander.mockRejectedValue(new Error('connection terminated'));
 
-    await expect(sut.enable(999, ['github'], 'Alice')).rejects.toThrow('connection terminated');
+    await expect(sut.enable(999, 'Alice')).rejects.toThrow('connection terminated');
 
-    expect(sut.isEnabled(999, 'github')).toBe(false);
+    expect(sut.isEnabled(999)).toBe(false);
   });
 
   it('should run a change after one still writing, so the cache ends as the table does', async () => {
     let finishAdd = () => {};
-    const add = database.addZulipExpanders.getMockImplementation()!;
-    database.addZulipExpanders.mockImplementationOnce(
+    const add = database.addZulipExpander.getMockImplementation()!;
+    database.addZulipExpander.mockImplementationOnce(
       (...args) => new Promise((resolve) => (finishAdd = () => resolve(add(...args)))),
     );
 
-    const enabling = sut.enable(54, ['twitter'], 'Alice');
-    const disabling = sut.disable(54, ['twitter']);
+    const enabling = sut.enable(120, 'Alice');
+    const disabling = sut.disable(120);
     await Promise.resolve();
-    expect(database.removeZulipExpanders).not.toHaveBeenCalled();
+    expect(database.removeZulipExpander).not.toHaveBeenCalled();
 
     finishAdd();
-    expect(await enabling).toEqual(['twitter']);
-    expect(await disabling).toEqual(['twitter']);
+    expect(await enabling).toBe(true);
+    expect(await disabling).toBe(true);
 
-    expect(table.some(({ streamId, expander }) => streamId === 54 && expander === 'twitter')).toBe(false);
-    expect(sut.isEnabled(54, 'twitter')).toBe(false);
+    expect(table.some(({ streamId }) => streamId === 120)).toBe(false);
+    expect(sut.isEnabled(120)).toBe(false);
   });
 
   it('should cache a change as the table reported it when reading the table back fails', async () => {
     vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     database.getZulipExpanders.mockRejectedValueOnce(new Error('connection terminated'));
-    expect(await sut.enable(54, ['twitter'], 'Alice')).toEqual(['twitter']);
-    expect(sut.isEnabled(54, 'twitter')).toBe(true);
+    expect(await sut.enable(120, 'Alice')).toBe(true);
+    expect(sut.isEnabled(120)).toBe(true);
 
     database.getZulipExpanders.mockRejectedValueOnce(new Error('connection terminated'));
-    expect(await sut.disable(107, ['github', 'twitter'])).toEqual(['github', 'twitter']);
-    expect(sut.enabledIn(107)).toEqual([]);
-    expect(sut.list()).toEqual([{ streamId: 54, expanders: ['github', 'twitter'] }]);
+    expect(await sut.disable(107)).toBe(true);
+    expect(sut.isEnabled(107)).toBe(false);
+    expect(sut.list()).toEqual([54, 120]);
     expect(Logger.prototype.warn).toHaveBeenCalledTimes(2);
+    expect(Logger.prototype.warn).toHaveBeenCalledWith(
+      'Could not read the Zulip expanders of stream 107 back, so the change is cached as the table reported it',
+      expect.any(Error),
+    );
   });
 });

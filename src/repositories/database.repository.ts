@@ -41,7 +41,6 @@ import {
   ZulipExpander,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
-import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
@@ -551,24 +550,25 @@ export class DatabaseRepository implements IDatabaseRepository {
   }
 
   getZulipExpanders(): Promise<ZulipExpander[]> {
-    return this.db.selectFrom('zulip_expander').selectAll().orderBy('streamId').orderBy('expander').execute();
+    return this.db.selectFrom('zulip_expander').selectAll().orderBy('streamId').execute();
   }
 
-  addZulipExpanders(streamId: number, expanders: ZulipExpanderKind[], createdBy: string): Promise<ZulipExpander[]> {
-    return this.db
+  async addZulipExpander(streamId: number, createdBy: string): Promise<boolean> {
+    const added = await this.db
       .insertInto('zulip_expander')
-      .values(expanders.map((expander) => ({ streamId, expander, createdBy })))
-      .onConflict((oc) => oc.columns(['streamId', 'expander']).doNothing())
-      .returningAll()
-      .execute();
+      .values({ streamId, createdBy })
+      .onConflict((oc) => oc.column('streamId').doNothing())
+      .returning('streamId')
+      .executeTakeFirst();
+    return added !== undefined;
   }
 
-  removeZulipExpanders(streamId: number, expanders: ZulipExpanderKind[]): Promise<ZulipExpander[]> {
-    return this.db
+  async removeZulipExpander(streamId: number): Promise<boolean> {
+    const removed = await this.db
       .deleteFrom('zulip_expander')
       .where('streamId', '=', streamId)
-      .where('expander', 'in', expanders)
-      .returningAll()
-      .execute();
+      .returning('streamId')
+      .executeTakeFirst();
+    return removed !== undefined;
   }
 }

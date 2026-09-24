@@ -103,8 +103,8 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   setMirrorIdentity: vitest.fn(),
   removeMirrorIdentity: vitest.fn(),
   getZulipExpanders: vitest.fn(),
-  addZulipExpanders: vitest.fn(),
-  removeZulipExpanders: vitest.fn(),
+  addZulipExpander: vitest.fn(),
+  removeZulipExpander: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
