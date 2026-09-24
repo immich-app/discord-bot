@@ -38,8 +38,10 @@ import {
   UpdateMirrorMessage,
   UpdateRSSFeed,
   UpdateScheduledMessage,
+  ZulipExpander,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
+import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
@@ -546,5 +548,27 @@ export class DatabaseRepository implements IDatabaseRepository {
         ? query.where('zulipUserId', '=', owner.zulipUserId)
         : query.where('discordUserId', '=', owner.discordUserId);
     return matching.returningAll().executeTakeFirst();
+  }
+
+  getZulipExpanders(): Promise<ZulipExpander[]> {
+    return this.db.selectFrom('zulip_expander').selectAll().orderBy('streamId').orderBy('expander').execute();
+  }
+
+  addZulipExpanders(streamId: number, expanders: ZulipExpanderKind[], createdBy: string): Promise<ZulipExpander[]> {
+    return this.db
+      .insertInto('zulip_expander')
+      .values(expanders.map((expander) => ({ streamId, expander, createdBy })))
+      .onConflict((oc) => oc.columns(['streamId', 'expander']).doNothing())
+      .returningAll()
+      .execute();
+  }
+
+  removeZulipExpanders(streamId: number, expanders: ZulipExpanderKind[]): Promise<ZulipExpander[]> {
+    return this.db
+      .deleteFrom('zulip_expander')
+      .where('streamId', '=', streamId)
+      .where('expander', 'in', expanders)
+      .returningAll()
+      .execute();
   }
 }

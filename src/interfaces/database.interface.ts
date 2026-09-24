@@ -27,8 +27,10 @@ import {
   UpdateMirrorMessage,
   UpdateRSSFeed,
   UpdateScheduledMessage,
+  ZulipExpander,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
+import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 
 export const IDatabaseRepository = 'IDatabaseRepository';
 
@@ -117,4 +119,9 @@ export interface IDatabaseRepository {
   setMirrorIdentity(zulipUserId: number, discordUserId: string): Promise<MirrorIdentity[]>;
   /** Resolves to the removed identity, `undefined` when there was none. */
   removeMirrorIdentity(owner: MirrorIdentityOwner): Promise<MirrorIdentity | undefined>;
+  getZulipExpanders(): Promise<ZulipExpander[]>;
+  /** Resolves to the rows it added, leaving out the expanders the stream already had. */
+  addZulipExpanders(streamId: number, expanders: ZulipExpanderKind[], createdBy: string): Promise<ZulipExpander[]>;
+  /** Resolves to the rows it removed. */
+  removeZulipExpanders(streamId: number, expanders: ZulipExpanderKind[]): Promise<ZulipExpander[]>;
 }

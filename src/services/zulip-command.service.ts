@@ -9,12 +9,14 @@ import {
 } from 'src/format';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { topicKey } from 'src/mirror/names';
+import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mirror-link.service';
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
+import { ZULIP_EXPANDERS, ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
@@ -31,8 +33,25 @@ const SUPPRESS_EMBEDS_IGNORED =
 /** Zulip's roles are ordered: 100 is an owner, 200 an administrator. */
 const ZULIP_ADMINISTRATOR_ROLE = 200;
 
-const NOT_AN_ADMINISTRATOR =
-  'Only Zulip organization administrators and owners can change or list the Discord-Zulip mirror.';
+const MIRROR = 'change or list the Discord-Zulip mirror';
+
+const EXPANDER_NAMES: Record<ZulipExpanderKind, string> = { github: 'GitHub', twitter: 'Twitter' };
+
+const describeExpanders = (expanders: ZulipExpanderKind[]) =>
+  expanders.length === 1
+    ? `the ${EXPANDER_NAMES[expanders[0]]} expander`
+    : `the ${expanders.map((expander) => EXPANDER_NAMES[expander]).join(' and ')} expanders`;
+
+const wasOrWere = (expanders: ZulipExpanderKind[]) => (expanders.length === 1 ? 'was' : 'were');
+
+const listExpanders = (expanders: ZulipExpanderKind[]) =>
+  expanders.map((expander) => EXPANDER_NAMES[expander]).join(', ');
+
+const onHere = (expanders: ZulipExpanderKind[]) =>
+  `On here now: ${expanders.length === 0 ? 'nothing' : listExpanders(expanders)}.`;
+
+const NOT_SUBSCRIBED =
+  '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
 
 const EMOTE_SYNC_SERVER = `the ${Constants.Discord.EmoteSyncServer.name} Discord server (${Constants.Discord.EmoteSyncServer.id})`;
 
@@ -74,8 +93,8 @@ type Command = {
   description: string;
   positionals: number;
   options: string[];
-  /** Taken in any stream, from organization administrators and owners only. */
-  administrators?: true;
+  /** Taken in any stream, from organization administrators and owners only; what they alone can do, for the refusal. */
+  administrators?: string;
   run: (context: CommandContext) => Promise<string | undefined>;
 };
 
@@ -180,7 +199,7 @@ export class ZulipCommandService {
         "start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
       positionals: 0,
       options: ['topic'],
-      administrators: true,
+      administrators: MIRROR,
       run: (context) => this.mirrorLink(context),
     },
     'mirror-unlink': {
@@ -188,7 +207,7 @@ export class ZulipCommandService {
       description: 'stop mirroring this stream with its Discord channel, and announce it on both sides',
       positionals: 0,
       options: [],
-      administrators: true,
+      administrators: MIRROR,
       run: ({ message }) => this.mirrorUnlink(message),
     },
     'mirror-backfill': {
@@ -197,7 +216,7 @@ export class ZulipCommandService {
         'copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
       positionals: 0,
       options: [],
-      administrators: true,
+      administrators: MIRROR,
       run: ({ message }) => this.mirrorBackfill(message),
     },
     'mirror-list': {
@@ -205,8 +224,17 @@ export class ZulipCommandService {
       description: 'list the mirrored channels and streams, and the linked accounts',
       positionals: 0,
       options: [],
-      administrators: true,
+      administrators: MIRROR,
       run: () => this.mirrorLinks.list('zulip'),
+    },
+    expanders: {
+      usage: 'expanders <on|off|list> [github|twitter]',
+      description:
+        'turn the GitHub expander (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) or the Twitter one (x.com links to nitter.net) on or off in this stream, both without a name; `list` lists every stream with an expander on',
+      positionals: 2,
+      options: [],
+      administrators: 'change or list the expanders',
+      run: (context) => this.expanders(context),
     },
     'discord-unlink': {
       usage: 'discord-unlink',
@@ -235,6 +263,7 @@ export class ZulipCommandService {
     private scheduledMessageService: ScheduledMessageService,
     private rssService: RSSService,
     private mirrorLinks: MirrorLinkService,
+    private zulipExpanders: ZulipExpanderService,
   ) {}
 
   async init() {
@@ -300,7 +329,7 @@ export class ZulipCommandService {
     }
     try {
       if (command.administrators && !(await this.isAdministrator(message.senderId))) {
-        return NOT_AN_ADMINISTRATOR;
+        return `Only Zulip organization administrators and owners can ${command.administrators}.`;
       }
       return await command.run({ message, args, options });
     } catch (error) {
@@ -398,14 +427,17 @@ export class ZulipCommandService {
   }
 
   private help() {
-    const lines = Object.values(this.commands).map(({ usage, description }) => `- ${code(usage)}: ${description}`);
+    const lines = Object.values(this.commands).map(
+      ({ usage, description, administrators }) =>
+        `- ${code(usage)}${administrators ? ' (administrators)' : ''}: ${description}`,
+    );
     return [
       'Mention me at the start of a message in a team stream, then one of:',
       ...lines,
       // The blank line ends the list: without it, Markdown reads the next line as the last item's continuation.
       '',
       `Arguments are positional or ${code('key=value')}; quote a value with spaces (${code('text="two words"')}). Every reply is posted here, in the topic.`,
-      `The ${code('mirror-*')} commands are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
+      `The commands marked (administrators) are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
     ].join('\n');
   }
 
@@ -615,6 +647,69 @@ export class ZulipCommandService {
     return [
       'RSS feeds of this stream:',
       ...feeds.map(({ url, topic }) => `- ${code(url)} in ${describeTopic(topic)}`),
+    ].join('\n');
+  }
+
+  private async expanders({ message, args }: CommandContext) {
+    const [action, name] = args.map((arg) => arg.toLowerCase());
+    if (action === 'list' && name === undefined) {
+      return this.expanderList();
+    }
+    const expanders = name === undefined ? ZULIP_EXPANDERS : ZULIP_EXPANDERS.filter((expander) => expander === name);
+    if ((action !== 'on' && action !== 'off') || expanders.length === 0) {
+      return this.usage('expanders');
+    }
+    const { streamId } = message;
+    if (action === 'off') {
+      const removed = await this.zulipExpanders.disable(streamId, expanders);
+      return this.expanderChange('off', expanders, removed, streamId);
+    }
+    const subscriptions = await this.zulip.getSubscriptions();
+    const added = await this.zulipExpanders.enable(
+      streamId,
+      expanders,
+      `${message.senderFullName} on Zulip (user ${message.senderId})`,
+    );
+    const reply = this.expanderChange('on', expanders, added, streamId);
+    return subscriptions.some((subscription) => subscription.streamId === streamId)
+      ? reply
+      : `${reply}\n${NOT_SUBSCRIBED}`;
+  }
+
+  private expanderChange(
+    action: 'on' | 'off',
+    asked: ZulipExpanderKind[],
+    changed: ZulipExpanderKind[],
+    streamId: number,
+  ) {
+    const unchanged = asked.filter((expander) => !changed.includes(expander));
+    const already = `${describeExpanders(unchanged)} ${wasOrWere(unchanged)} already ${action}`;
+    const summary =
+      changed.length === 0
+        ? `Nothing changed: ${already} in this stream.`
+        : `Turned ${action} ${describeExpanders(changed)} in this stream${unchanged.length === 0 ? '' : `; ${already}`}.`;
+    return `${summary} ${onHere(this.zulipExpanders.enabledIn(streamId))}`;
+  }
+
+  private async expanderList() {
+    const streams = this.zulipExpanders.list();
+    if (streams.length === 0) {
+      return 'No stream has an expander on.';
+    }
+    const [subscriptions, names] = await Promise.all([
+      this.zulip.getSubscriptions().catch(() => undefined),
+      Promise.all(streams.map(({ streamId }) => this.zulip.getStream(streamId).catch(() => undefined))),
+    ]);
+    const subscribed = subscriptions && new Set(subscriptions.map(({ streamId }) => streamId));
+    return [
+      'Expanders on Zulip (GitHub: issue, pull request and discussion links and `#1234` to their titles, file permalinks to code; Twitter: x.com links to nitter.net):',
+      ...streams.map(({ streamId, expanders }, index) => {
+        const stream = names[index];
+        const name = stream ? `**#${neutraliseZulipMentions(stream.name)}** (${streamId})` : `stream ${streamId}`;
+        const warning =
+          subscribed && !subscribed.has(streamId) ? ' (⚠ I am not subscribed, so nothing reaches me there)' : '';
+        return `- ${name}: ${listExpanders(expanders)}${warning}`;
+      }),
     ].join('\n');
   }
 

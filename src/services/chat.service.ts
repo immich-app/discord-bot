@@ -18,6 +18,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { NotificationService } from 'src/services/notification.service';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
@@ -196,6 +197,7 @@ export class ChatService {
     @Inject(IZulipInterface) private zulip: IZulipInterface,
     private zulipService: ZulipService,
     private notifications: NotificationService,
+    private zulipExpanders: ZulipExpanderService,
   ) {}
 
   async init() {
@@ -239,14 +241,14 @@ ${messageParts.join('\n')}`,
     }
 
     const parts: string[] = [];
-    if (Constants.Zulip.Expanders.GithubReferences.includes(streamId)) {
+    if (this.zulipExpanders.isEnabled(streamId, 'github')) {
       // Snippets are not neutralised: Zulip renders no mention inside a code fence,
       // and a zero-width space would corrupt the code.
       const snippets = await this.handleGithubFileReferences(content, true);
       const links = await this.handleGithubThreadReferences({ content }, true);
       parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
     }
-    if (Constants.Zulip.Expanders.TwitterMirror.includes(streamId)) {
+    if (this.zulipExpanders.isEnabled(streamId, 'twitter')) {
       parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
     }
 

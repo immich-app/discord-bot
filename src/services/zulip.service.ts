@@ -15,6 +15,7 @@ import {
   ZulipUser,
 } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 
 export type ZulipMessageHandler = (message: ZulipReceivedMessage) => Promise<void> | void;
 export type ZulipUpdateHandler = (update: ZulipMessageUpdated) => Promise<void> | void;
@@ -61,9 +62,6 @@ export const describeZulipStream = (streamId: number) => {
   return name ? `${streamId} (${name})` : `${streamId}`;
 };
 
-const listeningStreams = () =>
-  new Set([...Object.values(Constants.Zulip.Expanders).flat(), ...Constants.Zulip.Commands]);
-
 @Injectable()
 export class ZulipService implements OnModuleDestroy {
   private logger = new Logger(ZulipService.name);
@@ -81,6 +79,7 @@ export class ZulipService implements OnModuleDestroy {
   constructor(
     @Inject(IHolidaysInterface) private holidays: IHolidaysInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
+    private expanders: ZulipExpanderService,
   ) {}
 
   async init() {
@@ -232,7 +231,7 @@ export class ZulipService implements OnModuleDestroy {
     this.emptyTopic = emptyTopicName ?? this.emptyTopic;
     this.logger.log(`Registered Zulip event queue ${queue.queueId}`);
     const subscribed = new Set(subscribedStreamIds);
-    for (const streamId of listeningStreams()) {
+    for (const streamId of this.listeningStreams()) {
       if (!subscribed.has(streamId)) {
         this.logger.warn(
           `The Zulip bot is not subscribed to stream ${describeZulipStream(streamId)}: its event queue carries no messages from it, so nothing is expanded there until an admin subscribes it`,
@@ -247,6 +246,10 @@ export class ZulipService implements OnModuleDestroy {
       }
     }
     return queue;
+  }
+
+  private listeningStreams() {
+    return new Set([...this.expanders.list().map(({ streamId }) => streamId), ...Constants.Zulip.Commands]);
   }
 
   private async releaseQueue() {

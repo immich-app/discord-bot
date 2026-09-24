@@ -13,8 +13,11 @@ import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { ZulipExpander } from 'src/schema';
+import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
+import { ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -135,6 +138,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getMirrorIdentities: vitest.fn(),
   setMirrorIdentity: vitest.fn(),
   removeMirrorIdentity: vitest.fn(),
+  getZulipExpanders: vitest.fn(),
+  addZulipExpanders: vitest.fn(),
+  removeZulipExpanders: vitest.fn(),
 });
 
 const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
@@ -205,6 +211,7 @@ describe('Bot test', () => {
   let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
   let zulipServiceMock: ReturnType<typeof newZulipServiceMock>;
+  let zulipExpanders: ZulipExpanderService;
   let fetchMock: ReturnType<typeof vitest.fn>;
 
   beforeEach(() => {
@@ -217,6 +224,7 @@ describe('Bot test', () => {
     mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
     zulipServiceMock = newZulipServiceMock();
+    zulipExpanders = new ZulipExpanderService(databaseMock);
     // 7TV and BTTV lookups go through the global fetch.
     fetchMock = vitest.fn();
     vitest.stubGlobal('fetch', fetchMock);
@@ -232,6 +240,7 @@ describe('Bot test', () => {
       zulipMock,
       zulipServiceMock as unknown as ZulipService,
       new NotificationService(discordMock, mattermostMock, zulipMock),
+      zulipExpanders,
     );
   });
 
@@ -1748,6 +1757,10 @@ describe('Bot test', () => {
     });
 
     it('should subscribe the Zulip expanders to the event loop', async () => {
+      databaseMock.getZulipExpanders.mockResolvedValue([
+        { streamId: 107, expander: 'github', createdBy: 'migration', createdAt: new Date(0) },
+      ]);
+      await zulipExpanders.init();
       await sut.init();
 
       expect(zulipServiceMock.onMessage).toHaveBeenCalledOnce();
@@ -1784,13 +1797,61 @@ describe('Bot test', () => {
   });
 
   describe('onZulipMessage', () => {
-    beforeEach(() => {
+    const expanderRow = (streamId: number, expander: ZulipExpanderKind): ZulipExpander => ({
+      streamId,
+      expander,
+      createdBy: 'migration',
+      createdAt: new Date(0),
+    });
+    const SEEDED = [54, 107, 108, 109, 110, 111, 112, 113].flatMap((streamId) => [
+      expanderRow(streamId, 'github'),
+      expanderRow(streamId, 'twitter'),
+    ]);
+
+    beforeEach(async () => {
       zulipMock.sendMessage.mockResolvedValue({ id: 901 });
+      databaseMock.getZulipExpanders.mockResolvedValue([
+        ...SEEDED,
+        expanderRow(120, 'github'),
+        expanderRow(121, 'twitter'),
+      ]);
+      await zulipExpanders.init();
     });
 
-    it('should run in the Immich stream and every immich team stream', () => {
-      expect(Constants.Zulip.Expanders.GithubReferences).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
-      expect(Constants.Zulip.Expanders.TwitterMirror).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
+    it('should expand GitHub references alone in a stream with only the GitHub expander on', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 120, content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 120,
+        topic: 'thumbnails',
+        content: 'https://github.com/immich-app/immich/pull/4242',
+      });
+    });
+
+    it('should mirror x.com links alone in a stream with only the Twitter expander on, without a GitHub call', async () => {
+      await sut.onZulipMessage(zulipMessage({ streamId: 121, content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 121,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+    });
+
+    it('should follow a change to the expanders at once, with no query per message', async () => {
+      databaseMock.removeZulipExpanders.mockResolvedValue([expanderRow(107, 'github')]);
+      await zulipExpanders.disable(107, ['github']);
+
+      await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1 fixes #4242' }));
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+        stream: 107,
+        topic: 'thumbnails',
+        content: 'https://nitter.net/immich/status/1',
+      });
+      expect(databaseMock.getZulipExpanders).toHaveBeenCalledOnce();
     });
 
     it('should reply with the expanded GitHub references in the same stream and topic', async () => {
