@@ -502,7 +502,10 @@ export class MirrorLinkService {
     return `📜 Copying the messages of this ${where} that are not on Zulip yet into ${topic}, oldest first, up to the newest one now. Notices there mark where the history starts and where it ends, and new messages here wait until it is done. A long history takes a while; the end notice on Zulip is the report.`;
   }
 
-  private backfillReport(platform: MirrorPlatform, { copied, failed, noticed, stopped }: BackfillOutcome) {
+  private backfillReport(
+    platform: MirrorPlatform,
+    { copied, failed, noticed, stopped, endNoticeMissing }: BackfillOutcome,
+  ) {
     if (!noticed) {
       if (stopped) {
         return `The backfill stopped before copying anything: ${describeBackfillStop(stopped)}.`;
@@ -514,7 +517,7 @@ export class MirrorLinkService {
     if (platform === 'zulip') {
       return undefined;
     }
-    const failures = failed > 0 ? `; ${failed} could not be copied, see the log` : '';
+    const failures = `${failed > 0 ? `; ${failed} could not be copied, see the log` : ''}${endNoticeMissing ? '; the end notice could not be posted on Zulip, see the log' : ''}`;
     return stopped
       ? `The backfill stopped after copying ${plural(copied, 'message')}${failures}: ${describeBackfillStop(stopped)}.`
       : `Done: copied ${plural(copied, 'message')} to Zulip${failures}.`;

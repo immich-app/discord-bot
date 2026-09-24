@@ -181,7 +181,13 @@ export type BackfillRefusal = 'off' | 'not-linked' | 'no-conversation' | 'not-re
 export type BackfillStop = 'off' | 'unlinked' | 'shutdown' | 'gone' | 'failed';
 
 /** `noticed` is whether the history notices were posted, which `copied` and `failed` then count between. */
-export type BackfillOutcome = { copied: number; failed: number; noticed: boolean; stopped?: BackfillStop };
+export type BackfillOutcome = {
+  copied: number;
+  failed: number;
+  noticed: boolean;
+  stopped?: BackfillStop;
+  endNoticeMissing?: true;
+};
 
 type Backfill = {
   location: string;
@@ -199,6 +205,7 @@ type Backfill = {
   newTopic?: string;
   noticed: boolean;
   endAttempts: number;
+  endNoticeMissing?: true;
   /** A notice whose last send may have gone through, read back before it is sent again. */
   unsure?: string;
   /** Live creates for the location, which wait until the history is in. */
@@ -3061,6 +3068,12 @@ export class MirrorService implements OnModuleDestroy {
         backfill.timer.unref();
         return;
       }
+      if (posted !== 'posted') {
+        this.logger.error(
+          `${pair.key}: gave up on the end notice of the backfill of Discord channel ${backfill.location}; live messages go on without it`,
+        );
+        backfill.endNoticeMissing = true;
+      }
     }
     this.finishBackfill(state, backfill, stopped);
     state.queue.pushNext(backfill.held);
@@ -3073,11 +3086,17 @@ export class MirrorService implements OnModuleDestroy {
     backfill.finished = true;
     clearTimeout(backfill.timer);
     state.backfills.delete(backfill.location);
-    const { copied, failed, noticed } = backfill;
+    const { copied, failed, noticed, endNoticeMissing } = backfill;
     this.logger.log(
       `${state.pair.key}: backfill of Discord channel ${backfill.location} ${stopped ? `stopped (${stopped})` : 'done'}: copied ${plural(copied, 'message')}, ${failed} failed`,
     );
-    backfill.resolve({ copied, failed, noticed, ...(stopped ? { stopped } : {}) });
+    backfill.resolve({
+      copied,
+      failed,
+      noticed,
+      ...(stopped ? { stopped } : {}),
+      ...(endNoticeMissing ? { endNoticeMissing } : {}),
+    });
   }
 
   /** The queue is closed, so nothing is posted and the creates that waited go with it. */

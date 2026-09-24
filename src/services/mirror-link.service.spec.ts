@@ -710,6 +710,14 @@ describe(MirrorLinkService.name, () => {
       });
     });
 
+    it('should say when the end notice could not be posted on Zulip', async () => {
+      const { report } = await run(ALEX, plan(), { copied: 3, failed: 0, noticed: true, endNoticeMissing: true });
+
+      expect(report).toBe(
+        'Done: copied 3 messages to Zulip; the end notice could not be posted on Zulip, see the log.',
+      );
+    });
+
     it.each([
       [plan({ topic: '' }), 'the general chat topic of the Zulip stream **#immich-dev** (120)', 'channel'],
       [plan({ threadId: THREAD, topic: undefined }), 'a new topic of the Zulip stream **#immich-dev** (120)', 'thread'],

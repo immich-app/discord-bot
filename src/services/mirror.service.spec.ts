@@ -5294,6 +5294,27 @@ describe(MirrorService.name, () => {
         expect(sendsOf(end)).toBe(2);
         expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true });
       });
+
+      it('should report the end notice missing once it gives up on it, and let the waiting messages go', async () => {
+        const first = old(1);
+        inHistory(DEV_CHANNEL, first);
+        const end = '📜 End of the history from Discord: 1 message';
+        zulip.getMessages.mockResolvedValue([]);
+        zulip.sendMessage.mockImplementation(async ({ content }) => {
+          if (content === end) {
+            throw badGateway();
+          }
+          return { id: 7000 + contents().length };
+        });
+
+        const outcome = await finish(await started());
+
+        expect(sendsOf(end)).toBe(3);
+        expect(outcome).toEqual({ copied: 1, failed: 0, noticed: true, endNoticeMissing: true });
+        expect(error()).toHaveBeenCalledWith(
+          `${DEV_CHANNEL}: gave up on the end notice of the backfill of Discord channel ${DEV_CHANNEL}; live messages go on without it`,
+        );
+      });
     });
 
     it('should stream the history a page at a time, skipping a page that is mirrored in one read', async () => {
