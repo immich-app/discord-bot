@@ -134,7 +134,7 @@ const mirrorPermissions: PermissionsString[] = [
  * discord.js errors carry the request URL, which holds the webhook token, and the request body, so they are
  * replaced rather than wrapped.
  */
-const toMirrorError = (error: unknown): DiscordMirrorError => {
+export const toMirrorError = (error: unknown): DiscordMirrorError => {
   if (error instanceof DiscordMirrorError) {
     return error;
   }

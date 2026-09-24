@@ -51,7 +51,7 @@ import {
   topicKey,
   toZulipTopicName,
 } from 'src/mirror/names';
-import { isConnectFailure } from 'src/mirror/network';
+import { isConnectFailure, isTransientDatabaseFailure, isUniqueViolation } from 'src/mirror/network';
 import { EnabledPair, holdsIdentityRole, toEnabledPair } from 'src/mirror/pairs';
 import { SerialQueue } from 'src/mirror/queue';
 import {
@@ -109,6 +109,7 @@ const BACKFILL_PAGE = 100;
 const BACKFILL_PACE_MS = 500;
 const BACKFILL_NOTICE_LOOKBACK = 5;
 const BACKFILL_END_ATTEMPTS = 3;
+const STORE_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 90_000];
 const URLS = /https?:\/\/[^\s<>)]+/g;
 const CUSTOM_EMOTE_IDS = /<a?:\w+:(\d+)>/g;
 const CHANNEL_MENTION = /<#(\d+)>/g;
@@ -161,6 +162,25 @@ type PairState = {
   resumeTimer?: NodeJS.Timeout;
   /** By Discord channel or thread ID. */
   backfills: Map<string, Backfill>;
+  unstored: RowWrites[];
+};
+
+/** The IDs, and for a conversation just opened its thread and topic key, of what a create posted. */
+type Copies = { discord?: string[]; zulip?: number[]; thread?: string; topic?: string };
+
+/**
+ * What a create stores once its message is out. A write that fails for now keeps its place, with the ones after it, and
+ * is tried again later; `waiting` are the ops on what it posted, which run once it is stored.
+ */
+type RowWrites = {
+  source: string;
+  keys: Set<string>;
+  ids: string[];
+  steps: ((retry: boolean) => Promise<void>)[];
+  attempts: number;
+  waiting: Op[];
+  timer?: NodeJS.Timeout;
+  failed: boolean;
 };
 
 export type BackfillTarget =
@@ -280,7 +300,12 @@ const mayHaveBeenCarriedOut = (error: unknown) =>
 
 const noneTurnedAway = (): TurnedAway => ({ discord: new Map(), zulip: new Set() });
 
-const isEmpty = ({ discord, zulip }: TurnedAway) => discord.size === 0 && zulip.size === 0;
+const copyKeys = ({ discord = [], zulip = [], thread, topic }: Copies) => [
+  ...discord.map((id) => `discord:${id}`),
+  ...zulip.map((id) => `zulip:${id}`),
+  ...(thread === undefined ? [] : [`thread:${thread}`]),
+  ...(topic === undefined ? [] : [`topic:${topic}`]),
+];
 
 /** Says nothing about the message: the side cannot be reached at all, or refuses every request for now. */
 const isOutage = (error: unknown) =>
@@ -481,6 +506,7 @@ export class MirrorService implements OnModuleDestroy {
     clearTimeout(state.retryTimer);
     clearTimeout(state.resumeTimer);
     this.abandonBackfills(state, 'unlinked');
+    this.abandonRowWrites(state);
     this.verifiedConversations.clear();
     this.logger.log(`${state.pair.key}: unlinked from Zulip stream ${state.pair.zulipStreamId}`);
   }
@@ -609,6 +635,7 @@ export class MirrorService implements OnModuleDestroy {
       held: { Discord: [], Zulip: [] },
       unheard: { Discord: false, Zulip: false },
       backfills: new Map(),
+      unstored: [],
     };
   }
 
@@ -663,6 +690,38 @@ export class MirrorService implements OnModuleDestroy {
     state?.queue.push(`edit of Discord message ${dto.id}`, () => this.editFromDiscord(state, dto));
   }
 
+  /**
+   * For an edit whose message arrived incomplete. It is read when its turn comes, so it keeps its place among the
+   * pair's other changes and a deletion queued after it still runs after it; `read` resolves to `undefined` to drop it.
+   */
+  onDiscordMessageEditedUnread(
+    channelId: string,
+    messageId: string,
+    read: () => Promise<DiscordSourceMessage | undefined>,
+  ) {
+    const state = this.byChannel(channelId);
+    if (!state) {
+      return;
+    }
+    const label = `edit of Discord message ${messageId}`;
+    const run = async (attempt: number): Promise<void> => {
+      let dto: DiscordSourceMessage | undefined;
+      try {
+        dto = await read();
+      } catch (error) {
+        if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
+          this.retryOnDiscord(state, label, attempt, run);
+          return;
+        }
+        throw error;
+      }
+      if (dto) {
+        await this.editFromDiscord(state, dto);
+      }
+    };
+    state.queue.push(label, () => run(1));
+  }
+
   onDiscordMessagesDeleted(channelId: string, messageIds: string[]) {
     const state = this.byChannel(channelId);
     if (state && messageIds.length > 0) {
@@ -710,6 +769,7 @@ export class MirrorService implements OnModuleDestroy {
       clearTimeout(state.retryTimer);
       clearTimeout(state.resumeTimer);
       this.abandonBackfills(state, 'shutdown');
+      this.abandonRowWrites(state);
     }
     let timer: NodeJS.Timeout | undefined;
     const grace = new Promise<void>((resolve) => {
@@ -963,12 +1023,10 @@ export class MirrorService implements OnModuleDestroy {
         this.turnAway(state, turnedAway);
         return;
       }
-      const read = discord.complete && zulip.complete;
-      if (!read) {
+      const complete = discord.complete && zulip.complete;
+      if (!complete) {
         this.forgiveFailedCreates();
       }
-      // Only an op the queue's watchdog gave up on can meet creates turned away while it read.
-      const complete = read && isEmpty(state.turnedAway);
       this.queueMissed(state, generation, discord.messages, zulip.messages, since, complete);
       if (complete) {
         state.queue.push('recheck of recent messages', () => this.recheck(state, generation));
@@ -1444,9 +1502,139 @@ export class MirrorService implements OnModuleDestroy {
     }
   }
 
+  /** A create whose rows could not be stored stays given up on, so that it is never posted again. */
   private created(state: PairState, source: string) {
     state.retryDelayMs = CATCH_UP_RETRY_MS;
-    this.failedCreates.delete(source);
+    if ((this.failedCreates.get(source) ?? 0) < MAX_CREATE_ATTEMPTS) {
+      this.failedCreates.delete(source);
+    }
+  }
+
+  private rowWrites(source: string): RowWrites {
+    return { source, keys: new Set(), ids: [], steps: [], attempts: 0, waiting: [], failed: false };
+  }
+
+  /**
+   * Stores part of what a create posted, which must not be lost now that it is out: a write that fails for now is tried
+   * again later, as its own op, and ops on what it posted wait until it is in. A write after one still waiting waits too.
+   */
+  private async storeRows(
+    state: PairState,
+    writes: RowWrites,
+    copies: Copies,
+    step: (retry: boolean) => Promise<void>,
+  ) {
+    for (const key of copyKeys(copies)) {
+      writes.keys.add(key);
+    }
+    writes.ids.push(
+      ...(copies.discord ?? []).map((id) => `Discord message ${id}`),
+      ...(copies.zulip ?? []).map((id) => `Zulip message ${id}`),
+    );
+    if (writes.failed) {
+      return;
+    }
+    if (writes.steps.length > 0) {
+      writes.steps.push(step);
+      return;
+    }
+    try {
+      await step(false);
+    } catch (error) {
+      if (!isTransientDatabaseFailure(error)) {
+        this.gaveUpStoring(state, writes, error);
+        return;
+      }
+      writes.steps.push(step);
+      state.unstored.push(writes);
+      this.storeLater(state, writes, error);
+    }
+  }
+
+  private storeLater(state: PairState, writes: RowWrites, error: unknown) {
+    const delay = STORE_RETRY_DELAYS_MS[writes.attempts];
+    if (delay === undefined || !state.queue.isOpen()) {
+      this.gaveUpStoring(state, writes, error);
+      return;
+    }
+    writes.attempts++;
+    this.logger.warn(
+      `${state.pair.key}: could not store the rows of ${this.described(writes)} yet, trying again in ${delay / 1000} s: ${describe(error)}`,
+    );
+    writes.timer = setTimeout(() => {
+      writes.timer = undefined;
+      state.queue.push(`rows of ${writes.source}`, () => this.storeAgain(state, writes));
+    }, delay);
+  }
+
+  private async storeAgain(state: PairState, writes: RowWrites) {
+    while (writes.steps.length > 0) {
+      try {
+        await writes.steps[0](true);
+      } catch (error) {
+        if (!isUniqueViolation(error)) {
+          if (isTransientDatabaseFailure(error)) {
+            this.storeLater(state, writes, error);
+          } else {
+            this.gaveUpStoring(state, writes, error);
+          }
+          return;
+        }
+      }
+      writes.steps.shift();
+    }
+    this.logger.log(`${state.pair.key}: stored the rows of ${this.described(writes)} after all`);
+    this.releaseWaiting(state, writes);
+  }
+
+  /** The message is out and nothing records it, so it is never posted again, and its edits and deletions are lost. */
+  private gaveUpStoring(state: PairState, writes: RowWrites, error: unknown) {
+    writes.failed = true;
+    writes.steps = [];
+    this.failedCreates.set(writes.source, MAX_CREATE_ATTEMPTS);
+    this.fail(`${state.pair.key}: gave up storing the rows of ${this.described(writes)}`, error);
+    this.releaseWaiting(state, writes);
+  }
+
+  private releaseWaiting(state: PairState, writes: RowWrites) {
+    state.unstored = state.unstored.filter((other) => other !== writes);
+    state.queue.pushNext(writes.waiting.splice(0));
+  }
+
+  private abandonRowWrites(state: PairState) {
+    for (const writes of state.unstored.filter(({ timer }) => timer !== undefined)) {
+      clearTimeout(writes.timer);
+      writes.timer = undefined;
+      this.gaveUpStoring(state, writes, new Error('the mirror of the channel stopped'));
+    }
+  }
+
+  private described({ source, ids }: RowWrites) {
+    const copies = ids.filter((id) => id !== source);
+    return copies.length === 0 ? source : `${source} (${[...new Set(copies)].join(', ')})`;
+  }
+
+  private unstoredFor(state: PairState, copies: Copies) {
+    const keys = copyKeys(copies);
+    return state.unstored.find((writes) => keys.some((key) => writes.keys.has(key)));
+  }
+
+  /** Whether `run` waits until what a create posted is stored, so that it finds what it looks for. */
+  private waitForRows(state: PairState, copies: Copies, label: string, run: () => Promise<void>) {
+    const writes = this.unstoredFor(state, copies);
+    writes?.waiting.push({ label, run });
+    return writes !== undefined;
+  }
+
+  /** An insert tried again that finds its row was stored by the attempt that failed on the way back. */
+  private async insertRows(rows: NewMirrorMessage[], retry: boolean) {
+    try {
+      await this.database.createMirrorMessages(rows);
+    } catch (error) {
+      if (!retry || !isUniqueViolation(error)) {
+        throw error;
+      }
+    }
   }
 
   /**
@@ -1863,13 +2051,20 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async mirrorZulipMessage(state: PairState, message: ZulipReceivedMessage, generation?: number) {
+    const source = `Zulip message ${message.id}`;
+    if (
+      this.waitForRows(state, { zulip: [message.id], topic: topicKey(message.topic) }, source, () =>
+        this.mirrorZulipMessage(state, message, generation),
+      )
+    ) {
+      return;
+    }
     const turnAway = () => state.turnedAway.zulip.add(message.id);
     if (!this.discordReady(state)) {
       turnAway();
       this.notReady(state, 'Discord');
       return;
     }
-    const source = `Zulip message ${message.id}`;
     if (!this.mayCreate(state, source, generation, turnAway)) {
       return;
     }
@@ -1997,8 +2192,21 @@ export class MirrorService implements OnModuleDestroy {
     return { ...existing, ...changes };
   }
 
-  private async createThreadConversation(state: PairState, threadId: string, zulipTopic: string, anchor: number) {
+  /** A retry first looks for the conversation, which the attempt that failed on the way back may have stored. */
+  private async createThreadConversation(
+    state: PairState,
+    threadId: string,
+    zulipTopic: string,
+    anchor: number,
+    retry = false,
+  ) {
     const { pair } = state;
+    const stored = retry
+      ? await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId)
+      : undefined;
+    if (stored) {
+      return stored;
+    }
     const conversation = await this.database.createMirrorConversation({
       discordChannelId: pair.discordChannelId,
       discordThreadId: threadId,
@@ -2062,6 +2270,7 @@ export class MirrorService implements OnModuleDestroy {
       sent = await send(parts[0], { ...first, files });
     }
 
+    const writes = this.rowWrites(`Zulip message ${message.id}`);
     let conversationId = conversation?.id ?? null;
     let threadId = conversation ? conversation.discordThreadId : pair.kind === 'forum' ? sent.channelId : null;
     if (!conversation) {
@@ -2082,29 +2291,51 @@ export class MirrorService implements OnModuleDestroy {
         }
       }
       if (threadId !== null) {
-        conversationId = (await this.createThreadConversation(state, threadId, message.topic, message.id)).id;
+        const thread = threadId;
+        await this.storeRows(
+          state,
+          writes,
+          { discord: [sent.messageId], zulip: [message.id], thread, topic: topicKey(message.topic) },
+          async (retry) => {
+            conversationId = (await this.createThreadConversation(state, thread, message.topic, message.id, retry)).id;
+          },
+        );
       }
     }
 
-    const source = {
-      conversationId,
-      zulipMessageId: message.id,
-      zulipSenderId: message.senderId,
-      sourceHash: sha256(message.content),
-    };
-    await this.database.createMirrorMessages([zulipOriginRow(pair, source, sent, 0)]);
+    const row = (posted: DiscordMirrorSent, part: number) =>
+      zulipOriginRow(
+        pair,
+        {
+          conversationId,
+          zulipMessageId: message.id,
+          zulipSenderId: message.senderId,
+          sourceHash: sha256(message.content),
+        },
+        posted,
+        part,
+      );
+    await this.storeRows(state, writes, { discord: [sent.messageId], zulip: [message.id] }, (retry) =>
+      this.insertRows([row(sent, 0)], retry),
+    );
     if (conversation?.discordThreadId && conversation.zulipAnchorMessageId === null) {
-      await this.database.updateMirrorConversation(conversation.id, { zulipAnchorMessageId: message.id });
+      const { id } = conversation;
+      await this.storeRows(state, writes, {}, () =>
+        this.database.updateMirrorConversation(id, { zulipAnchorMessageId: message.id }),
+      );
     }
 
     for (let part = 1; part < parts.length; part++) {
+      let posted: DiscordMirrorSent;
       try {
-        const posted = await send(parts[part], { threadId: threadId ?? undefined });
-        await this.database.createMirrorMessages([zulipOriginRow(pair, source, posted, part)]);
+        posted = await send(parts[part], { threadId: threadId ?? undefined });
       } catch (error) {
         this.fail(`${pair.key}: could not mirror part ${part + 1} of Zulip message ${message.id} to Discord`, error);
         return;
       }
+      await this.storeRows(state, writes, { discord: [posted.messageId] }, (retry) =>
+        this.insertRows([row(posted, part)], retry),
+      );
     }
   }
 
@@ -2154,6 +2385,13 @@ export class MirrorService implements OnModuleDestroy {
   private async editFromZulip(state: PairState, messageId: number, content: string, attempt = 1, before?: string) {
     const { pair } = state;
     const label = `edit of Zulip message ${messageId}`;
+    if (
+      this.waitForRows(state, { zulip: [messageId] }, label, () =>
+        this.editFromZulip(state, messageId, content, attempt, before),
+      )
+    ) {
+      return;
+    }
     const all = (await this.database.getMirrorMessagesByZulipIds([messageId], { withDeleted: true })).filter(
       ({ origin }) => origin === 'zulip',
     );
@@ -2303,10 +2541,12 @@ export class MirrorService implements OnModuleDestroy {
       { id: senderId, fullName: await this.senderName(senderId, first.zulipMessageId) },
       state.guildId!,
     );
+    const writes = this.rowWrites(`Zulip message ${first.zulipMessageId}`);
     for (const [index, content] of extra.entries()) {
       const part = rows.length + index;
+      let posted: DiscordMirrorSent;
       try {
-        const posted = await this.onDiscord(state, threadId, () =>
+        posted = await this.onDiscord(state, threadId, () =>
           this.discordMirror.sendMirrorMessage({
             channelId: pair.discordChannelId,
             threadId: threadId ?? undefined,
@@ -2317,7 +2557,6 @@ export class MirrorService implements OnModuleDestroy {
             suppressEmbeds: suppressEmbeds(content),
           }),
         );
-        await this.database.createMirrorMessages([zulipOriginRow(pair, { ...first, sourceHash: hash }, posted, part)]);
       } catch (error) {
         this.fail(
           `${pair.key}: could not add part ${part + 1} of Zulip message ${first.zulipMessageId} on Discord`,
@@ -2325,6 +2564,9 @@ export class MirrorService implements OnModuleDestroy {
         );
         return;
       }
+      await this.storeRows(state, writes, { discord: [posted.messageId], zulip: [first.zulipMessageId] }, (retry) =>
+        this.insertRows([zulipOriginRow(pair, { ...first, sourceHash: hash }, posted, part)], retry),
+      );
     }
   }
 
@@ -2344,6 +2586,10 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async deleteFromZulip(state: PairState, messageIds: number[]) {
+    const label = `deletion of Zulip messages ${messageIds.join(', ')}`;
+    if (this.waitForRows(state, { zulip: messageIds }, label, () => this.deleteFromZulip(state, messageIds))) {
+      return;
+    }
     const rows = await this.database.getMirrorMessagesByZulipIds(messageIds);
     const vanished = await this.vanishedConversations(state, messageIds);
     await this.database.markMirrorMessagesDeleted(rows.map(({ discordMessageId }) => discordMessageId));
@@ -2356,6 +2602,10 @@ export class MirrorService implements OnModuleDestroy {
 
   /** A message moved out of the mirror stream is deleted in the stream it was moved to, which no pair owns. */
   private async deleteMovedFromZulip(state: PairState, messageIds: number[]) {
+    const label = `deletion of Zulip messages ${messageIds.join(', ')}`;
+    if (this.waitForRows(state, { zulip: messageIds }, label, () => this.deleteMovedFromZulip(state, messageIds))) {
+      return;
+    }
     const rows = (await this.database.getMirrorMessagesByZulipIds(messageIds)).filter(
       ({ discordChannelId }) => discordChannelId === state.pair.discordChannelId,
     );
@@ -2447,6 +2697,10 @@ export class MirrorService implements OnModuleDestroy {
   private async moveFromZulip(state: PairState, update: ZulipMessageUpdated) {
     const { pair } = state;
     const moved = [...new Set([update.messageId, ...update.messageIds])];
+    const label = `move of Zulip message ${update.messageId}`;
+    if (this.waitForRows(state, { zulip: moved }, label, () => this.moveFromZulip(state, update))) {
+      return;
+    }
     const conversations = (await this.database.getMirrorConversationsByAnchors(moved)).filter(
       ({ zulipStreamId, discordThreadId }) => zulipStreamId === pair.zulipStreamId && discordThreadId !== null,
     );
@@ -2542,7 +2796,11 @@ export class MirrorService implements OnModuleDestroy {
   private async tagsFromDiscord(state: PairState, thread: { threadId: string; tags: string[] }) {
     const { pair } = state;
     const { threadId, tags } = thread;
-    if (this.holdFor(state, 'Zulip', `tags of Discord thread ${threadId}`, () => this.tagsFromDiscord(state, thread))) {
+    const label = `tags of Discord thread ${threadId}`;
+    if (
+      this.waitForRows(state, { thread: threadId }, label, () => this.tagsFromDiscord(state, thread)) ||
+      this.holdFor(state, 'Zulip', label, () => this.tagsFromDiscord(state, thread))
+    ) {
       return;
     }
     const found = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
@@ -2736,11 +2994,20 @@ export class MirrorService implements OnModuleDestroy {
     backfill?: { topic?: string },
   ): Promise<CreateOutcome> {
     const { pair } = state;
+    const label = `Discord message ${source.id}`;
     const holding = backfill ? undefined : state.backfills.get(source.threadId ?? source.channelId);
     if (holding) {
-      holding.held.push({
-        label: `Discord message ${source.id}`,
-        run: () => this.mirrorHeld(state, source, generation),
+      holding.held.push({ label, run: () => this.mirrorHeld(state, source, generation) });
+      return 'held';
+    }
+    const unstored = this.unstoredFor(state, { discord: [source.id], thread: source.threadId ?? undefined });
+    if (unstored) {
+      if (backfill) {
+        return 'retry';
+      }
+      unstored.waiting.push({
+        label,
+        run: async () => void (await this.mirrorDiscordMessage(state, source, generation)),
       });
       return 'held';
     }
@@ -2752,7 +3019,6 @@ export class MirrorService implements OnModuleDestroy {
       this.notReady(state, 'Zulip');
       return 'retry';
     }
-    const label = `Discord message ${dto.id}`;
     if (!this.mayCreate(state, label, generation, turnAway)) {
       return (this.failedCreates.get(label) ?? 0) >= MAX_CREATE_ATTEMPTS ? 'failed' : 'retry';
     }
@@ -2808,29 +3074,44 @@ export class MirrorService implements OnModuleDestroy {
           content: zulipMirrorContent(lead, body, attachments),
         }),
       );
-      conversation ??= await this.createThreadConversation(state, dto.threadId!, topic, id);
-      await this.database.createMirrorMessages([
-        {
-          discordMessageId: dto.id,
-          conversationId: conversation.id,
-          origin: 'discord',
-          discordChannelId: pair.discordChannelId,
-          discordThreadId: dto.threadId,
-          discordWebhookId: null,
-          discordAuthorId: dto.author.id,
-          zulipMessageId: id,
-          zulipStreamId: pair.zulipStreamId,
-          zulipSenderId: null,
-          part: 0,
-          sourceHash: discordSourceHash(dto),
-          zulipHeader: lead,
-          zulipAttachments: attachments || null,
-        },
-      ]);
-      if (conversation.discordThreadId !== null && conversation.zulipAnchorMessageId === null) {
-        await this.database.updateMirrorConversation(conversation.id, { zulipAnchorMessageId: id });
-      }
       this.created(state, label);
+      const writes = this.rowWrites(label);
+      let opened = conversation;
+      if (!opened) {
+        await this.storeRows(
+          state,
+          writes,
+          { discord: [dto.id], zulip: [id], thread: dto.threadId!, topic: topicKey(topic) },
+          async (retry) => {
+            opened = await this.createThreadConversation(state, dto.threadId!, topic, id, retry);
+          },
+        );
+      }
+      const row = (conversationId: string): NewMirrorMessage => ({
+        discordMessageId: dto.id,
+        conversationId,
+        origin: 'discord',
+        discordChannelId: pair.discordChannelId,
+        discordThreadId: dto.threadId,
+        discordWebhookId: null,
+        discordAuthorId: dto.author.id,
+        zulipMessageId: id,
+        zulipStreamId: pair.zulipStreamId,
+        zulipSenderId: null,
+        part: 0,
+        sourceHash: discordSourceHash(dto),
+        zulipHeader: lead,
+        zulipAttachments: attachments || null,
+      });
+      await this.storeRows(state, writes, { discord: [dto.id], zulip: [id] }, (retry) =>
+        this.insertRows([row(opened!.id)], retry),
+      );
+      if (conversation?.discordThreadId && conversation.zulipAnchorMessageId === null) {
+        const { id: conversationId } = conversation;
+        await this.storeRows(state, writes, {}, () =>
+          this.database.updateMirrorConversation(conversationId, { zulipAnchorMessageId: id }),
+        );
+      }
       return 'created';
     } catch (error) {
       const retry = this.createFailed(state, label, error, attempt, turnAway);
@@ -3197,13 +3478,17 @@ export class MirrorService implements OnModuleDestroy {
 
   private async editFromDiscord(state: PairState, dto: DiscordSourceMessage) {
     const { pair } = state;
+    const label = `edit of Discord message ${dto.id}`;
+    if (this.waitForRows(state, { discord: [dto.id] }, label, () => this.editFromDiscord(state, dto))) {
+      return;
+    }
     const row = (await this.database.getMirrorMessagesByDiscordIds([dto.id])).find(
       ({ origin }) => origin === 'discord',
     );
     const hash = discordSourceHash(dto);
     if (
       !row ||
-      this.holdFor(state, 'Zulip', `edit of Discord message ${dto.id}`, () => this.editFromDiscord(state, dto)) ||
+      this.holdFor(state, 'Zulip', label, () => this.editFromDiscord(state, dto)) ||
       row.sourceHash === hash
     ) {
       return;
@@ -3240,6 +3525,10 @@ export class MirrorService implements OnModuleDestroy {
   }
 
   private async deleteFromDiscord(state: PairState, messageIds: string[]) {
+    const label = `deletion of Discord messages ${messageIds.join(', ')}`;
+    if (this.waitForRows(state, { discord: messageIds }, label, () => this.deleteFromDiscord(state, messageIds))) {
+      return;
+    }
     for (const row of await this.database.getMirrorMessagesByDiscordIds(messageIds)) {
       // Marked first: Zulip reports the bot's own deletion back as an event, which must find nothing.
       await this.database.markMirrorMessagesDeleted([row.discordMessageId]);
@@ -3279,6 +3568,13 @@ export class MirrorService implements OnModuleDestroy {
   private async reactionsToZulip(state: PairState, discordMessageId: string) {
     const { pair } = state;
     const label = `reactions of Discord message ${discordMessageId}`;
+    if (
+      this.waitForRows(state, { discord: [discordMessageId] }, label, () =>
+        this.reactionsToZulip(state, discordMessageId),
+      )
+    ) {
+      return;
+    }
     const [row] = await this.database.getMirrorMessagesByDiscordIds([discordMessageId]);
     if (
       !row ||
@@ -3367,6 +3663,11 @@ export class MirrorService implements OnModuleDestroy {
   private async reactionsToDiscord(state: PairState, zulipMessageId: number) {
     const { pair } = state;
     const label = `reactions of Zulip message ${zulipMessageId}`;
+    if (
+      this.waitForRows(state, { zulip: [zulipMessageId] }, label, () => this.reactionsToDiscord(state, zulipMessageId))
+    ) {
+      return;
+    }
     const [row] = (await this.database.getMirrorMessagesByZulipIds([zulipMessageId])).filter(
       ({ discordChannelId }) => discordChannelId === pair.discordChannelId,
     );
@@ -3458,6 +3759,13 @@ export class MirrorService implements OnModuleDestroy {
       return;
     }
     if (
+      this.waitForRows(state, { thread: thread.threadId }, `rename of Discord thread ${thread.threadId}`, () =>
+        this.renameFromDiscord(state, thread),
+      )
+    ) {
+      return;
+    }
+    if (
       this.holdFor(state, 'Zulip', `rename of Discord thread ${thread.threadId}`, () =>
         this.renameFromDiscord(state, thread),
       )
@@ -3516,6 +3824,13 @@ export class MirrorService implements OnModuleDestroy {
 
   private async threadDeleted(state: PairState, threadId: string, reason = 'the Discord thread was deleted') {
     const { pair } = state;
+    if (
+      this.waitForRows(state, { thread: threadId }, `deletion of Discord thread ${threadId}`, () =>
+        this.threadDeleted(state, threadId, reason),
+      )
+    ) {
+      return;
+    }
     const conversation = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
     if (!conversation) {
       return;

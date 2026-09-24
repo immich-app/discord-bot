@@ -118,8 +118,8 @@ describe(SerialQueue.name, () => {
     expect(events).toEqual(['a', 'start b', 'end b']);
   });
 
-  it('should move on after the watchdog fires, and log the late settle', async () => {
-    vitest.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it('should wait for an op past the watchdog, warning again each time it comes round, and log the late settle', async () => {
+    vitest.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const queue = new SerialQueue('Dev', logger);
     const stuck = deferred();
     queue.push('Zulip message 1', op('stuck', stuck.promise));
@@ -131,40 +131,55 @@ describe(SerialQueue.name, () => {
     expect(logger.error).not.toHaveBeenCalled();
 
     await vitest.advanceTimersByTimeAsync(1);
-    expect(logger.error).toHaveBeenCalledWith(
-      'Dev: Zulip message 1 has not finished after 180 s; the queue is moving on without it',
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      'Dev: Zulip message 1 has not finished after 180 s; the queue waits for it',
     );
-    await queue.whenIdle();
-    expect(events).toEqual(['start stuck', 'start next', 'end next']);
+    expect(events).toEqual(['start stuck']);
+
+    await vitest.advanceTimersByTimeAsync(360_000);
+    expect(logger.error.mock.calls).toEqual([
+      ['Dev: Zulip message 1 has not finished after 180 s; the queue waits for it'],
+      ['Dev: Zulip message 1 has not finished after 360 s; the queue waits for it'],
+      ['Dev: Zulip message 1 has not finished after 540 s; the queue waits for it'],
+    ]);
+    expect(events).toEqual(['start stuck']);
 
     stuck.resolve();
-    await flush();
-    expect(logger.warn).toHaveBeenCalledWith('Dev: Zulip message 1 finished after the queue had moved on without it');
+    await queue.whenIdle();
+    expect(events).toEqual(['start stuck', 'end stuck', 'start next', 'end next']);
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith('Dev: Zulip message 1 finished late, and the queue goes on');
+    await vitest.advanceTimersByTimeAsync(1_000_000);
+    expect(logger.error).toHaveBeenCalledTimes(3);
+    expect(vitest.getTimerCount()).toBe(0);
   });
 
-  it('should log a late failure as an error', async () => {
-    vitest.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it('should log a late failure as an error, and only then run the next op', async () => {
+    vitest.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const queue = new SerialQueue('Dev', logger, { watchdogMs: 1000 });
     const stuck = deferred();
     const error = new Error('late');
     queue.push('op', op('stuck', stuck.promise));
+    queue.push('next', op('next'));
     await flush();
     await vitest.advanceTimersByTimeAsync(1000);
-    expect(logger.error).toHaveBeenCalledWith('Dev: op has not finished after 1 s; the queue is moving on without it');
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith('Dev: op has not finished after 1 s; the queue waits for it');
+    expect(events).toEqual(['start stuck']);
 
     stuck.reject(error);
-    await flush();
-    expect(logger.error).toHaveBeenCalledWith('Dev: op failed after the queue had moved on without it', error);
+    await queue.whenIdle();
+    expect(logger.error).toHaveBeenLastCalledWith('Dev: op failed late, and the queue goes on', error);
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(events).toEqual(['start stuck', 'start next', 'end next']);
   });
 
   it('should clear the watchdog of an op that finishes in time', async () => {
-    vitest.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vitest.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const queue = new SerialQueue('Dev', logger, { watchdogMs: 1000 });
     queue.push('op', op('quick'));
     await queue.whenIdle();
     await vitest.advanceTimersByTimeAsync(5000);
     expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
     expect(vitest.getTimerCount()).toBe(0);
   });
 
