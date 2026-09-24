@@ -700,12 +700,26 @@ export class MirrorService implements OnModuleDestroy {
     read: () => Promise<DiscordSourceMessage | undefined>,
   ) {
     const state = this.byChannel(channelId);
-    state?.queue.push(`edit of Discord message ${messageId}`, async () => {
-      const dto = await read();
+    if (!state) {
+      return;
+    }
+    const label = `edit of Discord message ${messageId}`;
+    const run = async (attempt: number): Promise<void> => {
+      let dto: DiscordSourceMessage | undefined;
+      try {
+        dto = await read();
+      } catch (error) {
+        if (isTransient(error) && attempt < DISCORD_CHANGE_ATTEMPTS) {
+          this.retryOnDiscord(state, label, attempt, run);
+          return;
+        }
+        throw error;
+      }
       if (dto) {
         await this.editFromDiscord(state, dto);
       }
-    });
+    };
+    state.queue.push(label, () => run(1));
   }
 
   onDiscordMessagesDeleted(channelId: string, messageIds: string[]) {
@@ -2782,7 +2796,11 @@ export class MirrorService implements OnModuleDestroy {
   private async tagsFromDiscord(state: PairState, thread: { threadId: string; tags: string[] }) {
     const { pair } = state;
     const { threadId, tags } = thread;
-    if (this.holdFor(state, 'Zulip', `tags of Discord thread ${threadId}`, () => this.tagsFromDiscord(state, thread))) {
+    const label = `tags of Discord thread ${threadId}`;
+    if (
+      this.waitForRows(state, { thread: threadId }, label, () => this.tagsFromDiscord(state, thread)) ||
+      this.holdFor(state, 'Zulip', label, () => this.tagsFromDiscord(state, thread))
+    ) {
       return;
     }
     const found = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
@@ -3741,6 +3759,13 @@ export class MirrorService implements OnModuleDestroy {
       return;
     }
     if (
+      this.waitForRows(state, { thread: thread.threadId }, `rename of Discord thread ${thread.threadId}`, () =>
+        this.renameFromDiscord(state, thread),
+      )
+    ) {
+      return;
+    }
+    if (
       this.holdFor(state, 'Zulip', `rename of Discord thread ${thread.threadId}`, () =>
         this.renameFromDiscord(state, thread),
       )
@@ -3799,6 +3824,13 @@ export class MirrorService implements OnModuleDestroy {
 
   private async threadDeleted(state: PairState, threadId: string, reason = 'the Discord thread was deleted') {
     const { pair } = state;
+    if (
+      this.waitForRows(state, { thread: threadId }, `deletion of Discord thread ${threadId}`, () =>
+        this.threadDeleted(state, threadId, reason),
+      )
+    ) {
+      return;
+    }
     const conversation = await this.database.getMirrorConversationByDiscord(pair.discordChannelId, threadId);
     if (!conversation) {
       return;

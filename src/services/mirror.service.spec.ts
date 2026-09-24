@@ -2490,6 +2490,28 @@ describe(MirrorService.name, () => {
       });
     });
 
+    it('should read an edit that arrived incomplete again when Discord fails the read for now', async () => {
+      await fromDiscord(discordMessage());
+      vitest.useFakeTimers();
+      const read = vitest
+        .fn<() => Promise<DiscordSourceMessage | undefined>>()
+        .mockRejectedValueOnce(new DiscordMirrorError('unavailable', undefined, 'HTTP 503'))
+        .mockResolvedValue(discordMessage({ content: 'hello again' }));
+
+      sut.onDiscordMessageEditedUnread(DEV_CHANNEL, '300000000000000001', read);
+      await sut.whenIdle();
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(5001, {
+        content: '**Contrib** (&#64;contrib123): hello again',
+      });
+      expect(error()).not.toHaveBeenCalled();
+    });
+
     it('should drop an edit that arrived incomplete when it cannot be read', async () => {
       await fromDiscord(discordMessage());
 
@@ -3562,6 +3584,25 @@ describe(MirrorService.name, () => {
       expect(db.messages).toHaveLength(1);
       expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: stored the rows of ${copy} after all`);
       expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should hold a Discord rename of a thread whose conversation is not stored yet, and apply it once it is', async () => {
+      vitest.useFakeTimers();
+      db.repository.createMirrorConversation.mockRejectedValueOnce(lost());
+      const threadId = '600000000000000001';
+      await fromZulip(zulipMessage({ topic: 'Crash on upload', content: paragraphs('a', 'b') }));
+
+      sut.onDiscordThreadRenamed({ channelId: DEV_CHANNEL, threadId, name: 'Crash on start' });
+      await sut.whenIdle();
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(5000);
+      await sut.whenIdle();
+
+      expect(zulip.updateMessage).toHaveBeenCalledWith(1001, expect.objectContaining({ topic: 'Crash on start' }));
+      expect(db.conversations).toEqual([
+        expect.objectContaining({ discordThreadId: threadId, zulipTopic: 'Crash on start' }),
+      ]);
     });
 
     it('should hold a Zulip topic whose new thread is not stored yet, so that it opens no second one', async () => {

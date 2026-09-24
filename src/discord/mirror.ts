@@ -10,6 +10,7 @@ import {
 import { ArgsOf, Discord, On } from 'discordx';
 import { Constants } from 'src/constants';
 import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
+import { toMirrorError } from 'src/repositories/discord.repository';
 import { MirrorService } from 'src/services/mirror.service';
 
 const parentOf = (channel: TextBasedChannel | null) =>
@@ -124,7 +125,7 @@ export class DiscordMirrorEvents {
       full = await message.fetch();
     } catch (error) {
       if (!isGoneOrHidden(error)) {
-        throw error;
+        throw toMirrorError(error);
       }
       this.logger.debug(`Discord message ${message.id} in channel ${message.channelId} was edited and cannot be read`);
       return undefined;

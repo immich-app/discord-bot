@@ -191,11 +191,11 @@ describe(DiscordMirrorEvents.name, () => {
       expect(Logger.prototype.error).not.toHaveBeenCalled();
     });
 
-    it('should leave any other failure to read it to the queue', async () => {
+    it('should leave any other failure to read it to the queue, as a mirror error', async () => {
       const error = apiError(RESTJSONErrorCodes.UnknownAccount);
       sut.onMessageUpdate([message, partial(vitest.fn().mockRejectedValue(error))]);
 
-      await expect(readOf()()).rejects.toBe(error);
+      await expect(readOf()()).rejects.toMatchObject({ kind: 'other', code: RESTJSONErrorCodes.UnknownAccount });
       expect(Logger.prototype.debug).not.toHaveBeenCalled();
     });
 
