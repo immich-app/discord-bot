@@ -111,6 +111,8 @@ const link = (overrides: Partial<MirrorLink> & Pick<MirrorLink, 'discordChannelI
   ...overrides,
 });
 
+const duplicate = () => Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+
 const newMirrorDatabase = () => {
   const links: MirrorLink[] = [
     link({ discordChannelId: DEV_CHANNEL, zulipStreamId: DEV_STREAM, mainTopic: '#dev' }),
@@ -161,7 +163,7 @@ const newMirrorDatabase = () => {
             (row.discordChannelId === entity.discordChannelId && row.discordThreadId === threadId),
         )
       ) {
-        throw new Error('duplicate key value violates unique constraint');
+        throw duplicate();
       }
       const created = {
         id: `conversation-${++sequence}`,
@@ -186,7 +188,7 @@ const newMirrorDatabase = () => {
                 other.discordThreadId === updated.discordThreadId)),
         )
       ) {
-        throw new Error('duplicate key value violates unique constraint');
+        throw duplicate();
       }
       Object.assign(row, changes);
     }),
@@ -206,7 +208,7 @@ const newMirrorDatabase = () => {
               (message.zulipMessageId === row.zulipMessageId && message.part === part),
           )
         ) {
-          throw new Error('duplicate key value violates unique constraint');
+          throw duplicate();
         }
         messages.push({ createdAt: new Date(), deletedAt: null, ...row, part } as MirrorMessage);
       }
@@ -3464,6 +3466,186 @@ describe(MirrorService.name, () => {
     });
   });
 
+  describe('rows that could not be stored', () => {
+    beforeEach(start);
+
+    const lost = () => new Error('Connection terminated unexpectedly');
+    const copy = 'Discord message 300000000000000001 (Zulip message 5001)';
+
+    it('should store the row once the database is back, and hold the edit and deletion of the message until then', async () => {
+      vitest.useFakeTimers();
+      db.repository.createMirrorMessages.mockRejectedValueOnce(lost()).mockRejectedValueOnce(lost());
+
+      await fromDiscord(discordMessage());
+      sut.onDiscordMessageEdited(discordMessage({ content: 'hello again' }));
+      sut.onDiscordMessagesDeleted(DEV_CHANNEL, ['300000000000000001']);
+      await sut.whenIdle();
+
+      expect(warn()).toHaveBeenCalledExactlyOnceWith(
+        `${DEV_CHANNEL}: could not store the rows of ${copy} yet, trying again in 5 s: Connection terminated unexpectedly`,
+      );
+      expect(db.messages).toEqual([]);
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+      expect(zulip.deleteMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(5000);
+      await sut.whenIdle();
+      expect(warn()).toHaveBeenLastCalledWith(
+        `${DEV_CHANNEL}: could not store the rows of ${copy} yet, trying again in 15 s: Connection terminated unexpectedly`,
+      );
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(15_000);
+      await sut.whenIdle();
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: stored the rows of ${copy} after all`);
+      expect(zulip.updateMessage).toHaveBeenCalledExactlyOnceWith(5001, {
+        content: '**Contrib** (&#64;contrib123): hello again',
+      });
+      expect(zulip.deleteMessage).toHaveBeenCalledExactlyOnceWith(5001);
+      expect(zulip.updateMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        zulip.deleteMessage.mock.invocationCallOrder[0],
+      );
+      expect(db.messages).toEqual([
+        expect.objectContaining({
+          discordMessageId: '300000000000000001',
+          zulipMessageId: 5001,
+          deletedAt: expect.any(Date),
+        }),
+      ]);
+      expect(db.repository.createMirrorMessages).toHaveBeenCalledTimes(3);
+      expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should give up after a few minutes, let what waited run, and never post the message again', async () => {
+      vitest.useFakeTimers();
+      db.repository.createMirrorMessages.mockRejectedValue(lost());
+
+      await fromDiscord(discordMessage());
+      sut.onDiscordMessageEdited(discordMessage({ content: 'hello again' }));
+      await vitest.advanceTimersByTimeAsync(199_999);
+      await sut.whenIdle();
+      expect(error()).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(1);
+      await sut.whenIdle();
+      expect(warn().mock.calls.map(([message]) => message)).toEqual(
+        [5, 15, 30, 60, 90].map(
+          (seconds) =>
+            `${DEV_CHANNEL}: could not store the rows of ${copy} yet, trying again in ${seconds} s: Connection terminated unexpectedly`,
+        ),
+      );
+      expect(error()).toHaveBeenCalledExactlyOnceWith(
+        `${DEV_CHANNEL}: gave up storing the rows of ${copy}: Connection terminated unexpectedly`,
+        expect.any(Error),
+      );
+      expect(db.repository.createMirrorMessages).toHaveBeenCalledTimes(6);
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+
+      await fromDiscord(discordMessage());
+      expect(zulip.sendMessage).toHaveBeenCalledOnce();
+      expect(vitest.getTimerCount()).toBe(0);
+    });
+
+    it('should count a row the failed attempt stored after all', async () => {
+      vitest.useFakeTimers();
+      const insert = db.repository.createMirrorMessages.getMockImplementation()!;
+      db.repository.createMirrorMessages.mockImplementationOnce(async (rows) => {
+        await insert(rows);
+        throw lost();
+      });
+
+      await fromDiscord(discordMessage());
+      await vitest.advanceTimersByTimeAsync(5000);
+      await sut.whenIdle();
+
+      expect(db.repository.createMirrorMessages).toHaveBeenCalledTimes(2);
+      expect(db.messages).toHaveLength(1);
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: stored the rows of ${copy} after all`);
+      expect(error()).not.toHaveBeenCalled();
+    });
+
+    it('should hold a Zulip topic whose new thread is not stored yet, so that it opens no second one', async () => {
+      vitest.useFakeTimers();
+      db.repository.createMirrorConversation.mockRejectedValueOnce(lost());
+      const threadId = '600000000000000001';
+
+      await fromZulip(zulipMessage({ topic: 'Crash on upload', content: paragraphs('a', 'b') }));
+      await fromZulip(zulipMessage({ id: 1002, topic: 'Crash on upload', content: 'more' }));
+
+      expect(warn()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: could not store the rows of Zulip message 1001 (Discord message ${threadId}) yet, trying again in 5 s: Connection terminated unexpectedly`,
+      );
+      expect(discord.sendMirrorMessage).toHaveBeenCalledTimes(2);
+      expect(sent(1)).toEqual(expect.objectContaining({ threadId, content: 'b'.repeat(1500) }));
+      expect(db.conversations).toEqual([]);
+      expect(db.messages).toEqual([]);
+
+      await vitest.advanceTimersByTimeAsync(5000);
+      await sut.whenIdle();
+
+      expect(db.conversations).toEqual([
+        expect.objectContaining({
+          discordThreadId: threadId,
+          zulipTopic: 'Crash on upload',
+          zulipAnchorMessageId: 1001,
+        }),
+      ]);
+      const [{ id: conversationId }] = db.conversations;
+      expect(db.messages.map((row) => [row.zulipMessageId, row.part, row.discordThreadId, row.conversationId])).toEqual(
+        [
+          [1001, 0, null, conversationId],
+          [1001, 1, threadId, conversationId],
+          [1002, 0, threadId, conversationId],
+        ],
+      );
+      expect(sent(2)).toEqual(expect.objectContaining({ threadId, content: 'more' }));
+      expect(discord.startMirrorThread).toHaveBeenCalledOnce();
+      expect(log()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: stored the rows of Zulip message 1001 (Discord message ${threadId}, Discord message 600000000000000002) after all`,
+      );
+    });
+
+    it('should hold the edit and deletion of a Zulip message until its copy is stored', async () => {
+      vitest.useFakeTimers();
+      db.repository.createMirrorMessages.mockRejectedValueOnce(lost());
+
+      await fromZulip(zulipMessage());
+      await updateFromZulip({ messageId: 1001, content: 'edited' });
+      await deleteFromZulip({ messageIds: [1001] });
+      expect(discord.editMirrorMessage).not.toHaveBeenCalled();
+      expect(discord.deleteMirrorMessage).not.toHaveBeenCalled();
+
+      await vitest.advanceTimersByTimeAsync(5000);
+      await sut.whenIdle();
+
+      const target = expect.objectContaining({ messageId: '600000000000000001' });
+      expect(discord.editMirrorMessage).toHaveBeenCalledExactlyOnceWith(target, {
+        content: 'edited',
+        suppressEmbeds: false,
+      });
+      expect(discord.deleteMirrorMessage).toHaveBeenCalledExactlyOnceWith(target);
+      expect(discord.editMirrorMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        discord.deleteMirrorMessage.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('should give up on rows still waiting when the channel is unlinked', async () => {
+      vitest.useFakeTimers();
+      db.repository.createMirrorMessages.mockRejectedValueOnce(lost());
+
+      await fromDiscord(discordMessage());
+      sut.disable(DEV_CHANNEL);
+      await vitest.advanceTimersByTimeAsync(5000);
+
+      expect(error()).toHaveBeenCalledExactlyOnceWith(
+        `${DEV_CHANNEL}: gave up storing the rows of ${copy}: the mirror of the channel stopped`,
+        expect.any(Error),
+      );
+      expect(db.repository.createMirrorMessages).toHaveBeenCalledOnce();
+      expect(vitest.getTimerCount()).toBe(0);
+    });
+  });
+
   describe('moves and renames', () => {
     let threadId: string;
 
@@ -4870,18 +5052,28 @@ describe(MirrorService.name, () => {
       expect(posted()).toEqual(['starter']);
     });
 
-    it('should never send a message again once it reached Zulip, even when storing its copy failed', async () => {
-      seedHighWaters();
-      await start();
-      const first = missedOnDiscord({ content: 'first' });
-      onDiscord(DEV_CHANNEL, first);
-      db.repository.createMirrorMessages.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+    it.each([
+      ['for now', new Error('Connection terminated unexpectedly'), 1],
+      ['for good', new Error('boom'), 0],
+    ])(
+      'should never send a message again once it reached Zulip, even when storing its copy failed %s',
+      async (_, failure, stored) => {
+        seedHighWaters();
+        await start();
+        vitest.useFakeTimers();
+        const first = missedOnDiscord({ content: 'first' });
+        onDiscord(DEV_CHANNEL, first);
+        db.repository.createMirrorMessages.mockRejectedValueOnce(failure);
 
-      await fromDiscord(first);
-      await register();
+        await fromDiscord(first);
+        await register();
+        await vitest.advanceTimersByTimeAsync(5000);
+        await sut.whenIdle();
 
-      expect(posted()).toEqual(['first']);
-    });
+        expect(posted()).toEqual(['first']);
+        expect(db.messages.filter(({ discordMessageId }) => discordMessageId === first.id)).toHaveLength(stored);
+      },
+    );
 
     it('should hold live messages back while it cannot read Discord, and read again soon', async () => {
       seedHighWaters();

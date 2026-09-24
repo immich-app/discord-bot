@@ -43,6 +43,10 @@ export class SerialQueue {
     this.closed = true;
   }
 
+  isOpen() {
+    return !this.closed;
+  }
+
   private enqueue(ops: Op[], where: 'next' | 'last') {
     if (ops.length === 0) {
       return;
