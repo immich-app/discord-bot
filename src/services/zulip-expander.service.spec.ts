@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { ZulipExpander } from 'src/schema';
 import { ZulipExpanderKind } from 'src/schema/tables/zulip-expander.table';
@@ -115,5 +116,18 @@ describe(ZulipExpanderService.name, () => {
 
     expect(table.some(({ streamId, expander }) => streamId === 54 && expander === 'twitter')).toBe(false);
     expect(sut.isEnabled(54, 'twitter')).toBe(false);
+  });
+
+  it('should cache a change as the table reported it when reading the table back fails', async () => {
+    vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    database.getZulipExpanders.mockRejectedValueOnce(new Error('connection terminated'));
+    expect(await sut.enable(54, ['twitter'], 'Alice')).toEqual(['twitter']);
+    expect(sut.isEnabled(54, 'twitter')).toBe(true);
+
+    database.getZulipExpanders.mockRejectedValueOnce(new Error('connection terminated'));
+    expect(await sut.disable(107, ['github', 'twitter'])).toEqual(['github', 'twitter']);
+    expect(sut.enabledIn(107)).toEqual([]);
+    expect(sut.list()).toEqual([{ streamId: 54, expanders: ['github', 'twitter'] }]);
+    expect(Logger.prototype.warn).toHaveBeenCalledTimes(2);
   });
 });
