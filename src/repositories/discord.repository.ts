@@ -13,6 +13,7 @@ import {
   PermissionsString,
   RESTJSONErrorCodes,
   Routes,
+  TextBasedChannel,
   ThreadAutoArchiveDuration,
   Webhook,
   WebhookClient,
@@ -114,6 +115,8 @@ const ARCHIVED_THREADS = 50;
 const DISCORD_EPOCH = 1_420_070_400_000;
 const AVATAR_TIMEOUT_MS = 10_000;
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+const REPLY_TARGETS_BUDGET_MS = 20_000;
+const REPLY_TARGETS_CONCURRENCY = 5;
 
 const mirrorPermissions: PermissionsString[] = [
   'ViewChannel',
@@ -696,7 +699,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
   async fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordMirrorForwardPage> {
     try {
-      const messages = await this.fetchMirrorPage(channelId, { after: afterId, limit });
+      const messages = await this.fetchMirrorPage(channelId, { after: afterId, limit }, true);
       const candidates = messages.filter((message) => this.isCandidate(message));
       return {
         messages: candidates.map(toDiscordSourceMessage),
@@ -709,27 +712,52 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     }
   }
 
-  /** Oldest first, with the messages they reply to cached, so that an old reply still names its author. */
-  private async fetchMirrorPage(channelId: string, options: FetchMessagesOptions) {
+  /** Oldest first. */
+  private async fetchMirrorPage(channelId: string, options: FetchMessagesOptions, withReplyTargets = false) {
     const channel = await bot.channels.fetch(channelId);
     if (!channel?.isTextBased() || channel.isDMBased()) {
       throw new DiscordMirrorError('unknown-channel');
     }
     const messages = [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
-    const missing = new Set(
-      messages.flatMap(({ type, reference }) =>
-        type === MessageType.Reply &&
-        reference?.messageId &&
-        reference.channelId === channelId &&
-        !channel.messages.cache.has(reference.messageId)
-          ? [reference.messageId]
-          : [],
-      ),
-    );
-    for (const messageId of missing) {
-      await channel.messages.fetch(messageId).catch(() => undefined);
+    if (withReplyTargets) {
+      await this.cacheReplyTargets(channel, messages);
     }
     return messages;
+  }
+
+  /**
+   * A reply names its author from the cache, which holds only recent messages, so the ones old replies answer are read
+   * in; within a time budget, so a page of replies cannot hold up the queue it runs in.
+   */
+  private async cacheReplyTargets(channel: TextBasedChannel, messages: Message[]) {
+    const missing = [
+      ...new Set(
+        messages.flatMap(({ type, reference }) =>
+          type === MessageType.Reply &&
+          reference?.messageId &&
+          reference.channelId === channel.id &&
+          !channel.messages.cache.has(reference.messageId)
+            ? [reference.messageId]
+            : [],
+        ),
+      ),
+    ];
+    const deadline = Date.now() + REPLY_TARGETS_BUDGET_MS;
+    const next = async (): Promise<void> => {
+      const messageId = missing.shift();
+      if (messageId === undefined || Date.now() >= deadline) {
+        return;
+      }
+      await channel.messages.fetch(messageId).catch(() => undefined);
+      await next();
+    };
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, REPLY_TARGETS_BUDGET_MS);
+    });
+    const workers = Array.from({ length: REPLY_TARGETS_CONCURRENCY }, () => next());
+    await Promise.race([Promise.all(workers), expired]);
+    clearTimeout(timer);
   }
 
   private isCandidate(message: Message): message is Message<true> {

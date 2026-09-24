@@ -939,6 +939,48 @@ describe(DiscordRepository.name, () => {
       ]);
     });
 
+    it('should give up on the messages old replies answer after 20 seconds, and leave those replies without an author', async () => {
+      vitest.useFakeTimers();
+      const reply = makeMessage('1000000000000000001', {
+        type: MessageType.Reply,
+        reference: { messageId: '900000000000000001', channelId },
+        reactions: { cache: new Collection() },
+      });
+      channel.messages = {
+        ...channel.messages,
+        cache: new Collection(),
+        fetch: vitest.fn((options: unknown) =>
+          typeof options === 'string'
+            ? new Promise(() => {})
+            : Promise.resolve(new Collection([['1000000000000000001', reply]])),
+        ),
+      } as never;
+
+      const reading = sut.fetchMirrorMessagesAfter(channelId, '999999999999999999', 100);
+      await vitest.advanceTimersByTimeAsync(20_000);
+
+      await expect(reading).resolves.toMatchObject({
+        messages: [{ replyTo: { messageId: '900000000000000001', authorDisplayName: null, content: null } }],
+      });
+      vitest.useRealTimers();
+    });
+
+    it('should not read what replies answer when catching up', async () => {
+      const reply = makeMessage('1000000000000000001', {
+        type: MessageType.Reply,
+        reference: { messageId: '900000000000000001', channelId },
+      });
+      channel.messages = {
+        ...channel.messages,
+        cache: new Collection(),
+        fetch: vitest.fn().mockResolvedValue(new Collection([['1000000000000000001', reply]])),
+      } as never;
+
+      await sut.fetchMirrorMessagesBefore(channelId, undefined, 100);
+
+      expect(channel.messages.fetch).toHaveBeenCalledExactlyOnceWith({ limit: 100 });
+    });
+
     it('should read forwards after a message, oldest first, with the candidates that have reactions', async () => {
       await resolveWebhook();
       const reacted = { reactions: { cache: new Collection([['👍', {}]]) } };
