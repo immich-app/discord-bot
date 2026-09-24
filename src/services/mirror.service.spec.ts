@@ -4580,7 +4580,7 @@ describe(MirrorService.name, () => {
       expect(posted()).toEqual(['first']);
     });
 
-    it('should catch up again when creates were turned away while a catch-up the queue gave up on still read', async () => {
+    it('should hold a live create behind a catch-up that outlives the watchdog, and mirror it once that is done', async () => {
       seedHighWaters();
       await start();
       vitest.useFakeTimers();
@@ -4589,17 +4589,19 @@ describe(MirrorService.name, () => {
       for (const handler of stub.handlers.registration) {
         handler({ subscribedStreamIds: [DEV_STREAM, OFF_TOPIC_STREAM, FORUM_STREAM] });
       }
-      await vitest.advanceTimersByTimeAsync(180_000);
-
       const live = missedOnDiscord({ content: 'live' });
       onDiscord(DEV_CHANNEL, live);
-      await fromDiscord(live);
+      sut.onDiscordMessage(live);
+      await vitest.advanceTimersByTimeAsync(360_000);
+      expect(error()).toHaveBeenCalledWith(
+        `${DEV_CHANNEL}: catch-up has not finished after 360 s; the queue waits for it`,
+      );
       expect(zulip.sendMessage).not.toHaveBeenCalled();
 
       page.resolve([]);
-      await vitest.advanceTimersByTimeAsync(30_000);
       await sut.whenIdle();
       expect(posted()).toEqual([expect.stringMatching(/live$/)]);
+      expect(log()).not.toHaveBeenCalledWith(expect.stringContaining('catching up again'));
     });
 
     it('should never send a message again after Zulip may have taken it', async () => {

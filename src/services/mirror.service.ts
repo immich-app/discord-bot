@@ -280,8 +280,6 @@ const mayHaveBeenCarriedOut = (error: unknown) =>
 
 const noneTurnedAway = (): TurnedAway => ({ discord: new Map(), zulip: new Set() });
 
-const isEmpty = ({ discord, zulip }: TurnedAway) => discord.size === 0 && zulip.size === 0;
-
 /** Says nothing about the message: the side cannot be reached at all, or refuses every request for now. */
 const isOutage = (error: unknown) =>
   isConnectFailure(error) ||
@@ -981,12 +979,10 @@ export class MirrorService implements OnModuleDestroy {
         this.turnAway(state, turnedAway);
         return;
       }
-      const read = discord.complete && zulip.complete;
-      if (!read) {
+      const complete = discord.complete && zulip.complete;
+      if (!complete) {
         this.forgiveFailedCreates();
       }
-      // Only an op the queue's watchdog gave up on can meet creates turned away while it read.
-      const complete = read && isEmpty(state.turnedAway);
       this.queueMissed(state, generation, discord.messages, zulip.messages, since, complete);
       if (complete) {
         state.queue.push('recheck of recent messages', () => this.recheck(state, generation));

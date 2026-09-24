@@ -3,8 +3,9 @@ import { Logger } from '@nestjs/common';
 type Op = { label: string; run: () => Promise<void> };
 
 /**
- * Runs ops one at a time, in order. Nothing is ever dropped while the queue is open; an op that outlives the watchdog
- * is left running, since it cannot be cancelled, and the queue moves on to the next one.
+ * Runs ops one at a time, in order: the next op starts only once the current one settles. Nothing is ever dropped while
+ * the queue is open; an op that outlives the watchdog is logged, and again each time the watchdog comes round, since it
+ * cannot be cancelled and running the next op beside it would break the order.
  */
 export class SerialQueue {
   private pending: Op[] = [];
@@ -83,13 +84,12 @@ export class SerialQueue {
   private runOne({ label, run }: Op) {
     this.logger.debug(`${this.name}: ${label}`);
     return new Promise<void>((resolve) => {
-      let abandoned = false;
-      const watchdog = setTimeout(() => {
-        abandoned = true;
+      let overdue = 0;
+      const watchdog = setInterval(() => {
+        overdue++;
         this.logger.error(
-          `${this.name}: ${label} has not finished after ${this.watchdogMs / 1000} s; the queue is moving on without it`,
+          `${this.name}: ${label} has not finished after ${(overdue * this.watchdogMs) / 1000} s; the queue waits for it`,
         );
-        resolve();
       }, this.watchdogMs);
       watchdog.unref();
 
@@ -101,18 +101,15 @@ export class SerialQueue {
       }
       result.then(
         () => {
-          clearTimeout(watchdog);
-          if (abandoned) {
-            this.logger.warn(`${this.name}: ${label} finished after the queue had moved on without it`);
+          clearInterval(watchdog);
+          if (overdue > 0) {
+            this.logger.warn(`${this.name}: ${label} finished late, and the queue goes on`);
           }
           resolve();
         },
         (error: unknown) => {
-          clearTimeout(watchdog);
-          this.logger.error(
-            `${this.name}: ${label} failed${abandoned ? ' after the queue had moved on without it' : ''}`,
-            error,
-          );
+          clearInterval(watchdog);
+          this.logger.error(`${this.name}: ${label} failed${overdue > 0 ? ' late, and the queue goes on' : ''}`, error);
           resolve();
         },
       );
