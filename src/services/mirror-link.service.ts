@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { Constants } from 'src/constants';
-import { neutraliseZulipMentions } from 'src/format';
+import { neutraliseZulipMentions, plural } from 'src/format';
 import { IDatabaseRepository, MirrorIdentityOwner } from 'src/interfaces/database.interface';
 import {
   DiscordMirrorChannel,
@@ -13,7 +13,14 @@ import { EMPTY_TOPIC_NAME, topicKey } from 'src/mirror/names';
 import { holdsIdentityRole, mainTopicProblem } from 'src/mirror/pairs';
 import { escapeDiscordInline } from 'src/mirror/zulip-to-discord';
 import { MirrorLink } from 'src/schema';
-import { MirrorService } from 'src/services/mirror.service';
+import {
+  BackfillOutcome,
+  BackfillPlan,
+  BackfillRefusal,
+  BackfillTarget,
+  describeBackfillStop,
+  MirrorService,
+} from 'src/services/mirror.service';
 import { ZulipService } from 'src/services/zulip.service';
 
 export type MirrorPlatform = 'discord' | 'zulip';
@@ -34,6 +41,11 @@ export type MirrorLinkCompletion = { linkId: string; discordChannelId: string; a
 export type MirrorUnlinkRequest = ({ discordChannelId: string } | { zulipStreamId: number }) & {
   actor: MirrorActor;
 };
+
+export type MirrorBackfillRequest = { target: BackfillTarget; actor: MirrorActor };
+
+/** `done` resolves to the report, or to nothing when the notices in the topic say it all. */
+export type MirrorBackfillReply = { reply: string } | { done: Promise<string | undefined> };
 
 type PendingCode = { discordUserId: string; discordName: string; expiresAt: number };
 
@@ -61,7 +73,7 @@ const code = (platform: MirrorPlatform, value: string) => {
 const channelName = (platform: MirrorPlatform, id: string, channel?: DiscordMirrorChannel) =>
   channel ? `**#${text(platform, channel.name)}** (${id})` : id;
 
-const streamName = (platform: MirrorPlatform, id: number, stream?: ZulipStream) =>
+const streamName = (platform: MirrorPlatform, id: number, stream?: Pick<ZulipStream, 'name'>) =>
   stream ? `**#${text(platform, stream.name)}** (${id})` : String(id);
 
 const actorName = (platform: MirrorPlatform, { name, platform: from }: MirrorActor) =>
@@ -75,6 +87,27 @@ const describeError = (error: unknown) =>
     : error instanceof Error
       ? error.message
       : String(error);
+
+const BACKFILL_REFUSALS: Record<MirrorPlatform, Record<BackfillRefusal, string>> = {
+  discord: {
+    off: 'The mirror is off in this deployment: Discord or Zulip is not configured.',
+    'not-linked': 'This channel is not mirrored with Zulip, so there is nothing to backfill.',
+    'no-conversation': 'This thread is not mirrored with a Zulip topic, so there is nothing to backfill.',
+    'not-ready': 'The mirror of this channel is not running right now, so nothing can be backfilled; the log says why.',
+    running: 'A backfill of this conversation is already running; its end notice on Zulip says when it is done.',
+  },
+  zulip: {
+    off: 'The mirror is off in this deployment: Discord or Zulip is not configured.',
+    'not-linked': 'This stream is not mirrored with a Discord channel, so there is nothing to backfill.',
+    'no-conversation':
+      'This topic is not linked with a Discord channel or thread, so there is nothing to backfill from.',
+    'not-ready': 'The mirror of this stream is not running right now, so nothing can be backfilled; the log says why.',
+    running: 'A backfill of this topic is already running; its end notice here says when it is done.',
+  },
+};
+
+const locationName = ({ kind, threadId }: Pick<BackfillPlan, 'kind' | 'threadId'>) =>
+  threadId === null ? 'channel' : kind === 'forum' ? 'post' : 'thread';
 
 const announcementTopic = (link: Pick<MirrorLink, 'mainTopic'>) => link.mainTopic ?? FORUM_ANNOUNCEMENT_TOPIC;
 
@@ -436,6 +469,55 @@ export class MirrorLinkService {
     await this.mirror.refreshIdentities();
     this.logger.log(`Zulip user ${removed.zulipUserId} is no longer linked with Discord user ${removed.discordUserId}`);
     return `Unlinked Zulip user ${removed.zulipUserId} from Discord user ${removed.discordUserId}: those Zulip messages appear on Discord as "Name (Zulip)" again.`;
+  }
+
+  /** Discord to Zulip only, from where it is run: a thread or forum post, or a text channel's own messages. */
+  async backfill(
+    { target, actor }: MirrorBackfillRequest,
+    acknowledge: (ack: string) => Promise<void>,
+  ): Promise<MirrorBackfillReply> {
+    const p = actor.platform;
+    const result = await this.mirror.backfill(target, (plan) => acknowledge(this.backfillAck(p, plan)));
+    if ('refused' in result) {
+      return { reply: BACKFILL_REFUSALS[p][result.refused] };
+    }
+    this.logger.log(`${PLATFORM_NAMES[p]} user ${actor.id} started a backfill of the Discord history`);
+    return { done: result.done.then((outcome) => this.backfillReport(p, outcome)) };
+  }
+
+  private backfillAck(platform: MirrorPlatform, plan: BackfillPlan) {
+    const where = locationName(plan);
+    if (platform === 'zulip') {
+      return `📜 Copying the messages of the Discord ${where} ${plan.threadId ?? plan.discordChannelId} that are not on Zulip yet into this topic, oldest first, up to the newest one now. Notices here mark where the history starts and where it ends, and new messages from Discord wait until it is done; a long history takes a while.`;
+    }
+    const stream = streamName(
+      'discord',
+      plan.zulipStreamId,
+      plan.stream === undefined ? undefined : { name: plan.stream },
+    );
+    const topic =
+      plan.topic === undefined
+        ? `a new topic of the Zulip stream ${stream}`
+        : `${this.describeMainTopic('discord', plan.topic)} of the Zulip stream ${stream}`;
+    return `📜 Copying the messages of this ${where} that are not on Zulip yet into ${topic}, oldest first, up to the newest one now. Notices there mark where the history starts and where it ends, and new messages here wait until it is done. A long history takes a while; the end notice on Zulip is the report.`;
+  }
+
+  private backfillReport(platform: MirrorPlatform, { copied, failed, noticed, stopped }: BackfillOutcome) {
+    if (!noticed) {
+      if (stopped) {
+        return `The backfill stopped before copying anything: ${describeBackfillStop(stopped)}.`;
+      }
+      return platform === 'zulip'
+        ? 'Nothing to backfill: every Discord message of this conversation is already on Zulip.'
+        : 'Nothing to backfill: every message here is already on Zulip.';
+    }
+    if (platform === 'zulip') {
+      return undefined;
+    }
+    const failures = failed > 0 ? `; ${failed} could not be copied, see the log` : '';
+    return stopped
+      ? `The backfill stopped after copying ${plural(copied, 'message')}${failures}: ${describeBackfillStop(stopped)}.`
+      : `Done: copied ${plural(copied, 'message')} to Zulip${failures}.`;
   }
 
   private generalChat() {

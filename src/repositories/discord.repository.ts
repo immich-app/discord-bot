@@ -2,8 +2,10 @@ import { Logger } from '@nestjs/common';
 import {
   ChannelType,
   DiscordAPIError,
+  FetchMessagesOptions,
   HTTPError,
   IntentsBitField,
+  Message,
   MessageCreateOptions,
   MessageFlags,
   Partials,
@@ -21,6 +23,7 @@ import {
   DiscordMirrorChannel,
   DiscordMirrorError,
   DiscordMirrorErrorKind,
+  DiscordMirrorForwardPage,
   DiscordMirrorNotice,
   DiscordMirrorPage,
   DiscordMirrorReaction,
@@ -676,23 +679,46 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     limit: number,
   ): Promise<DiscordMirrorPage> {
     try {
-      const channel = await bot.channels.fetch(channelId);
-      if (!channel?.isTextBased() || channel.isDMBased()) {
-        throw new DiscordMirrorError('unknown-channel');
-      }
-
-      const page = await channel.messages.fetch(beforeId === undefined ? { limit } : { before: beforeId, limit });
-      const messages = [...page.values()].sort(bySnowflake);
+      const messages = await this.fetchMirrorPage(
+        channelId,
+        beforeId === undefined ? { limit } : { before: beforeId, limit },
+      );
       return {
-        messages: messages
-          .filter((message) => isMirrorCandidate(message, (id) => this.isOwnMirrorWebhook(id)))
-          .map(toDiscordSourceMessage),
+        messages: messages.filter((message) => this.isCandidate(message)).map(toDiscordSourceMessage),
         oldestId: messages[0]?.id ?? null,
         full: messages.length === limit,
       };
     } catch (error) {
       throw toMirrorError(error);
     }
+  }
+
+  async fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordMirrorForwardPage> {
+    try {
+      const messages = await this.fetchMirrorPage(channelId, { after: afterId, limit });
+      const candidates = messages.filter((message) => this.isCandidate(message));
+      return {
+        messages: candidates.map(toDiscordSourceMessage),
+        reactedIds: candidates.filter(({ reactions }) => reactions.cache.size > 0).map(({ id }) => id),
+        newestId: messages.at(-1)?.id ?? null,
+        full: messages.length === limit,
+      };
+    } catch (error) {
+      throw toMirrorError(error);
+    }
+  }
+
+  /** Oldest first. */
+  private async fetchMirrorPage(channelId: string, options: FetchMessagesOptions) {
+    const channel = await bot.channels.fetch(channelId);
+    if (!channel?.isTextBased() || channel.isDMBased()) {
+      throw new DiscordMirrorError('unknown-channel');
+    }
+    return [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
+  }
+
+  private isCandidate(message: Message): message is Message<true> {
+    return isMirrorCandidate(message, (id) => this.isOwnMirrorWebhook(id));
   }
 
   private async findOrCreateMirrorWebhook(channelId: string): Promise<Webhook> {

@@ -900,6 +900,46 @@ describe(DiscordRepository.name, () => {
       });
     });
 
+    it('should read forwards after a message, oldest first, with the candidates that have reactions', async () => {
+      await resolveWebhook();
+      const reacted = { reactions: { cache: new Collection([['👍', {}]]) } };
+      const none = { reactions: { cache: new Collection() } };
+      channel.messages.fetch.mockResolvedValue(
+        new Collection([
+          ['1000000000000000003', makeMessage('1000000000000000003', { webhookId: '700000000000000001', ...reacted })],
+          ['1000000000000000001', makeMessage('1000000000000000001', reacted)],
+          ['1000000000000000002', makeMessage('1000000000000000002', none)],
+        ]),
+      );
+
+      const page = await sut.fetchMirrorMessagesAfter(channelId, '999999999999999999', 3);
+
+      expect(channel.messages.fetch).toHaveBeenCalledWith({ after: '999999999999999999', limit: 3 });
+      expect(page.messages.map(({ id }) => id)).toEqual(['1000000000000000001', '1000000000000000002']);
+      expect(page).toMatchObject({ reactedIds: ['1000000000000000001'], newestId: '1000000000000000003', full: true });
+    });
+
+    it('should read nothing past the newest message', async () => {
+      channel.messages.fetch.mockResolvedValue(new Collection());
+
+      await expect(sut.fetchMirrorMessagesAfter(channelId, '1000000000000000003', 100)).resolves.toEqual({
+        messages: [],
+        reactedIds: [],
+        newestId: null,
+        full: false,
+      });
+    });
+
+    it('should refuse a channel without messages when reading forwards, and map errors', async () => {
+      channel.messages.fetch.mockRejectedValueOnce(apiError(50_001, 403));
+      await expect(sut.fetchMirrorMessagesAfter(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });
+
+      bot.channels.fetch.mockResolvedValue({ isTextBased: () => false, isDMBased: () => false });
+      await expect(sut.fetchMirrorMessagesAfter(channelId, '1', 50)).rejects.toMatchObject({
+        kind: 'unknown-channel',
+      });
+    });
+
     it('should map errors', async () => {
       channel.messages.fetch.mockRejectedValue(apiError(50_001, 403));
       await expect(sut.fetchMirrorMessagesBefore(channelId, '1', 50)).rejects.toMatchObject({ kind: 'forbidden' });

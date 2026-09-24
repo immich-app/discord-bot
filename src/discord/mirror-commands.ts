@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   ApplicationCommandOptionType,
   ChannelType,
@@ -39,9 +39,19 @@ const mirrorTarget = ({ channel, channelId }: CommandInteraction) => {
 
 const IN_THREAD = 'Run this in the channel itself, not in a thread; for a forum, run it in any of its posts.';
 
+const PRIVATE_THREAD = 'Private threads are not mirrored, so there is nothing to backfill.';
+
+/** A thread or forum post is backfilled on its own; a text channel itself, its own messages without its threads. */
+const backfillTarget = ({ channel, channelId }: CommandInteraction) =>
+  channel?.isThread()
+    ? { discordChannelId: channel.parentId ?? channelId, threadId: channel.id }
+    : { discordChannelId: channelId, threadId: null };
+
 @Discord()
 @Injectable()
 export class DiscordMirrorCommands {
+  private logger = new Logger(DiscordMirrorCommands.name);
+
   constructor(private mirrorLinks: MirrorLinkService) {}
 
   @Slash({
@@ -77,6 +87,40 @@ export class DiscordMirrorCommands {
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
     const reply = await this.mirrorLinks.unlink({ discordChannelId, actor: actorOf(interaction) });
     await this.edit(interaction, toContent(reply));
+  }
+
+  /** The interaction token lasts 15 minutes, so the report here is a courtesy: the end notice on Zulip is the record. */
+  @Slash({
+    name: 'mirror-backfill',
+    description: 'Copy the messages here that are not on Zulip yet into the linked Zulip topic, oldest first',
+    ...ADMIN_ONLY,
+  })
+  async mirrorBackfill(interaction: CommandInteraction) {
+    if (!(await this.authorised(interaction))) {
+      return;
+    }
+    if (interaction.channel?.type === ChannelType.PrivateThread) {
+      await interaction.reply({ content: PRIVATE_THREAD, flags: [MessageFlags.Ephemeral] });
+      return;
+    }
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    let ack = '';
+    const result = await this.mirrorLinks.backfill(
+      { target: backfillTarget(interaction), actor: actorOf(interaction) },
+      async (content) => {
+        ack = content;
+        await this.edit(interaction, content);
+      },
+    );
+    if ('reply' in result) {
+      await this.edit(interaction, result.reply);
+      return;
+    }
+    void result.done
+      .then((report) => (report === undefined ? undefined : this.edit(interaction, `${ack}\n${report}`)))
+      .catch(() =>
+        this.logger.log('Could not report the end of a backfill on Discord: the interaction has likely expired'),
+      );
   }
 
   @Slash({ name: 'mirror-list', description: 'List the mirrored channels and linked accounts', ...ADMIN_ONLY })

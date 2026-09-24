@@ -11,6 +11,8 @@ import { NewRSSFeed, NewScheduledMessage, RSSFeed, ScheduledMessage, UpdateRSSFe
 import { ChatService, EmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import {
+  MirrorBackfillReply,
+  MirrorBackfillRequest,
   MirrorLinkReply,
   MirrorLinkRequest,
   MirrorLinkService,
@@ -100,6 +102,10 @@ const newMirrorLinkServiceMock = () => ({
   unlinkIdentity: vitest
     .fn<(owner: MirrorIdentityOwner, platform: MirrorPlatform) => Promise<string>>()
     .mockResolvedValue('Unlinked.'),
+  backfill:
+    vitest.fn<
+      (request: MirrorBackfillRequest, acknowledge: (ack: string) => Promise<void>) => Promise<MirrorBackfillReply>
+    >(),
 });
 
 const definedOnly = <T extends object>(values: T) =>
@@ -217,6 +223,7 @@ const HELP = [
   '- `rss-list`: list the RSS feeds this stream is subscribed to, with their topics',
   "- `mirror-link [topic=<main topic>]`: start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
   '- `mirror-unlink`: stop mirroring this stream with its Discord channel, and announce it on both sides',
+  '- `mirror-backfill`: copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list`: list the mirrored channels and streams, and the linked accounts',
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
@@ -1624,6 +1631,99 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** mirror-unlink', { streamId: 120, topic: 'general chat' });
 
       expect(replies()).toEqual([{ stream: 120, topic: 'general chat', content: unlinked.details[0] }]);
+    });
+
+    describe('mirror-backfill', () => {
+      const ACK = '📜 Copying the messages of the Discord thread 200000000000000001 into this topic…';
+
+      it('should acknowledge in the topic, in any stream, and leave the report to the notices', async () => {
+        let finish: (report: string | undefined) => void = () => {};
+        mirrorLinksMock.backfill.mockImplementation(async (_, acknowledge) => {
+          await acknowledge(ACK);
+          return { done: new Promise((resolve) => (finish = resolve)) };
+        });
+
+        await send('@**Immich** mirror-backfill', { streamId: 120, topic: 'Crash on upload' });
+        finish(undefined);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(mirrorLinksMock.backfill).toHaveBeenCalledExactlyOnceWith(
+          {
+            target: { zulipStreamId: 120, topic: 'Crash on upload' },
+            actor: { platform: 'zulip', id: '12', name: 'Alice' },
+          },
+          expect.any(Function),
+        );
+        expect(replies()).toEqual([{ stream: 120, topic: 'Crash on upload', content: ACK }]);
+      });
+
+      it('should post the report of a backfill that found nothing to copy', async () => {
+        mirrorLinksMock.backfill.mockImplementation(async (_, acknowledge) => {
+          await acknowledge(ACK);
+          return {
+            done: Promise.resolve(
+              'Nothing to backfill: every Discord message of this conversation is already on Zulip.',
+            ),
+          };
+        });
+
+        await send('@**Immich** mirror-backfill', { streamId: 120, topic: 'general chat' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(replies()).toEqual([
+          { stream: 120, topic: 'general chat', content: ACK },
+          {
+            stream: 120,
+            topic: 'general chat',
+            content: 'Nothing to backfill: every Discord message of this conversation is already on Zulip.',
+          },
+        ]);
+      });
+
+      it('should answer a refusal', async () => {
+        mirrorLinksMock.backfill.mockResolvedValue({
+          reply: 'This topic is not linked with a Discord channel or thread, so there is nothing to backfill from.',
+        });
+
+        await send('@**Immich** mirror-backfill', { streamId: 120, topic: 'lunch' });
+
+        expect(replies()).toEqual([
+          {
+            stream: 120,
+            topic: 'lunch',
+            content: 'This topic is not linked with a Discord channel or thread, so there is nothing to backfill from.',
+          },
+        ]);
+      });
+
+      it('should take it from administrators and owners only', async () => {
+        zulipMock.getUser.mockResolvedValue({ ...ADMIN, role: 400 });
+
+        await send('@**Immich** mirror-backfill', { streamId: 120 });
+
+        expect(mirrorLinksMock.backfill).not.toHaveBeenCalled();
+        expect(replies().map(({ content }) => content)).toEqual([NOT_AN_ADMINISTRATOR]);
+      });
+
+      it('should answer an argument with the usage', async () => {
+        await send('@**Immich** mirror-backfill all', { streamId: 120 });
+
+        expect(mirrorLinksMock.backfill).not.toHaveBeenCalled();
+        expect(replies().map(({ content }) => content)).toEqual(['Usage: `mirror-backfill`']);
+      });
+
+      it('should log an outcome it cannot post', async () => {
+        mirrorLinksMock.backfill.mockResolvedValue({ done: Promise.resolve('Nothing to backfill.') });
+        zulipMock.sendMessage.mockRejectedValue(new Error('Zulip is down'));
+
+        await send('@**Immich** mirror-backfill', { streamId: 120 });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          'Could not post the outcome of the Zulip command mirror-backfill',
+          expect.any(Error),
+        );
+      });
     });
 
     it("should unlink the sender's own account in a team stream", async () => {

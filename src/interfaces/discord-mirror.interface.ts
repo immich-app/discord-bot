@@ -82,6 +82,15 @@ export type DiscordMirrorThread = { id: string; createdTimestamp: number };
 /** `messages` holds the mirror candidates of the page, oldest first; `oldestId` is the oldest message of any kind. */
 export type DiscordMirrorPage = { messages: DiscordSourceMessage[]; oldestId: string | null; full: boolean };
 
+/** `messages` holds the mirror candidates of the page, oldest first; `newestId` is the newest message of any kind. */
+export type DiscordMirrorForwardPage = {
+  messages: DiscordSourceMessage[];
+  /** The candidates that have reactions. */
+  reactedIds: string[];
+  newestId: string | null;
+  full: boolean;
+};
+
 export type DiscordMirrorErrorKind =
   | 'unknown-webhook'
   | 'unknown-message'
@@ -149,4 +158,6 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   fetchMirrorMessage(channelId: string, messageId: string): Promise<DiscordSourceMessage | undefined>;
   /** `channelId` may be a thread. */
   fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
+  /** The oldest messages after `afterId`; `channelId` may be a thread. */
+  fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordMirrorForwardPage>;
 }
