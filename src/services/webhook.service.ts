@@ -137,7 +137,10 @@ const getEventNotification = ({
   author: toAuthor(user),
   title: `[${repositoryName}] ${title} ${action}: #${event.number} ${event.title}`,
   url: event.html_url,
-  body: (action === 'opened' || action === 'created') && event.body ? shorten(event.body, 500) : undefined,
+  body:
+    (action === 'opened' || action === 'created') && event.body && user.login !== 'renovate[bot]'
+      ? shorten(event.body, 500)
+      : undefined,
 });
 
 const getIncidentAccent = ({ status, impact }: { status: string; impact: string }): NotificationAccent => {

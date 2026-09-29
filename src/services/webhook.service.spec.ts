@@ -1394,6 +1394,24 @@ describe(WebhookService.name, () => {
       expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
     });
 
+    it('should post an opened PR from renovate without its body', async () => {
+      zulipMock.isInitialised.mockReturnValue(true);
+      await sut.onGithub(
+        githubEvent('pull_request', {
+          action: 'opened',
+          sender: { ...sender, login: 'renovate[bot]', type: 'Bot' },
+          repository: immichRepo,
+          pull_request: makePullRequest(),
+        }),
+        'github-slug',
+      );
+
+      const posts = sent();
+      expect(posts.discord).not.toEqual([]);
+      expect(posts.zulip).not.toEqual([]);
+      expect(JSON.stringify(posts)).not.toContain('This PR adds a thing.');
+    });
+
     it('should post an opened non-draft PR (Green) with its body', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest()), 'github-slug');
       expect(sent()).toMatchInlineSnapshot(`
