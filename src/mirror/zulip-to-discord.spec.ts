@@ -55,10 +55,35 @@ describe('toDiscordMirrorContent', () => {
       { mention: '@_**Alex|9**', expected: '@Alex' },
       { mention: '@**|9**', expected: '@someone' },
       { mention: '@**Zack**', expected: '@Zack' },
+      { mention: '@**Zack Pollard|9**', expected: '@Zack Pollard' },
       { mention: '@**a_b|9**', expected: '@a\\_b' },
       { mention: '@**x|y|9**', expected: '@x|y' },
     ])('should write $mention of anyone unverified, or without an ID, as text', ({ mention, expected }) => {
       expect(text(`hi ${mention}`)).toBe(`hi ${expected}`);
+    });
+
+    describe('without a user ID', () => {
+      const named = { ...ctx, discordUserByZulipName: new Map([['zack pollard', TEAM_MEMBER]]) };
+
+      it.each(['@**Zack Pollard**', '@_**Zack Pollard**', '@**zack POLLARD**', '@** Zack Pollard **'])(
+        'should turn %s of a verified team member into their Discord pill, without a ping',
+        (mention) => {
+          expect(toDiscordMirrorContent(`hi ${mention}!`, named)).toEqual({
+            text: `hi <@${TEAM_MEMBER}>!`,
+            uploads: [],
+            spoilerUploads: [],
+            pingUserIds: [],
+          });
+        },
+      );
+
+      it('should leave a name no verified team member has as text', () => {
+        expect(text('hi @**Alex Doe**', named)).toBe('hi @Alex Doe');
+      });
+
+      it('should go by the user ID when Zulip wrote one, even when the name is a team member’s', () => {
+        expect(text('hi @**Zack Pollard|9**', named)).toBe('hi @Zack Pollard');
+      });
     });
 
     it.each(['all', 'everyone', 'channel', 'stream', 'topic', 'ALL'])(
@@ -281,6 +306,61 @@ describe('toDiscordMirrorContent', () => {
       });
     });
 
+    describe('a verified team member', () => {
+      const theirs = {
+        ...ctx,
+        messages: new Map([
+          ...ctx.messages,
+          [
+            104,
+            {
+              jumpUrl: JUMP_ZULIP,
+              origin: 'zulip' as const,
+              discordAuthorId: null,
+              authorName: 'Zack',
+              zulipSenderId: 8,
+            },
+          ],
+          [
+            105,
+            {
+              jumpUrl: JUMP_ZULIP,
+              origin: 'zulip' as const,
+              discordAuthorId: null,
+              authorName: 'Zack',
+              zulipSenderId: 5,
+            },
+          ],
+        ]),
+      };
+
+      it('should name the author of a reply with their Discord pill, by the mirror row, without a ping', () => {
+        expect(toDiscordMirrorContent(`${quoteReply(104, 'x')}\nthanks`, theirs)).toEqual({
+          text: `-# ↩ replying to <@${TEAM_MEMBER}> · [jump](${JUMP_ZULIP})\nthanks`,
+          uploads: [],
+          spoilerUploads: [],
+          pingUserIds: [],
+        });
+      });
+
+      it('should not take a typed quote header naming them as the author of someone else’s message', () => {
+        expect(text(`${quoteReply(105, 'x').replace('Someone|5', 'Zack|8')}\nthanks`, theirs)).toBe(
+          `-# ↩ replying to Zack · [jump](${JUMP_ZULIP})\nthanks`,
+        );
+      });
+
+      it('should quote an unmirrored message under the Discord name it is given, as text, never a pill', () => {
+        const quoted = quoteReply(999, 'whatever was typed').replace('Someone|5', 'Zack|8');
+
+        expect(text(`${quoted}\nreply`, { ...ctx, quotedDiscordName: 'Zack *D*' })).toBe(
+          '-# ↩ Zack \\*D\\* said:\n> whatever was typed\nreply',
+        );
+        expect(text(`${quoted}\nreply`, { ...ctx, quotedDiscordName: '' })).toBe(
+          '-# ↩ someone said:\n> whatever was typed\nreply',
+        );
+      });
+    });
+
     it('should reply to a Zulip message by name, without a ping', () => {
       expect(toDiscordMirrorContent(`${quoteReply(102, 'x')}\nthanks`, ctx)).toEqual({
         text: `-# ↩ replying to Zack \\*Z\\* · [jump](${JUMP_ZULIP})\nthanks`,
@@ -467,6 +547,7 @@ describe('parseZulipRefs', () => {
       messageIds: [101, 102, 103, 104],
       channels: [{ stream: 9, topic: 'x' }, { stream: 'dev' }, { stream: 'dev', topic: 'y' }, { stream: 10 }],
       userIds: [5, 3, 8, 9],
+      userNames: [],
       uploads: ['/user_uploads/2/ab/xyz/a.png'],
       emojiNames: ['smile', 'catjam'],
     });
@@ -478,8 +559,16 @@ describe('parseZulipRefs', () => {
       messageIds: [],
       channels: [],
       userIds: [],
+      userNames: [],
       uploads: [],
       emojiNames: [],
+    });
+  });
+
+  it('should list the names of the mentions written without a user ID, but not wildcards', () => {
+    expect(parseZulipRefs('@**Zack Pollard** @_**Alex** @**all** @**Bo|4**', REALM)).toMatchObject({
+      userIds: [4],
+      userNames: ['zack pollard', 'alex'],
     });
   });
 });

@@ -71,6 +71,7 @@ import {
   toDiscordMirrorContent,
   ZulipChannelRef,
   ZulipMessageRef,
+  ZulipRefs,
 } from 'src/mirror/zulip-to-discord';
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
 import { MirrorConversation, MirrorIdentity, MirrorLink, MirrorMessage, NewMirrorMessage } from 'src/schema';
@@ -421,6 +422,7 @@ export class MirrorService implements OnModuleDestroy {
   private memberCheckedAt = new Map<string, number>();
   private identities = new Map<string, { identity: Identity; expiresAt: number }>();
   private senderNames = new Map<number, string>();
+  private zulipNames = new Map<number, { name?: string; expiresAt: number }>();
   /** Learnt from their messages, like the names; a bot is never linked with a Discord account. */
   private botSenders = new Set<number>();
   /** Read once per queue registration, so that a renamed stream is named anew. */
@@ -1840,6 +1842,69 @@ export class MirrorService implements OnModuleDestroy {
     return conversation?.discordThreadId ?? undefined;
   }
 
+  /** The Discord name of the verified team member a quote of an unmirrored message names, as `quotedDiscordName`. */
+  private async quotedDiscordName(
+    guildId: string,
+    refs: ZulipRefs,
+    messages: Map<number, ZulipMessageRef>,
+    deleted: Set<number>,
+  ) {
+    const quote = refs.quoteReply;
+    const discordId =
+      quote?.senderId === undefined ? undefined : this.membersOf(guildId).discordByZulip.get(quote.senderId);
+    if (!quote || discordId === undefined || messages.has(quote.messageId) || deleted.has(quote.messageId)) {
+      return {};
+    }
+    try {
+      return { quotedDiscordName: (await this.discordMirror.getTeamMember(guildId, discordId))?.displayName ?? '' };
+    } catch (error) {
+      this.fail(`Could not look up Discord user ${discordId} for a quote of Zulip user ${quote.senderId}`, error);
+      return { quotedDiscordName: '' };
+    }
+  }
+
+  /**
+   * A name two team members share is left out: Zulip writes such a mention with the user ID. The names are read at
+   * once, without retries, so a mention never holds the pair's queue for long.
+   */
+  private async discordUsersByZulipName(guildId: string) {
+    const byName = new Map<string, string>();
+    const shared = new Set<string>();
+    const members = [...this.membersOf(guildId).discordByZulip];
+    const names = await Promise.all(members.map(([zulipId]) => this.zulipUserName(zulipId)));
+    for (const [index, [, discordId]] of members.entries()) {
+      const key = names[index]?.trim().toLowerCase();
+      if (!key) {
+        continue;
+      }
+      if (byName.has(key)) {
+        shared.add(key);
+      }
+      byName.set(key, discordId);
+    }
+    for (const key of shared) {
+      byName.delete(key);
+    }
+    return byName;
+  }
+
+  /** A failed read is not tried again for a minute, keeping the last name known. */
+  private async zulipUserName(zulipId: number) {
+    const cached = this.zulipNames.get(zulipId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.name;
+    }
+    try {
+      const { fullName } = await this.zulip.getUser(zulipId);
+      this.zulipNames.set(zulipId, { name: fullName, expiresAt: Date.now() + IDENTITY_CACHE_MS });
+      return fullName;
+    } catch (error) {
+      this.fail(`Could not read the name of Zulip user ${zulipId}`, error);
+      this.zulipNames.set(zulipId, { name: cached?.name, expiresAt: Date.now() + MINUTE });
+      return cached?.name;
+    }
+  }
+
   private async verifyTeamMembers(guildId: string) {
     for (const [zulipId, discordId] of this.teamMembers) {
       try {
@@ -1981,6 +2046,7 @@ export class MirrorService implements OnModuleDestroy {
         origin: row.origin,
         discordAuthorId: row.discordAuthorId,
         authorName: quoted ?? 'someone',
+        zulipSenderId: row.zulipSenderId,
       });
     }
 
@@ -2007,6 +2073,8 @@ export class MirrorService implements OnModuleDestroy {
       deletedMessageIds: new Set([...deleted].filter((id) => !messages.has(id))),
       channels,
       discordUserByZulipId: this.membersOf(guildId).discordByZulip,
+      ...(refs.userNames.length > 0 ? { discordUserByZulipName: await this.discordUsersByZulipName(guildId) } : {}),
+      ...(await this.quotedDiscordName(guildId, refs, messages, deleted)),
       emoji: (name) => {
         const emote = custom?.get(name);
         return emote ? (emote.animated ? `<${emote.identifier}>` : `<:${emote.identifier}>`) : unicode?.[name];
@@ -2075,6 +2143,10 @@ export class MirrorService implements OnModuleDestroy {
         return;
       }
       this.senderNames.set(message.senderId, message.senderFullName);
+      this.zulipNames.set(message.senderId, {
+        name: message.senderFullName,
+        expiresAt: Date.now() + IDENTITY_CACHE_MS,
+      });
       if (isZulipBot(message)) {
         this.botSenders.add(message.senderId);
       }
