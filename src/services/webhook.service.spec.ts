@@ -76,6 +76,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  getPullRequestsByNumber: vitest.fn().mockResolvedValue([]),
   getMirrorConversation: vitest.fn(),
   getMirrorConversationByDiscord: vitest.fn(),
   getMirrorConversationByZulipTopic: vitest.fn(),
@@ -102,9 +103,15 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getMirrorIdentities: vitest.fn(),
   setMirrorIdentity: vitest.fn(),
   removeMirrorIdentity: vitest.fn(),
+  getZulipExpanderGroups: vitest.fn().mockResolvedValue([]),
   getZulipExpanders: vitest.fn(),
+  getZulipExpanderDefaults: vitest.fn().mockResolvedValue([]),
+  createZulipExpanderGroup: vitest.fn(),
+  updateZulipExpanderGroup: vitest.fn(),
+  removeZulipExpanderGroup: vitest.fn(),
   addZulipExpander: vitest.fn(),
   removeZulipExpander: vitest.fn(),
+  setZulipExpanderDefault: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -136,6 +143,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   isCollaborator: vitest.fn(),
   getPullRequests: vitest.fn(),
   getPullRequest: vitest.fn(),
+  getRepositoryName: vitest.fn(),
 });
 
 const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({

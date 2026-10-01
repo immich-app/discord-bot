@@ -92,4 +92,6 @@ export interface IGithubInterface {
     repo: string;
     number: number;
   }): Promise<PullRequest | undefined>;
+  /** `owner/name` as GitHub spells it, `undefined` when GitHub knows no such repository or the app cannot see it. */
+  getRepositoryName({ org, repo }: { org: string; repo: string }): Promise<string | undefined>;
 }

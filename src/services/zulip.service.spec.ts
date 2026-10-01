@@ -88,6 +88,7 @@ const setNow = (iso: string) => {
 
 const expanderRow = (streamId: number): ZulipExpander => ({
   streamId,
+  groupName: 'immich',
   createdBy: 'migration',
   createdAt: new Date(0),
 });
@@ -100,7 +101,12 @@ describe('ZulipService', () => {
   let sut: ZulipService;
   let holidaysMock: Mocked<IHolidaysInterface>;
   let zulipMock: Mocked<IZulipInterface>;
-  let expanderDatabase: Mocked<Pick<IDatabaseRepository, 'getZulipExpanders' | 'addZulipExpander'>>;
+  let expanderDatabase: Mocked<
+    Pick<
+      IDatabaseRepository,
+      'getZulipExpanderGroups' | 'getZulipExpanders' | 'getZulipExpanderDefaults' | 'addZulipExpander'
+    >
+  >;
   let expanders: ZulipExpanderService;
 
   const originalNow = Settings.now;
@@ -115,7 +121,17 @@ describe('ZulipService', () => {
     holidaysMock = newHolidaysMock();
     zulipMock = newZulipMock();
     expanderDatabase = {
+      getZulipExpanderGroups: vitest.fn().mockResolvedValue([
+        {
+          name: 'immich',
+          repositories: ['immich-app/immich'],
+          threshold: 1000,
+          createdBy: 'migration',
+          createdAt: new Date(0),
+        },
+      ]),
       getZulipExpanders: vitest.fn().mockResolvedValue(SEEDED_EXPANDERS),
+      getZulipExpanderDefaults: vitest.fn().mockResolvedValue([]),
       addZulipExpander: vitest.fn(),
     };
     expanders = new ZulipExpanderService(expanderDatabase as unknown as IDatabaseRepository);
@@ -663,7 +679,7 @@ describe('ZulipService', () => {
 
         expanderDatabase.addZulipExpander.mockResolvedValue(true);
         expanderDatabase.getZulipExpanders.mockResolvedValue([...SEEDED_EXPANDERS, expanderRow(997)]);
-        await expanders.enable(997, 'Alice on Zulip (user 12)');
+        await expanders.enable(997, 'immich', 'Alice on Zulip (user 12)');
         polls[0].reject(badQueue());
         await nextPoll();
 

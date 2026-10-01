@@ -316,4 +316,22 @@ export class GithubRepository implements IGithubInterface {
       this.logger.log(`Could not fetch pull request #${number}`);
     }
   }
+
+  async getRepositoryName({ org, repo }: { org: string; repo: string }) {
+    try {
+      const { repository } = await this.octokit.graphql<{ repository: { nameWithOwner: string } }>(
+        `
+      query getRepositoryName($org: String!, $repo: String!) {
+        repository(owner: $org, name: $repo) {
+          nameWithOwner
+        }
+      }
+      `,
+        { org, repo },
+      );
+      return repository.nameWithOwner;
+    } catch (error) {
+      handleGraphqlError(error);
+    }
+  }
 }

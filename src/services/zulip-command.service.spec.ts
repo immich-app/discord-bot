@@ -7,7 +7,18 @@ import { PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
 import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
-import { NewRSSFeed, NewScheduledMessage, RSSFeed, ScheduledMessage, UpdateRSSFeed, ZulipExpander } from 'src/schema';
+import {
+  NewRSSFeed,
+  NewScheduledMessage,
+  NewZulipExpanderGroup,
+  RSSFeed,
+  ScheduledMessage,
+  UpdateRSSFeed,
+  UpdateZulipExpanderGroup,
+  ZulipExpander,
+  ZulipExpanderDefault,
+  ZulipExpanderGroup,
+} from 'src/schema';
 import { ChatService, EmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import {
@@ -74,6 +85,7 @@ const newGithubServiceMock = () => ({
   getOpenPullRequest: vitest
     .fn<(number: number) => Promise<PullRequestBaseEvent | undefined>>()
     .mockResolvedValue(undefined),
+  getRepositoryName: vitest.fn<(fullName: string) => Promise<string | undefined>>().mockResolvedValue(undefined),
 });
 
 const newWebhookServiceMock = () => ({
@@ -115,27 +127,83 @@ const definedOnly = <T extends object>(values: T) =>
 const newFakeDatabase = () => {
   const scheduled: ScheduledMessage[] = [];
   const feeds: RSSFeed[] = [];
+  const groups: ZulipExpanderGroup[] = [];
   const expanders: ZulipExpander[] = [];
+  const defaults: ZulipExpanderDefault[] = [];
+  const dropOrphanDefaults = () => {
+    const kept = defaults.filter(({ streamId }) => expanders.some((row) => row.streamId === streamId));
+    defaults.splice(0, defaults.length, ...kept);
+  };
   const findFeed = (url: string, channelId: string, service: RSSFeed['service']) =>
     feeds.findIndex((feed) => feed.url === url && feed.channelId === channelId && feed.service === service);
   return {
     scheduled,
     feeds,
+    groups,
     expanders,
+    defaults,
+    getZulipExpanderGroups: () =>
+      Promise.resolve(
+        groups
+          .map((group) => ({ ...group, repositories: [...group.repositories] }))
+          .sort((x, y) => x.name.localeCompare(y.name)),
+      ),
     getZulipExpanders: () => Promise.resolve(expanders.map((row) => ({ ...row }))),
-    addZulipExpander: (streamId: number, createdBy: string) => {
-      if (expanders.some((row) => row.streamId === streamId)) {
+    getZulipExpanderDefaults: () => Promise.resolve(defaults.map((row) => ({ ...row }))),
+    createZulipExpanderGroup: ({ name, repositories, threshold, createdBy }: NewZulipExpanderGroup) => {
+      if (groups.some((group) => group.name === name)) {
         return Promise.resolve(false);
       }
-      expanders.push({ streamId, createdBy, createdAt: new Date() });
+      groups.push({
+        name,
+        repositories: [...repositories],
+        threshold: threshold ?? 0,
+        createdBy,
+        createdAt: new Date(),
+      });
       return Promise.resolve(true);
     },
-    removeZulipExpander: (streamId: number) => {
-      const index = expanders.findIndex((row) => row.streamId === streamId);
+    updateZulipExpanderGroup: (name: string, update: UpdateZulipExpanderGroup) => {
+      const group = groups.find((candidate) => candidate.name === name);
+      if (group) {
+        Object.assign(group, definedOnly(update));
+      }
+      return Promise.resolve(group !== undefined);
+    },
+    removeZulipExpanderGroup: (name: string) => {
+      const index = groups.findIndex((group) => group.name === name);
       if (index !== -1) {
-        expanders.splice(index, 1);
+        groups.splice(index, 1);
+        const kept = expanders.filter((row) => row.groupName !== name);
+        expanders.splice(0, expanders.length, ...kept);
+        dropOrphanDefaults();
       }
       return Promise.resolve(index !== -1);
+    },
+    addZulipExpander: (streamId: number, groupName: string, createdBy: string) => {
+      if (expanders.some((row) => row.streamId === streamId && row.groupName === groupName)) {
+        return Promise.resolve(false);
+      }
+      expanders.push({ streamId, groupName, createdBy, createdAt: new Date() });
+      return Promise.resolve(true);
+    },
+    removeZulipExpander: (streamId: number, groupName?: string) => {
+      const matches = (row: ZulipExpander) =>
+        row.streamId === streamId && (groupName === undefined || row.groupName === groupName);
+      const removed = expanders.filter((row) => matches(row)).map((row) => row.groupName);
+      const kept = expanders.filter((row) => !matches(row));
+      expanders.splice(0, expanders.length, ...kept);
+      dropOrphanDefaults();
+      return Promise.resolve(removed);
+    },
+    setZulipExpanderDefault: (streamId: number, repository: string, createdBy: string) => {
+      const row = defaults.find((candidate) => candidate.streamId === streamId);
+      if (row) {
+        Object.assign(row, { repository, createdBy });
+      } else {
+        defaults.push({ streamId, repository, createdBy, createdAt: new Date() });
+      }
+      return Promise.resolve();
     },
     getScheduledMessages: (service?: ScheduledMessage['service']) =>
       Promise.resolve(scheduled.filter((row) => service === undefined || row.service === service)),
@@ -243,12 +311,13 @@ const HELP = [
   '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on|off|list>` (administrators): turn GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) on or off in this stream, or `list` the streams it is on in; x.com links are mirrored on nitter.net in every stream',
+  '- `expanders <on <group>|off [group]|default <owner/repo>|list>` (any stream): turn GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the groups and the streams they are on in; x.com links are mirrored on nitter.net in every stream',
+  '- `expander-group <create|add|remove> <group> <owner/repo>… | threshold <group> <number> | delete <group>` (any stream): create a group of repositories for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere',
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
   'Arguments are positional or `key=value`; quote a value with spaces (`text="two words"`). Every reply is posted here, in the topic.',
-  'The commands marked (administrators) are taken in any stream, from organization administrators and owners only. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
+  'The commands marked (administrators) are taken in any stream, from organization administrators and owners only, and the ones marked (any stream) in any stream from anyone. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
 ].join('\n');
 
 describe('tokenize', () => {
@@ -1811,169 +1880,599 @@ describe('ZulipCommandService', () => {
 
   describe('expanders', () => {
     const ADMIN = { userId: 12, fullName: 'Alice', role: 200 };
-    const NOT_AN_ADMINISTRATOR =
-      'Only Zulip organization administrators and owners can change or list GitHub expansion.';
+    const ALICE = 'Alice on Zulip (user 12)';
     const NOT_SUBSCRIBED =
       '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
+    const NOT_SUBSCRIBED_MARK = ' (⚠ I am not subscribed, so nothing reaches me there)';
     const HEADER =
       'GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) is on in:';
-    const USAGE = 'Usage: `expanders <on|off|list>`';
-    const row = (streamId: number): ZulipExpander => ({ streamId, createdBy: 'migration', createdAt: new Date(0) });
+    const USAGE = 'Usage: `expanders <on <group>|off [group]|default <owner/repo>|list>`';
+    const NO_GROUP = (name: string) => `There is no expander group \`${name}\`; the groups are \`fhs\`, \`immich\`.`;
+    const GITHUB: Record<string, string> = {
+      'immich-app/immich': 'immich-app/immich',
+      'immich-app/static-pages': 'immich-app/static-pages',
+      'futo-org/fhs-core': 'futo-org/fhs-core',
+      'futo-org/fhs-web': 'futo-org/fhs-web',
+      'futo-org/grayjay': 'futo-org/Grayjay',
+    };
+    const group = (name: string, repositories: string[], threshold = 0): ZulipExpanderGroup => ({
+      name,
+      repositories,
+      threshold,
+      createdBy: 'migration',
+      createdAt: new Date(0),
+    });
+    const row = (streamId: number, groupName = 'immich'): ZulipExpander => ({
+      streamId,
+      groupName,
+      createdBy: 'migration',
+      createdAt: new Date(0),
+    });
     const contents = () => replies().map(({ content }) => content);
-    const stored = () => database.expanders.map(({ streamId }) => streamId).sort((a, b) => a - b);
+    const stored = () => database.expanders.map(({ streamId, groupName }) => `${streamId}:${groupName}`).sort();
+    const repositoriesOf = (name: string) => database.groups.find((candidate) => candidate.name === name)?.repositories;
+    const reset = async () => {
+      database.groups.splice(0);
+      database.expanders.splice(0);
+      database.defaults.splice(0);
+      await zulipExpanders.init();
+    };
 
     beforeEach(async () => {
       zulipMock.getUser.mockResolvedValue(ADMIN);
       zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 107 }, { streamId: 120 }]);
+      githubServiceMock.getRepositoryName.mockImplementation((fullName) =>
+        Promise.resolve(GITHUB[fullName.toLowerCase()]),
+      );
+      database.groups.push(
+        group('immich', ['immich-app/immich'], 1000),
+        group('fhs', ['futo-org/fhs-core', 'futo-org/fhs-web']),
+      );
       database.expanders.push(row(107));
       await zulipExpanders.init();
     });
 
-    it('should turn GitHub expansion on in this stream, in any stream, and store who did it', async () => {
-      await send('@**Immich** expanders on', { streamId: 120, topic: 'setup' });
+    describe('on', () => {
+      it('should turn a group on in this stream, in any stream, and store who did it', async () => {
+        await send('@**Immich** expanders on immich', { streamId: 120, topic: 'setup' });
 
-      expect(replies()).toEqual([
-        { stream: 120, topic: 'setup', content: 'Turned on GitHub expansion in this stream.' },
-      ]);
-      expect(database.expanders).toEqual([
-        row(107),
-        { streamId: 120, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
-      ]);
-      expect(zulipExpanders.isEnabled(120)).toBe(true);
+        expect(replies()).toEqual([
+          {
+            stream: 120,
+            topic: 'setup',
+            content:
+              'Turned on GitHub expansion of the group `immich` (`immich-app/immich`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+          },
+        ]);
+        expect(database.expanders).toEqual([
+          row(107),
+          { streamId: 120, groupName: 'immich', createdBy: ALICE, createdAt: expect.any(Date) },
+        ]);
+        expect(zulipExpanders.isEnabled(120)).toBe(true);
+      });
+
+      it('should add a second group, whatever its case, and keep the first group default', async () => {
+        await send('@**Immich** expanders on FHS');
+
+        expect(contents()).toEqual([
+          'Turned on GitHub expansion of the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+        ]);
+        expect(stored()).toEqual(['107:fhs', '107:immich']);
+        expect(zulipExpanders.getStreamGroups(107)).toEqual(['immich', 'fhs']);
+      });
+
+      it('should say when the group was already on, whatever the case of the command', async () => {
+        await send('@**Immich** EXPANDERS ON Immich');
+
+        expect(contents()).toEqual([
+          'Nothing changed: the group `immich` was already on in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+        ]);
+        expect(stored()).toEqual(['107:immich']);
+      });
+
+      it('should name the groups there are when the group is unknown, and change nothing', async () => {
+        await send('@**Immich** expanders on nope', { streamId: 120 });
+
+        expect(contents()).toEqual([NO_GROUP('nope')]);
+        expect(stored()).toEqual(['107:immich']);
+        expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
+      });
+
+      it('should say how to create a group when there is none', async () => {
+        await reset();
+
+        await send('@**Immich** expanders on immich', { streamId: 120 });
+
+        expect(contents()).toEqual([
+          'There is no expander group `immich`; `expander-group create <group> <owner/repo>…` creates one.',
+        ]);
+        expect(database.expanders).toEqual([]);
+      });
+
+      it('should warn when it turns a group on in a stream the bot is not subscribed to, and not when it turns it off', async () => {
+        await send('@**Immich** expanders on immich', { streamId: 130 });
+        await send('@**Immich** expanders on immich', { streamId: 130 });
+        await send('@**Immich** expanders off', { streamId: 130 });
+
+        expect(contents()).toEqual([
+          `Turned on GitHub expansion of the group \`immich\` (\`immich-app/immich\`) in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
+          `Nothing changed: the group \`immich\` was already on in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
+          'Turned off GitHub expansion in this stream (group `immich`).',
+        ]);
+        expect(zulipMock.getSubscriptions).toHaveBeenCalledTimes(2);
+      });
+
+      it('should change nothing when the subscriptions cannot be read, and say so', async () => {
+        zulipMock.getSubscriptions.mockRejectedValue(new Error('Zulip is down'));
+
+        await send('@**Immich** expanders on immich', { streamId: 120 });
+
+        expect(contents()).toEqual(['`expanders` failed: `Zulip is down`']);
+        expect(stored()).toEqual(['107:immich']);
+        expect(zulipExpanders.isEnabled(120)).toBe(false);
+      });
+
+      it('should keep the cache as it was when the table refuses the change', async () => {
+        vitest.spyOn(database, 'addZulipExpander').mockRejectedValue(new Error('connection terminated'));
+
+        await send('@**Immich** expanders on immich', { streamId: 120 });
+
+        expect(contents()).toEqual(['`expanders` failed: `connection terminated`']);
+        expect(zulipExpanders.list()).toEqual([107]);
+      });
     });
 
-    it('should say when it was already on or off, whatever the case of the command', async () => {
-      await send('@**Immich** EXPANDERS ON');
-      await send('@**Immich** expanders Off');
-      await send('@**Immich** expanders off');
+    describe('off', () => {
+      it('should turn every group off without a group, and then say it was already off', async () => {
+        await send('@**Immich** expanders on fhs');
+        await send('@**Immich** expanders Off');
+        await send('@**Immich** expanders off');
 
-      expect(contents()).toEqual([
-        'Nothing changed: GitHub expansion was already on in this stream.',
-        'Turned off GitHub expansion in this stream.',
-        'Nothing changed: GitHub expansion was already off in this stream.',
-      ]);
-      expect(stored()).toEqual([]);
-      expect(zulipExpanders.isEnabled(107)).toBe(false);
+        expect(contents().slice(1)).toEqual([
+          'Turned off GitHub expansion in this stream (groups `immich`, `fhs`).',
+          'Nothing changed: GitHub expansion was already off in this stream.',
+        ]);
+        expect(stored()).toEqual([]);
+        expect(zulipExpanders.isEnabled(107)).toBe(false);
+      });
+
+      it('should turn one group off and keep the others on', async () => {
+        await send('@**Immich** expanders on fhs');
+        await send('@**Immich** expanders off IMMICH');
+        await send('@**Immich** expanders off fhs');
+
+        expect(contents().slice(1)).toEqual([
+          'Turned off GitHub expansion of the group `immich` in this stream.',
+          'Turned off GitHub expansion in this stream (group `fhs`).',
+        ]);
+        expect(stored()).toEqual([]);
+      });
+
+      it('should say when the group was not on in this stream', async () => {
+        await send('@**Immich** expanders off fhs');
+
+        expect(contents()).toEqual(['Nothing changed: the group `fhs` was not on in this stream.']);
+        expect(stored()).toEqual(['107:immich']);
+      });
+
+      it('should change this stream only', async () => {
+        await send('@**Immich** expanders on immich', { streamId: 120 });
+        await send('@**Immich** expanders off', { streamId: 107 });
+
+        expect(zulipExpanders.list()).toEqual([120]);
+        expect(stored()).toEqual(['120:immich']);
+      });
+
+      it('should forget the default of a stream it turns off', async () => {
+        await send('@**Immich** expanders on fhs');
+        await send('@**Immich** expanders default fhs-core');
+        await send('@**Immich** expanders off');
+
+        expect(database.defaults).toEqual([]);
+        expect(zulipExpanders.getDefault(107)).toBeUndefined();
+      });
     });
 
-    it('should change this stream only', async () => {
-      await send('@**Immich** expanders on', { streamId: 120 });
-      await send('@**Immich** expanders off', { streamId: 107 });
+    describe('default', () => {
+      it('should refuse a stream GitHub expansion is off in', async () => {
+        await send('@**Immich** expanders default immich-app/immich', { streamId: 120 });
 
-      expect(zulipExpanders.list()).toEqual([120]);
-      expect(stored()).toEqual([120]);
+        expect(contents()).toEqual([
+          'GitHub expansion is off in this stream; turn it on with `expanders on <group>` first.',
+        ]);
+        expect(database.defaults).toEqual([]);
+      });
+
+      it("should refuse a repository in none of the stream's groups", async () => {
+        await send('@**Immich** expanders default futo-org/fhs-core');
+
+        expect(contents()).toEqual([
+          "`futo-org/fhs-core` is in none of this stream's groups; the default must be one of `immich-app/immich`.",
+        ]);
+        expect(database.defaults).toEqual([]);
+      });
+
+      it.each([
+        ['owner/repo in another case', 'FUTO-org/FHS-core', 'futo-org/fhs-core'],
+        ['the bare name', 'fhs-web', 'futo-org/fhs-web'],
+        ['the GitHub URL', 'https://github.com/futo-org/fhs-web', 'futo-org/fhs-web'],
+      ])('should take %s and store the name as the group spells it', async (_, given, expected) => {
+        await send('@**Immich** expanders on fhs');
+        await send(`@**Immich** expanders default ${given}`);
+
+        expect(contents()[1]).toBe(`A bare \`#1234\` now goes to \`${expected}\` in this stream.`);
+        expect(database.defaults).toEqual([
+          { streamId: 107, repository: expected, createdBy: ALICE, createdAt: expect.any(Date) },
+        ]);
+        expect(zulipExpanders.getScope(107)?.defaultRepository).toBe(expected);
+      });
+
+      it('should replace an earlier default', async () => {
+        await send('@**Immich** expanders on fhs');
+        await send('@**Immich** expanders default fhs-web');
+        await send('@**Immich** expanders default immich');
+
+        expect(database.defaults).toEqual([
+          { streamId: 107, repository: 'immich-app/immich', createdBy: ALICE, createdAt: expect.any(Date) },
+        ]);
+      });
     });
 
-    it('should warn when it turns expansion on in a stream the bot is not subscribed to, and not when it turns it off', async () => {
-      await send('@**Immich** expanders on', { streamId: 130 });
-      await send('@**Immich** expanders on', { streamId: 130 });
-      await send('@**Immich** expanders off', { streamId: 130 });
+    describe('list', () => {
+      const GROUPS = [
+        'Expander groups:',
+        '- `fhs`: `futo-org/fhs-core` (default), `futo-org/fhs-web`',
+        '- `immich`: `immich-app/immich` (default); a bare `#N` below 1000 expands only for a recent pull request',
+        '',
+      ];
 
-      expect(contents()).toEqual([
-        `Turned on GitHub expansion in this stream.\n${NOT_SUBSCRIBED}`,
-        `Nothing changed: GitHub expansion was already on in this stream.\n${NOT_SUBSCRIBED}`,
-        'Turned off GitHub expansion in this stream.',
-      ]);
-      expect(zulipMock.getSubscriptions).toHaveBeenCalledTimes(2);
-    });
+      it('should say there is no group yet', async () => {
+        await reset();
 
-    it('should change nothing when the subscriptions cannot be read, and say so', async () => {
-      zulipMock.getSubscriptions.mockRejectedValue(new Error('Zulip is down'));
+        await send('@**Immich** expanders list');
 
-      await send('@**Immich** expanders on', { streamId: 120 });
+        expect(contents()).toEqual([
+          'There is no expander group yet; `expander-group create <group> <owner/repo>…` creates one.',
+        ]);
+      });
 
-      expect(contents()).toEqual(['`expanders` failed: `Zulip is down`']);
-      expect(stored()).toEqual([107]);
-      expect(zulipExpanders.isEnabled(120)).toBe(false);
-    });
+      it('should list the groups and say when GitHub expansion is on in no stream', async () => {
+        await send('@**Immich** expanders off');
+        await send('@**Immich** expanders list');
 
-    it('should keep the cache as it was when the table refuses the change', async () => {
-      vitest.spyOn(database, 'addZulipExpander').mockRejectedValue(new Error('connection terminated'));
+        expect(contents()[1]).toBe([...GROUPS, 'GitHub expansion is on in no stream.'].join('\n'));
+        expect(zulipMock.getStream).not.toHaveBeenCalled();
+      });
 
-      await send('@**Immich** expanders on', { streamId: 120 });
+      it('should list every stream by name and ID with its groups and default, and mark one the bot is not subscribed to', async () => {
+        database.expanders.push(row(54), row(130, 'fhs'), row(140), row(107, 'fhs'));
+        database.defaults.push({
+          streamId: 107,
+          repository: 'futo-org/fhs-web',
+          createdBy: 'x',
+          createdAt: new Date(0),
+        });
+        await zulipExpanders.init();
+        const names: Record<number, string> = { 54: 'Immich', 107: 'immich-general', 130: '@**all** news' };
+        zulipMock.getStream.mockImplementation((streamId) =>
+          streamId === 140
+            ? Promise.reject(new Error('Invalid channel ID'))
+            : Promise.resolve({ streamId, name: names[streamId], inviteOnly: false }),
+        );
+        zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 54 }, { streamId: 107 }]);
 
-      expect(contents()).toEqual(['`expanders` failed: `connection terminated`']);
-      expect(zulipExpanders.list()).toEqual([107]);
-    });
+        await send('@**Immich** expanders list', { streamId: 120 });
 
-    it('should list every stream by name and ID, and mark one the bot is not subscribed to', async () => {
-      database.expanders.push(row(54), row(130), row(140));
-      await zulipExpanders.init();
-      const names: Record<number, string> = { 54: 'Immich', 107: 'immich-general', 130: '@**all** news' };
-      zulipMock.getStream.mockImplementation((streamId) =>
-        streamId === 140
-          ? Promise.reject(new Error('Invalid channel ID'))
-          : Promise.resolve({ streamId, name: names[streamId], inviteOnly: false }),
-      );
-      zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 54 }, { streamId: 107 }]);
+        expect(contents()).toEqual([
+          [
+            ...GROUPS,
+            HEADER,
+            '- **#Immich** (54): `immich`; `#1234` goes to `immich-app/immich`',
+            '- **#immich-general** (107): `immich`, `fhs`; `#1234` goes to `futo-org/fhs-web`',
+            '- **#@​**all** news** (130)' + NOT_SUBSCRIBED_MARK + ': `fhs`; `#1234` goes to `futo-org/fhs-core`',
+            `- stream 140${NOT_SUBSCRIBED_MARK}: \`immich\`; \`#1234\` goes to \`immich-app/immich\``,
+          ].join('\n'),
+        ]);
+      });
 
-      await send('@**Immich** expanders list', { streamId: 120 });
+      it('should list without the subscription marks when the subscriptions cannot be read', async () => {
+        zulipMock.getStream.mockResolvedValue({ streamId: 107, name: 'immich-general', inviteOnly: true });
+        zulipMock.getSubscriptions.mockRejectedValue(new Error('Zulip is down'));
 
-      expect(contents()).toEqual([
-        [
-          HEADER,
-          '- **#Immich** (54)',
-          '- **#immich-general** (107)',
-          '- **#@​**all** news** (130) (⚠ I am not subscribed, so nothing reaches me there)',
-          '- stream 140 (⚠ I am not subscribed, so nothing reaches me there)',
-        ].join('\n'),
-      ]);
-    });
+        await send('@**Immich** expanders list');
 
-    it('should list without the subscription marks when the subscriptions cannot be read', async () => {
-      zulipMock.getStream.mockResolvedValue({ streamId: 107, name: 'immich-general', inviteOnly: true });
-      zulipMock.getSubscriptions.mockRejectedValue(new Error('Zulip is down'));
-
-      await send('@**Immich** expanders list');
-
-      expect(contents()).toEqual([`${HEADER}\n- **#immich-general** (107)`]);
-    });
-
-    it('should say when GitHub expansion is on in no stream', async () => {
-      await send('@**Immich** expanders off');
-      await send('@**Immich** expanders list');
-
-      expect(contents()[1]).toBe('GitHub expansion is on in no stream.');
-      expect(zulipMock.getStream).not.toHaveBeenCalled();
+        expect(contents()).toEqual([
+          [...GROUPS, HEADER, '- **#immich-general** (107): `immich`; `#1234` goes to `immich-app/immich`'].join('\n'),
+        ]);
+      });
     });
 
     it.each([
-      ['an owner', 100, true],
-      ['an administrator', 200, true],
-      ['a moderator', 300, false],
-      ['a member', 400, false],
-      ['a guest', 600, false],
-    ])('should take the expanders command from %s: %s', async (_, role, allowed) => {
+      ['an owner', 100],
+      ['an administrator', 200],
+      ['a moderator', 300],
+      ['a member', 400],
+      ['a guest', 600],
+    ])('should take the expanders command from %s: %s, in any stream', async (_, role) => {
       zulipMock.getUser.mockResolvedValue({ ...ADMIN, role });
 
-      await send('@**Immich** expanders on', { streamId: 120 });
+      await send('@**Immich** expanders on immich', { streamId: 120 });
       await send('@**Immich** expanders off', { streamId: 107 });
       await send('@**Immich** expanders list', { streamId: 54 });
 
-      expect(zulipMock.getUser).toHaveBeenCalledTimes(3);
-      expect(zulipMock.getUser).toHaveBeenCalledWith(12);
-      if (allowed) {
-        expect(stored()).toEqual([120]);
-        expect(contents()).toHaveLength(3);
-      } else {
-        expect(stored()).toEqual([107]);
-        expect(contents()).toEqual(Array(3).fill(NOT_AN_ADMINISTRATOR));
-      }
+      expect(zulipMock.getUser).not.toHaveBeenCalled();
+      expect(stored()).toEqual(['120:immich']);
+      expect(contents()).toHaveLength(3);
     });
 
     it.each([
       '@**Immich** expanders',
       '@**Immich** expanders toggle',
-      '@**Immich** expanders on github',
-      '@**Immich** expanders off twitter',
+      '@**Immich** expanders on',
+      '@**Immich** expanders default',
       '@**Immich** expanders list all',
-      '@**Immich** expanders on expander=github',
+      '@**Immich** expanders on immich fhs',
+      '@**Immich** expanders off immich fhs',
     ])('should answer %j with the usage and change nothing', async (content) => {
       await send(content, { streamId: 120 });
 
       expect(contents()).toEqual([USAGE]);
-      expect(stored()).toEqual([107]);
+      expect(stored()).toEqual(['107:immich']);
       expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
+    });
+
+    describe('expander-group', () => {
+      const GROUP_USAGE =
+        'Usage: `expander-group <create|add|remove> <group> <owner/repo>… | threshold <group> <number> | delete <group>`';
+
+      describe('create', () => {
+        it('should create a group with the names GitHub spells, from names and URLs, without duplicates', async () => {
+          await send(
+            '@**Immich** expander-group create Apps futo-org/grayjay https://github.com/immich-app/static-pages/ FUTO-ORG/GRAYJAY',
+          );
+
+          expect(contents()).toEqual([
+            'Created the expander group `apps` with `futo-org/Grayjay`, `immich-app/static-pages`; `futo-org/Grayjay` is the default for a bare `#1234`. Turn it on in a stream with `expanders on apps`.',
+          ]);
+          expect(database.groups.find(({ name }) => name === 'apps')).toEqual({
+            name: 'apps',
+            repositories: ['futo-org/Grayjay', 'immich-app/static-pages'],
+            threshold: 0,
+            createdBy: ALICE,
+            createdAt: expect.any(Date),
+          });
+          expect(zulipExpanders.getGroup('apps')).toEqual({
+            name: 'apps',
+            repositories: ['futo-org/Grayjay', 'immich-app/static-pages'],
+            threshold: 0,
+          });
+        });
+
+        it.each(['-bad', 'a.b', 'a'.repeat(33), 'ünïcode'])('should refuse %j as a name', async (name) => {
+          await send(`@**Immich** expander-group create ${name} immich-app/immich`);
+
+          expect(contents()).toEqual([
+            `\`${name}\` cannot name a group: use up to 32 lowercase letters, digits, \`-\` and \`_\`, starting with a letter or digit.`,
+          ]);
+          expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+          expect(database.groups).toHaveLength(2);
+        });
+
+        it('should refuse what is not owner/repo, before asking GitHub', async () => {
+          await send('@**Immich** expander-group create apps immich');
+          await send('@**Immich** expander-group create apps immich futo-org/ immich-app/immich');
+
+          expect(contents()).toEqual(['`immich` is not `owner/repo`.', '`immich`, `futo-org` are not `owner/repo`.']);
+          expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+          expect(database.groups).toHaveLength(2);
+        });
+
+        it('should refuse repositories GitHub does not know', async () => {
+          await send('@**Immich** expander-group create apps immich-app/nope futo-org/fhs-core immich-app/gone');
+
+          expect(contents()).toEqual([
+            'GitHub has no repository `immich-app/nope`, `immich-app/gone`, or I cannot see it.',
+          ]);
+          expect(database.groups).toHaveLength(2);
+        });
+
+        it('should say when GitHub cannot be asked', async () => {
+          githubServiceMock.getRepositoryName.mockRejectedValue(new Error('Bad credentials'));
+
+          await send('@**Immich** expander-group create apps immich-app/immich');
+
+          expect(contents()).toEqual(['`expander-group` failed: `Bad credentials`']);
+          expect(database.groups).toHaveLength(2);
+        });
+
+        it('should refuse a name that is taken, whatever its case', async () => {
+          await send('@**Immich** expander-group create FHS immich-app/immich');
+
+          expect(contents()).toEqual([
+            'There is already an expander group `fhs`; `expander-group add fhs <owner/repo>…` adds repositories to it.',
+          ]);
+          expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web']);
+        });
+      });
+
+      describe('add', () => {
+        it('should add the repositories the group lacks, as GitHub spells them', async () => {
+          await send('@**Immich** expander-group add fhs futo-org/grayjay futo-org/fhs-core');
+
+          expect(contents()).toEqual(['Added `futo-org/Grayjay` to the expander group `fhs`.']);
+          expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web', 'futo-org/Grayjay']);
+          expect(zulipExpanders.getGroup('fhs')?.repositories).toEqual([
+            'futo-org/fhs-core',
+            'futo-org/fhs-web',
+            'futo-org/Grayjay',
+          ]);
+        });
+
+        it('should say when the group has them all, without a write', async () => {
+          const update = vitest.spyOn(database, 'updateZulipExpanderGroup');
+
+          await send('@**Immich** expander-group add fhs FUTO-org/fhs-core');
+
+          expect(contents()).toEqual(['Nothing changed: the expander group `fhs` already has `futo-org/fhs-core`.']);
+          expect(update).not.toHaveBeenCalled();
+        });
+
+        it('should refuse an unknown group before asking GitHub', async () => {
+          await send('@**Immich** expander-group add nope immich-app/immich');
+
+          expect(contents()).toEqual([NO_GROUP('nope')]);
+          expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+        });
+
+        it('should refuse a repository GitHub does not know', async () => {
+          await send('@**Immich** expander-group add fhs futo-org/nope');
+
+          expect(contents()).toEqual(['GitHub has no repository `futo-org/nope`, or I cannot see it.']);
+          expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web']);
+        });
+      });
+
+      describe('remove', () => {
+        it('should remove a repository given in any case or as a URL, without asking GitHub', async () => {
+          await send('@**Immich** expander-group remove fhs https://github.com/futo-org/FHS-web');
+
+          expect(contents()).toEqual(['Removed `futo-org/fhs-web` from the expander group `fhs`.']);
+          expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core']);
+          expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+        });
+
+        it('should say when the group has none of them', async () => {
+          await send('@**Immich** expander-group remove fhs immich-app/immich');
+
+          expect(contents()).toEqual(['Nothing changed: the expander group `fhs` has none of `immich-app/immich`.']);
+          expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web']);
+        });
+
+        it('should refuse to leave a group with no repository', async () => {
+          await send('@**Immich** expander-group remove immich immich-app/immich');
+
+          expect(contents()).toEqual([
+            'That would leave the expander group `immich` with no repository; `expander-group delete immich` deletes it.',
+          ]);
+          expect(repositoriesOf('immich')).toEqual(['immich-app/immich']);
+          expect(zulipExpanders.getGroup('immich')?.repositories).toEqual(['immich-app/immich']);
+        });
+
+        it('should refuse an unknown group', async () => {
+          await send('@**Immich** expander-group remove nope immich-app/immich');
+
+          expect(contents()).toEqual([NO_GROUP('nope')]);
+        });
+      });
+
+      describe('threshold', () => {
+        it('should set the threshold', async () => {
+          await send('@**Immich** expander-group threshold FHS 500');
+
+          expect(contents()).toEqual([
+            'In the expander group `fhs`, a bare `#N` below 500 now expands only for a pull request updated in the last two weeks.',
+          ]);
+          expect(database.groups.find(({ name }) => name === 'fhs')?.threshold).toBe(500);
+          expect(zulipExpanders.getGroup('fhs')?.threshold).toBe(500);
+        });
+
+        it('should say every bare number expands at 0', async () => {
+          await send('@**Immich** expander-group threshold immich 0');
+
+          expect(contents()).toEqual(['In the expander group `immich`, every bare `#N` now expands.']);
+          expect(zulipExpanders.getGroup('immich')?.threshold).toBe(0);
+        });
+
+        it('should refuse an unknown group', async () => {
+          await send('@**Immich** expander-group threshold nope 5');
+
+          expect(contents()).toEqual([NO_GROUP('nope')]);
+        });
+
+        it.each(['-1', '1.5', 'abc', '1e3', '""', '5 6', '2147483648', '99999999999999999999'])(
+          'should answer the threshold %s with the usage',
+          async (value) => {
+            await send(`@**Immich** expander-group threshold fhs ${value}`);
+
+            expect(contents()).toEqual([GROUP_USAGE]);
+            expect(zulipExpanders.getGroup('fhs')?.threshold).toBe(0);
+          },
+        );
+      });
+
+      describe('delete', () => {
+        it('should delete a group, turn it off in every stream and forget the defaults that go with it', async () => {
+          database.expanders.push(row(107, 'fhs'), row(120, 'fhs'));
+          database.defaults.push({
+            streamId: 120,
+            repository: 'futo-org/fhs-core',
+            createdBy: 'x',
+            createdAt: new Date(0),
+          });
+          await zulipExpanders.init();
+
+          await send('@**Immich** expander-group delete FHS');
+
+          expect(contents()).toEqual(['Deleted the expander group `fhs` and turned it off in 2 streams.']);
+          expect(database.groups.map(({ name }) => name)).toEqual(['immich']);
+          expect(stored()).toEqual(['107:immich']);
+          expect(database.defaults).toEqual([]);
+          expect(zulipExpanders.getGroup('fhs')).toBeUndefined();
+          expect(zulipExpanders.isEnabled(120)).toBe(false);
+          expect(zulipExpanders.getStreamGroups(107)).toEqual(['immich']);
+        });
+
+        it('should count one stream', async () => {
+          await send('@**Immich** expander-group delete immich');
+
+          expect(contents()).toEqual(['Deleted the expander group `immich` and turned it off in 1 stream.']);
+          expect(zulipExpanders.list()).toEqual([]);
+        });
+
+        it('should delete a group that is on nowhere', async () => {
+          await send('@**Immich** expander-group delete fhs');
+
+          expect(contents()).toEqual(['Deleted the expander group `fhs`.']);
+        });
+
+        it('should refuse an unknown group', async () => {
+          await send('@**Immich** expander-group delete nope');
+
+          expect(contents()).toEqual([NO_GROUP('nope')]);
+        });
+      });
+
+      it.each([
+        '@**Immich** expander-group',
+        '@**Immich** expander-group create',
+        '@**Immich** expander-group create apps',
+        '@**Immich** expander-group add fhs',
+        '@**Immich** expander-group remove fhs',
+        '@**Immich** expander-group threshold fhs',
+        '@**Immich** expander-group delete fhs extra',
+        '@**Immich** expander-group rename fhs apps',
+      ])('should answer %j with the usage and change nothing', async (content) => {
+        await send(content);
+
+        expect(contents()).toEqual([GROUP_USAGE]);
+        expect(database.groups.map(({ name }) => name).sort()).toEqual(['fhs', 'immich']);
+        expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['a moderator', 300],
+        ['a member', 400],
+        ['a guest', 600],
+      ])('should take it from %s, in any stream', async (_, role) => {
+        zulipMock.getUser.mockResolvedValue({ ...ADMIN, role });
+
+        await send('@**Immich** expander-group create apps immich-app/immich', { streamId: 54 });
+        await send('@**Immich** expander-group delete fhs', { streamId: 120 });
+
+        expect(zulipMock.getUser).not.toHaveBeenCalled();
+        expect(contents()).toHaveLength(2);
+        expect(database.groups.map(({ name }) => name).sort()).toEqual(['apps', 'immich']);
+      });
     });
   });
 });

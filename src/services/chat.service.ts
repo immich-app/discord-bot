@@ -17,8 +17,9 @@ import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfac
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { PullRequest } from 'src/schema';
 import { NotificationService } from 'src/services/notification.service';
-import { ZulipExpanderService } from 'src/services/zulip-expander.service';
+import { ExpanderScope, sameRepository, ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
@@ -241,11 +242,12 @@ ${messageParts.join('\n')}`,
     }
 
     const parts: string[] = [];
-    if (this.zulipExpanders.isEnabled(streamId)) {
+    const scope = this.zulipExpanders.getScope(streamId);
+    if (scope) {
       // Snippets are not neutralised: Zulip renders no mention inside a code fence,
       // and a zero-width space would corrupt the code.
       const snippets = await this.handleGithubFileReferences(content, true);
-      const links = await this.handleGithubThreadReferences({ content }, true);
+      const links = await this.handleGithubThreadReferences({ content, scope }, true);
       parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
     }
     parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
@@ -488,10 +490,12 @@ ${messageParts.join('\n')}`,
       content,
       channelParentId,
       teamId,
+      scope,
     }: {
       content: string;
       channelParentId?: string | null;
       teamId?: string;
+      scope?: ExpanderScope;
     },
     isPrivileged: boolean,
   ) {
@@ -509,6 +513,19 @@ ${messageParts.join('\n')}`,
       const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups;
       const id = Number(num ?? numPage);
       if (Number.isNaN(id) || id > MAX_GITHUB_NUMBER) {
+        continue;
+      }
+
+      if (scope) {
+        const link = await this.resolveScopedReference(scope, {
+          owner: org || orgPage,
+          name: repo || repoPage,
+          id,
+          category: category as LinkType | undefined,
+        });
+        if (link) {
+          links.push(link);
+        }
         continue;
       }
 
@@ -566,6 +583,48 @@ ${messageParts.join('\n')}`,
     );
 
     return results;
+  }
+
+  /**
+   * `owner/name#123` and links name their repository; `name#123` is looked up among the stream's repositories, and a
+   * bare `#123` goes to the one of them with a pull request of that number updated in the last two weeks, or else to
+   * the stream's default repository, below whose threshold it is dropped.
+   */
+  private async resolveScopedReference(
+    scope: ExpanderScope,
+    { owner, name, id, category }: { owner?: string; name?: string; id: number; category?: LinkType },
+  ): Promise<GithubLink | undefined> {
+    const pullRequests = await this.database.getPullRequestsByNumber(id);
+    const fullName = (pullRequest: PullRequest) => `${pullRequest.organization}/${pullRequest.repository}`;
+
+    let repository: string;
+    if (owner && name) {
+      repository = `${owner}/${name}`;
+    } else if (name) {
+      repository =
+        scope.repositories.find((candidate) => sameRepository(candidate.split('/')[1], name)) ??
+        `${scope.defaultRepository.split('/')[0]}/${name}`;
+    } else {
+      const twoWeeksAgo = DateTime.now().minus({ week: 2 }).toJSDate();
+      const recent = pullRequests
+        .filter(
+          (pullRequest) =>
+            pullRequest.updatedAt >= twoWeeksAgo &&
+            scope.repositories.some((candidate) => sameRepository(candidate, fullName(pullRequest))),
+        )
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+      if (recent) {
+        repository = fullName(recent);
+      } else if (id < scope.threshold(scope.defaultRepository)) {
+        return;
+      } else {
+        repository = scope.defaultRepository;
+      }
+    }
+
+    const [org, repo] = repository.split('/');
+    const isPullRequest = pullRequests.some((pullRequest) => sameRepository(fullName(pullRequest), repository));
+    return { org, repo, id, type: category ?? (isPullRequest ? 'pull' : undefined) };
   }
 
   async handleGithubFileReferences(content: string, isPrivileged: boolean) {
