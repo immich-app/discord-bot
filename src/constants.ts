@@ -229,6 +229,8 @@ export const Constants = {
     ...urls,
   },
   Icons: icons,
+  /** The one GitLab instance expanders and groups know; a project is named `<host>/<namespace>/<project>`. */
+  Gitlab: { Host: 'gitlab.futo.org' },
   Discord: {
     Roles: discordRoles,
     Channels: discordChannels,

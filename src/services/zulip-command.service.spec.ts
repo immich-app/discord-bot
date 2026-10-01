@@ -4,6 +4,7 @@ import { neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository, MirrorIdentityOwner } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { PullRequestBaseEvent } from 'src/interfaces/github.interface';
+import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
 import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
@@ -86,6 +87,12 @@ const newGithubServiceMock = () => ({
     .fn<(number: number) => Promise<PullRequestBaseEvent | undefined>>()
     .mockResolvedValue(undefined),
   getRepositoryName: vitest.fn<(fullName: string) => Promise<string | undefined>>().mockResolvedValue(undefined),
+});
+
+const newGitlabMock = () => ({
+  getProjectPath: vitest.fn<(path: string) => Promise<string | undefined>>().mockResolvedValue(undefined),
+  getItem: vitest.fn(),
+  getFileContent: vitest.fn(),
 });
 
 const newWebhookServiceMock = () => ({
@@ -311,8 +318,8 @@ const HELP = [
   '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on <group>|off [group]|default <owner/repo>|list>` (any stream): turn GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the groups and the streams they are on in; x.com links are mirrored on nitter.net in every stream',
-  '- `expander-group <create|add|remove> <group> <owner/repo>… | threshold <group> <number> | delete <group>` (any stream): create a group of repositories for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere',
+  '- `expanders <on <group>|off [group]|default <repository>|list>` (any stream): turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the groups and the streams they are on in; x.com links are mirrored on nitter.net in every stream',
+  '- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group>` (any stream): create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or their URLs) for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere',
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
@@ -448,6 +455,7 @@ describe('ZulipCommandService', () => {
   let zulipServiceMock: ReturnType<typeof newZulipServiceMock>;
   let chatServiceMock: ReturnType<typeof newChatServiceMock>;
   let githubServiceMock: ReturnType<typeof newGithubServiceMock>;
+  let gitlabMock: ReturnType<typeof newGitlabMock>;
   let webhookServiceMock: ReturnType<typeof newWebhookServiceMock>;
   let database: ReturnType<typeof newFakeDatabase>;
   let discordMock: Mocked<Pick<IDiscordInterface, 'sendMessage'>>;
@@ -466,6 +474,7 @@ describe('ZulipCommandService', () => {
     zulipServiceMock = newZulipServiceMock();
     chatServiceMock = newChatServiceMock();
     githubServiceMock = newGithubServiceMock();
+    gitlabMock = newGitlabMock();
     webhookServiceMock = newWebhookServiceMock();
     database = newFakeDatabase();
     discordMock = { sendMessage: vitest.fn() };
@@ -477,6 +486,7 @@ describe('ZulipCommandService', () => {
     zulipExpanders = new ZulipExpanderService(db);
     sut = new ZulipCommandService(
       zulipMock,
+      gitlabMock as unknown as IGitlabInterface,
       zulipServiceMock as unknown as ZulipService,
       chatServiceMock as unknown as ChatService,
       githubServiceMock as unknown as GithubService,
@@ -1885,8 +1895,8 @@ describe('ZulipCommandService', () => {
       '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
     const NOT_SUBSCRIBED_MARK = ' (⚠ I am not subscribed, so nothing reaches me there)';
     const HEADER =
-      'GitHub expansion (issue, pull request and discussion links and `#1234` to their titles, file permalinks to code) is on in:';
-    const USAGE = 'Usage: `expanders <on <group>|off [group]|default <owner/repo>|list>`';
+      'GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) is on in:';
+    const USAGE = 'Usage: `expanders <on <group>|off [group]|default <repository>|list>`';
     const NO_GROUP = (name: string) => `There is no expander group \`${name}\`; the groups are \`fhs\`, \`immich\`.`;
     const GITHUB: Record<string, string> = {
       'immich-app/immich': 'immich-app/immich',
@@ -1894,6 +1904,10 @@ describe('ZulipCommandService', () => {
       'futo-org/fhs-core': 'futo-org/fhs-core',
       'futo-org/fhs-web': 'futo-org/fhs-web',
       'futo-org/grayjay': 'futo-org/Grayjay',
+    };
+    const GITLAB: Record<string, string> = {
+      'videostreaming/grayjay': 'videostreaming/Grayjay',
+      'videostreaming/plugins/kick': 'videostreaming/plugins/kick',
     };
     const group = (name: string, repositories: string[], threshold = 0): ZulipExpanderGroup => ({
       name,
@@ -1924,6 +1938,7 @@ describe('ZulipCommandService', () => {
       githubServiceMock.getRepositoryName.mockImplementation((fullName) =>
         Promise.resolve(GITHUB[fullName.toLowerCase()]),
       );
+      gitlabMock.getProjectPath.mockImplementation((path) => Promise.resolve(GITLAB[path.toLowerCase()]));
       database.groups.push(
         group('immich', ['immich-app/immich'], 1000),
         group('fhs', ['futo-org/fhs-core', 'futo-org/fhs-web']),
@@ -1984,7 +1999,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders on immich', { streamId: 120 });
 
         expect(contents()).toEqual([
-          'There is no expander group `immich`; `expander-group create <group> <owner/repo>…` creates one.',
+          'There is no expander group `immich`; `expander-group create <group> <repository>…` creates one.',
         ]);
         expect(database.expanders).toEqual([]);
       });
@@ -2107,6 +2122,30 @@ describe('ZulipCommandService', () => {
         expect(zulipExpanders.getScope(107)?.defaultRepository).toBe(expected);
       });
 
+      it.each([
+        ['the full name', 'gitlab.futo.org/videostreaming/grayjay'],
+        ['the URL', 'https://gitlab.futo.org/videostreaming/Grayjay'],
+        ['the path without the host', 'videostreaming/grayjay'],
+        ['the project name alone', 'Grayjay'],
+      ])('should take a GitLab project by %s', async (_, given) => {
+        database.groups.push(group('apps', ['immich-app/static-pages', 'gitlab.futo.org/videostreaming/Grayjay']));
+        await zulipExpanders.init();
+        await send('@**Immich** expanders on apps');
+        await send(`@**Immich** expanders default ${given}`);
+
+        expect(contents()[1]).toBe(
+          'A bare `#1234` now goes to `gitlab.futo.org/videostreaming/Grayjay` in this stream.',
+        );
+        expect(database.defaults).toEqual([
+          {
+            streamId: 107,
+            repository: 'gitlab.futo.org/videostreaming/Grayjay',
+            createdBy: ALICE,
+            createdAt: expect.any(Date),
+          },
+        ]);
+      });
+
       it('should replace an earlier default', async () => {
         await send('@**Immich** expanders on fhs');
         await send('@**Immich** expanders default fhs-web');
@@ -2132,7 +2171,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders list');
 
         expect(contents()).toEqual([
-          'There is no expander group yet; `expander-group create <group> <owner/repo>…` creates one.',
+          'There is no expander group yet; `expander-group create <group> <repository>…` creates one.',
         ]);
       });
 
@@ -2222,8 +2261,9 @@ describe('ZulipCommandService', () => {
     });
 
     describe('expander-group', () => {
+      const REPOSITORY_FORMS = '`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`';
       const GROUP_USAGE =
-        'Usage: `expander-group <create|add|remove> <group> <owner/repo>… | threshold <group> <number> | delete <group>`';
+        'Usage: `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group>`';
 
       describe('create', () => {
         it('should create a group with the names GitHub spells, from names and URLs, without duplicates', async () => {
@@ -2258,11 +2298,61 @@ describe('ZulipCommandService', () => {
           expect(database.groups).toHaveLength(2);
         });
 
+        it.each([
+          ['its name with the host', 'gitlab.futo.org/videostreaming/grayjay'],
+          ['its URL', 'https://gitlab.futo.org/videostreaming/grayjay'],
+          ['the URL of a page inside it', 'https://gitlab.futo.org/videostreaming/grayjay/-/issues/3'],
+        ])('should create a group with a GitLab project given by %s, as GitLab spells it', async (_, given) => {
+          await send(`@**Immich** expander-group create apps ${given}`);
+
+          expect(gitlabMock.getProjectPath).toHaveBeenCalledExactlyOnceWith('videostreaming/grayjay');
+          expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+          expect(contents()).toEqual([
+            'Created the expander group `apps` with `gitlab.futo.org/videostreaming/Grayjay`; `gitlab.futo.org/videostreaming/Grayjay` is the default for a bare `#1234`. Turn it on in a stream with `expanders on apps`.',
+          ]);
+          expect(repositoriesOf('apps')).toEqual(['gitlab.futo.org/videostreaming/Grayjay']);
+        });
+
+        it('should take GitLab projects in nested namespaces, and GitHub and GitLab in one command', async () => {
+          await send(
+            '@**Immich** expander-group create apps futo-org/grayjay gitlab.futo.org/videostreaming/plugins/kick GITLAB.futo.org/videostreaming/Grayjay',
+          );
+
+          expect(gitlabMock.getProjectPath).toHaveBeenCalledWith('videostreaming/plugins/kick');
+          expect(gitlabMock.getProjectPath).toHaveBeenCalledWith('videostreaming/Grayjay');
+          expect(githubServiceMock.getRepositoryName).toHaveBeenCalledExactlyOnceWith('futo-org/grayjay');
+          expect(repositoriesOf('apps')).toEqual([
+            'futo-org/Grayjay',
+            'gitlab.futo.org/videostreaming/plugins/kick',
+            'gitlab.futo.org/videostreaming/Grayjay',
+          ]);
+        });
+
+        it('should refuse the whole command when GitLab does not know a project', async () => {
+          await send('@**Immich** expander-group create apps immich-app/immich gitlab.futo.org/videostreaming/nope');
+
+          expect(contents()).toEqual([
+            'There is no repository `gitlab.futo.org/videostreaming/nope`, or I cannot see it.',
+          ]);
+          expect(database.groups).toHaveLength(2);
+        });
+
+        it('should refuse a GitLab project without a namespace, before asking GitLab', async () => {
+          await send('@**Immich** expander-group create apps gitlab.futo.org/onlyone');
+
+          expect(contents()).toEqual([`\`gitlab.futo.org/onlyone\` is not ${REPOSITORY_FORMS}.`]);
+          expect(gitlabMock.getProjectPath).not.toHaveBeenCalled();
+          expect(database.groups).toHaveLength(2);
+        });
+
         it('should refuse what is not owner/repo, before asking GitHub', async () => {
           await send('@**Immich** expander-group create apps immich');
           await send('@**Immich** expander-group create apps immich futo-org/ immich-app/immich');
 
-          expect(contents()).toEqual(['`immich` is not `owner/repo`.', '`immich`, `futo-org` are not `owner/repo`.']);
+          expect(contents()).toEqual([
+            `\`immich\` is not ${REPOSITORY_FORMS}.`,
+            `\`immich\`, \`futo-org\` are not ${REPOSITORY_FORMS}.`,
+          ]);
           expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
           expect(database.groups).toHaveLength(2);
         });
@@ -2271,7 +2361,7 @@ describe('ZulipCommandService', () => {
           await send('@**Immich** expander-group create apps immich-app/nope futo-org/fhs-core immich-app/gone');
 
           expect(contents()).toEqual([
-            'GitHub has no repository `immich-app/nope`, `immich-app/gone`, or I cannot see it.',
+            'There is no repository `immich-app/nope`, `immich-app/gone`, or I cannot see it.',
           ]);
           expect(database.groups).toHaveLength(2);
         });
@@ -2289,7 +2379,7 @@ describe('ZulipCommandService', () => {
           await send('@**Immich** expander-group create FHS immich-app/immich');
 
           expect(contents()).toEqual([
-            'There is already an expander group `fhs`; `expander-group add fhs <owner/repo>…` adds repositories to it.',
+            'There is already an expander group `fhs`; `expander-group add fhs <repository>…` adds repositories to it.',
           ]);
           expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web']);
         });
@@ -2324,10 +2414,22 @@ describe('ZulipCommandService', () => {
           expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
         });
 
+        it('should add a GitLab project as GitLab spells it', async () => {
+          await send('@**Immich** expander-group add fhs https://gitlab.futo.org/videostreaming/grayjay.git');
+
+          expect(gitlabMock.getProjectPath).toHaveBeenCalledExactlyOnceWith('videostreaming/grayjay');
+          expect(contents()).toEqual(['Added `gitlab.futo.org/videostreaming/Grayjay` to the expander group `fhs`.']);
+          expect(repositoriesOf('fhs')).toEqual([
+            'futo-org/fhs-core',
+            'futo-org/fhs-web',
+            'gitlab.futo.org/videostreaming/Grayjay',
+          ]);
+        });
+
         it('should refuse a repository GitHub does not know', async () => {
           await send('@**Immich** expander-group add fhs futo-org/nope');
 
-          expect(contents()).toEqual(['GitHub has no repository `futo-org/nope`, or I cannot see it.']);
+          expect(contents()).toEqual(['There is no repository `futo-org/nope`, or I cannot see it.']);
           expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web']);
         });
       });
@@ -2346,6 +2448,21 @@ describe('ZulipCommandService', () => {
 
           expect(contents()).toEqual(['Nothing changed: the expander group `fhs` has none of `immich-app/immich`.']);
           expect(repositoriesOf('fhs')).toEqual(['futo-org/fhs-core', 'futo-org/fhs-web']);
+        });
+
+        it('should remove a GitLab project given as its URL, without asking GitLab', async () => {
+          database.groups.push(group('apps', ['immich-app/static-pages', 'gitlab.futo.org/videostreaming/Grayjay']));
+          await zulipExpanders.init();
+
+          await send(
+            '@**Immich** expander-group remove apps https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/5',
+          );
+
+          expect(contents()).toEqual([
+            'Removed `gitlab.futo.org/videostreaming/Grayjay` from the expander group `apps`.',
+          ]);
+          expect(repositoriesOf('apps')).toEqual(['immich-app/static-pages']);
+          expect(gitlabMock.getProjectPath).not.toHaveBeenCalled();
         });
 
         it('should refuse to leave a group with no repository', async () => {

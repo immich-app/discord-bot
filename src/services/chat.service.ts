@@ -1,7 +1,14 @@
 import { ClientError, WebSocketEvents } from '@mattermost/client';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { CommandInteraction, GuildMember, Message, OmitPartialGroupDMChannel, SendableChannels } from 'discord.js';
+import {
+  CommandInteraction,
+  GuildMember,
+  hyperlink,
+  Message,
+  OmitPartialGroupDMChannel,
+  SendableChannels,
+} from 'discord.js';
 import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +19,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
@@ -19,7 +27,14 @@ import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/inte
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { PullRequest } from 'src/schema';
 import { NotificationService } from 'src/services/notification.service';
-import { ExpanderScope, sameRepository, ZulipExpanderService } from 'src/services/zulip-expander.service';
+import {
+  ExpanderScope,
+  findRepository,
+  gitlabPath,
+  isGitlabRepository,
+  sameRepository,
+  ZulipExpanderService,
+} from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
 
@@ -41,6 +56,9 @@ type GithubLink = {
   discordThreadId?: string;
 };
 type LinkType = 'issues' | 'pull' | 'discussions';
+
+/** `kind` is unknown for `#123`, which may be an issue or a merge request: GitLab numbers them apart. */
+type GitlabLink = { path: string; id: number; kind?: GitlabItemKind };
 
 type GithubCodeSnippet = {
   lines: string[];
@@ -79,6 +97,47 @@ const GITHUB_QUICK_REF_REGEX = /(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(?<
 // Issue and pull request numbers are stored as Postgres integers.
 const MAX_GITHUB_NUMBER = 2_147_483_647;
 const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_QUICK_REF_REGEX.source})`, 'g');
+const GITLAB_HOST = Constants.Gitlab.Host.replaceAll('.', '\\.');
+const GITLAB_PAGE_REGEX = new RegExp(
+  `https://${GITLAB_HOST}/(?<path>[\\w.-]+(?:/[\\w.-]+)+)/-/(?<kind>issues|work_items|merge_requests)/(?<num>\\d+)`,
+  'g',
+);
+const GITLAB_FILE_REGEX = new RegExp(
+  `https://${GITLAB_HOST}/(?<path>[\\w.-]+(?:/[\\w.-]+)+)/-/blob/(?<refAndFile>[\\w\\-.,/%]+)(#L(?<lineFrom>\\d+)(-L?(?<lineTo>\\d+))?)?`,
+  'g',
+);
+/** On Zulip, permalinks past this many in one message, of either host, get no snippet: it bounds the files one message has the bot read. */
+const MAX_ZULIP_FILE_REFERENCES = 5;
+
+/** How many permalinks of one message are read at a time. */
+const FILE_READ_CONCURRENCY = 5;
+
+/** `Promise.all(items.map(map))` with at most `limit` running at a time. */
+const mapConcurrently = async <T, R>(items: T[], limit: number, map: (item: T) => Promise<R>) => {
+  const results: R[] = Array.from({ length: items.length });
+  let next = 0;
+  const work = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await map(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, work));
+  return results;
+};
+
+/** How many leading path segments of a GitLab permalink are tried as its ref. */
+const MAX_GITLAB_REF_SEGMENTS = 5;
+
+/** `undefined` for text with a malformed escape, which `decodeURIComponent` throws on. */
+const decode = (text: string) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return;
+  }
+};
+
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
@@ -192,6 +251,7 @@ export class ChatService {
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
     @Inject(IFourthwallRepository) private fourthwall: IFourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
+    @Inject(IGitlabInterface) private gitlab: IGitlabInterface,
     @Inject(ILoopDedupeInterface) private loopDedupe: ILoopDedupeInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
@@ -246,9 +306,22 @@ ${messageParts.join('\n')}`,
     if (scope) {
       // Snippets are not neutralised: Zulip renders no mention inside a code fence,
       // and a zero-width space would corrupt the code.
-      const snippets = await this.handleGithubFileReferences(content, true);
-      const links = await this.handleGithubThreadReferences({ content, scope }, true);
-      parts.push(...snippets, ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions));
+      const firstPermalinks = [
+        ...[...content.matchAll(GITHUB_FILE_REGEX)].map(({ index }) => ({ index, host: 'github' })),
+        ...[...content.matchAll(GITLAB_FILE_REGEX)].map(({ index }) => ({ index, host: 'gitlab' })),
+      ]
+        .sort((a, b) => a.index - b.index)
+        .slice(0, MAX_ZULIP_FILE_REFERENCES);
+      const [githubSnippets, gitlabSnippets, links] = await Promise.all([
+        this.handleGithubFileReferences(content, true, firstPermalinks.filter(({ host }) => host === 'github').length),
+        this.handleGitlabFileReferences(content, firstPermalinks.filter(({ host }) => host === 'gitlab').length),
+        this.handleGithubThreadReferences({ content, scope }, true),
+      ]);
+      parts.push(
+        ...githubSnippets,
+        ...gitlabSnippets,
+        ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions),
+      );
     }
     parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
 
@@ -500,6 +573,7 @@ ${messageParts.join('\n')}`,
     isPrivileged: boolean,
   ) {
     const links: GithubLink[] = [];
+    const gitlabLinks: GitlabLink[] = [];
 
     content = content.replaceAll(/```.*```/gs, '');
 
@@ -522,8 +596,11 @@ ${messageParts.join('\n')}`,
           name: repo || repoPage,
           id,
           category: category as LinkType | undefined,
+          isPage: orgPage !== undefined,
         });
-        if (link) {
+        if (link && 'path' in link) {
+          gitlabLinks.push(link);
+        } else if (link) {
           links.push(link);
         }
         continue;
@@ -548,6 +625,19 @@ ${messageParts.join('\n')}`,
               ? (latestPr?.discordThreadId ?? undefined)
               : undefined,
       });
+    }
+
+    if (scope) {
+      for (const { groups } of content.matchAll(GITLAB_PAGE_REGEX)) {
+        const id = Number(groups?.num);
+        if (groups && id <= MAX_GITHUB_NUMBER) {
+          gitlabLinks.push({
+            path: groups.path,
+            id,
+            kind: groups.kind === 'merge_requests' ? 'merge_requests' : 'issues',
+          });
+        }
+      }
     }
 
     const keys = new Set<string>();
@@ -582,28 +672,74 @@ ${messageParts.join('\n')}`,
       }),
     );
 
-    return results;
+    const gitlabKeys = new Set<string>();
+    const gitlabRequests = gitlabLinks.filter(({ path, id, kind }) => {
+      const key = `${path.toLowerCase()}#${id}:${kind}`;
+      if (gitlabKeys.has(key)) {
+        return false;
+      }
+      gitlabKeys.add(key);
+      return true;
+    });
+
+    const gitlabUrls = new Set<string>();
+    const gitlabResults = (await Promise.all(gitlabRequests.map((link) => this.getGitlabMessage(link)))).filter(
+      (result) => {
+        if (!result || gitlabUrls.has(result.url)) {
+          return false;
+        }
+        gitlabUrls.add(result.url);
+        return true;
+      },
+    );
+
+    return [...results, ...gitlabResults.map((result) => result?.message)];
+  }
+
+  /** `#123` is whichever of the issue and the merge request of that number was updated last. */
+  private async getGitlabMessage({ path, id, kind }: GitlabLink) {
+    const kinds: GitlabItemKind[] = kind ? [kind] : ['issues', 'merge_requests'];
+    const items = await Promise.all(kinds.map((candidate) => this.gitlab.getItem(path, candidate, id)));
+    const item = items
+      .filter((candidate) => candidate !== undefined)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+    if (!item) {
+      return;
+    }
+    return {
+      url: item.url,
+      message: `[${item.kind === 'issues' ? 'Issue' : 'Merge Request'}] ${item.title} (${hyperlink(`${path}#${id}`, item.url)})`,
+    };
   }
 
   /**
-   * `owner/name#123` and links name their repository; `name#123` is looked up among the stream's repositories, and a
-   * bare `#123` goes to the one of them with a pull request of that number updated in the last two weeks, or else to
-   * the stream's default repository, below whose threshold it is dropped.
+   * GitHub links name their repository. `owner/name#123` and `name#123` are looked up among the stream's
+   * repositories, GitLab projects included, by the end of their name; a bare `#123` goes to the one of them with a
+   * pull request of that number updated in the last two weeks, or else to the stream's default repository, below whose
+   * threshold it is dropped.
    */
   private async resolveScopedReference(
     scope: ExpanderScope,
-    { owner, name, id, category }: { owner?: string; name?: string; id: number; category?: LinkType },
-  ): Promise<GithubLink | undefined> {
+    {
+      owner,
+      name,
+      id,
+      category,
+      isPage,
+    }: { owner?: string; name?: string; id: number; category?: LinkType; isPage: boolean },
+  ): Promise<GithubLink | GitlabLink | undefined> {
     const pullRequests = await this.database.getPullRequestsByNumber(id);
     const fullName = (pullRequest: PullRequest) => `${pullRequest.organization}/${pullRequest.repository}`;
 
     let repository: string;
     if (owner && name) {
-      repository = `${owner}/${name}`;
+      repository = isPage
+        ? `${owner}/${name}`
+        : (findRepository(scope.repositories, `${owner}/${name}`) ?? `${owner}/${name}`);
     } else if (name) {
       repository =
-        scope.repositories.find((candidate) => sameRepository(candidate.split('/')[1], name)) ??
-        `${scope.defaultRepository.split('/')[0]}/${name}`;
+        findRepository(scope.repositories, name) ??
+        `${scope.defaultRepository.slice(0, scope.defaultRepository.lastIndexOf('/'))}/${name}`;
     } else {
       const twoWeeksAgo = DateTime.now().minus({ week: 2 }).toJSDate();
       const recent = pullRequests
@@ -622,55 +758,103 @@ ${messageParts.join('\n')}`,
       }
     }
 
+    if (isGitlabRepository(repository)) {
+      return { path: gitlabPath(repository), id };
+    }
+
     const [org, repo] = repository.split('/');
     const isPullRequest = pullRequests.some((pullRequest) => sameRepository(fullName(pullRequest), repository));
     return { org, repo, id, type: category ?? (isPullRequest ? 'pull' : undefined) };
   }
 
-  async handleGithubFileReferences(content: string, isPrivileged: boolean) {
-    const snippets: GithubCodeSnippet[] = [];
+  /** `limit` is how many of the message's permalinks are read, every one when it is left out. */
+  handleGithubFileReferences(content: string, isPrivileged: boolean, limit?: number) {
+    return this.handleFileReferences(content, GITHUB_FILE_REGEX, limit, ({ org, repo, ref, path }) => {
+      const file = decode(path);
+      return file === undefined
+        ? undefined
+        : { path, read: () => this.github.getRepositoryFileContent(org, repo, ref, file, isPrivileged) };
+    });
+  }
 
-    const matches = content.matchAll(GITHUB_FILE_REGEX);
-
-    for (const match of matches) {
-      if (!match || !match.groups) {
-        continue;
+  handleGitlabFileReferences(content: string, limit: number) {
+    return this.handleFileReferences(content, GITLAB_FILE_REGEX, limit, ({ path, refAndFile }) => {
+      const segments = refAndFile.split('/').map(decode);
+      if (segments.length < 2 || segments.some((segment) => !segment)) {
+        return;
       }
+      return { path: segments.at(-1) as string, read: () => this.readGitlabFile(path, segments as string[]) };
+    });
+  }
 
-      const { org, repo, ref, path, lineFrom, lineTo } = match.groups;
+  /**
+   * A ref may hold slashes, so the URL does not say where the ref ends and the file begins: every split is tried at
+   * once, and the longest ref that has the file wins, as GitLab itself resolves it.
+   */
+  private async readGitlabFile(path: string, segments: string[]) {
+    const splits = Math.min(segments.length - 1, MAX_GITLAB_REF_SEGMENTS);
+    const files = await Promise.all(
+      Array.from({ length: splits }, (_, index) =>
+        this.gitlab.getFileContent(path, segments.slice(0, index + 1).join('/'), segments.slice(index + 1).join('/')),
+      ),
+    );
+    return files.findLast((file) => file !== undefined);
+  }
 
-      const extension = path.split('/').pop()?.split('.').pop();
-      if (!extension) {
-        continue;
-      }
+  private async handleFileReferences(
+    content: string,
+    regex: RegExp,
+    limit: number | undefined,
+    toFile: (groups: Record<string, string>) => { path: string; read: () => Promise<string[] | undefined> } | undefined,
+  ) {
+    const found = await mapConcurrently(
+      [...content.matchAll(regex)].slice(0, limit),
+      FILE_READ_CONCURRENCY,
+      async (match): Promise<GithubCodeSnippet | undefined> => {
+        if (!match.groups) {
+          return;
+        }
 
-      const file = await this.github.getRepositoryFileContent(org, repo, ref, decodeURIComponent(path), isPrivileged);
-      if (!file || file.length === 0) {
-        continue;
-      }
+        const { lineFrom, lineTo } = match.groups;
+        const reference = toFile(match.groups);
+        if (!reference) {
+          return;
+        }
 
-      const from = lineFrom ? Number(lineFrom) - 1 : 0;
-      let to;
-      if (lineTo) {
-        to = Number(lineTo);
-      } else if (lineFrom) {
-        to = from + 1;
-      } else {
-        to = file.length;
-      }
+        const extension = reference.path.split('/').pop()?.split('.').pop();
+        if (!extension) {
+          return;
+        }
 
-      if (to - from > 20) {
-        continue;
-      }
+        const file = await reference.read();
+        if (!file || file.length === 0) {
+          return;
+        }
 
-      const lines = file.slice(from, to);
+        const from = lineFrom ? Number(lineFrom) - 1 : 0;
+        let to;
+        if (lineTo) {
+          to = Number(lineTo);
+        } else if (lineFrom) {
+          to = from + 1;
+        } else {
+          to = file.length;
+        }
 
-      if (lines.length === 0) {
-        continue;
-      }
+        if (to - from > 20) {
+          return;
+        }
 
-      snippets.push({ lines, extension });
-    }
+        const lines = file.slice(from, to);
+
+        if (lines.length === 0) {
+          return;
+        }
+
+        return { lines, extension };
+      },
+    );
+    const snippets = found.filter((snippet) => snippet !== undefined);
 
     return snippets.map(({ lines, extension }) => {
       const code = lines.join('\n');

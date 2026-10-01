@@ -24,6 +24,7 @@ export const getConfig = () => {
   const loopDedupeApiKey = process.env.LOOPDEDUPE_SEARCH_API_KEY;
   const mattermostDomain = process.env.MATTERMOST_DOMAIN;
   const mattermostBotToken = process.env.MATTERMOST_BOT_TOKEN;
+  const gitlabToken = process.env.GITLAB_TOKEN?.trim() || undefined;
 
   if (
     !databaseUri ||
@@ -75,6 +76,9 @@ export const getConfig = () => {
     },
     database: {
       uri: databaseUri,
+    },
+    gitlab: {
+      token: gitlabToken,
     },
     github: {
       appId: githubAppId,

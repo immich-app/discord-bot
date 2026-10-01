@@ -54,4 +54,14 @@ describe('getConfig', () => {
 
     expect(() => getConfig()).toThrow('Missing required environment variables');
   });
+
+  it('should take an optional GitLab token, trimmed, and treat a blank one as none', () => {
+    expect(getConfig().gitlab).toEqual({ token: undefined });
+
+    vitest.stubEnv('GITLAB_TOKEN', 'glpat-token\n');
+    expect(getConfig().gitlab).toEqual({ token: 'glpat-token' });
+
+    vitest.stubEnv('GITLAB_TOKEN', ' \n');
+    expect(getConfig().gitlab).toEqual({ token: undefined });
+  });
 });

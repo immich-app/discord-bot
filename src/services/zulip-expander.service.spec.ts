@@ -1,7 +1,13 @@
 import { Logger } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
-import { ExpanderGroupEmptyError, ZulipExpanderService } from 'src/services/zulip-expander.service';
+import {
+  ExpanderGroupEmptyError,
+  ZulipExpanderService,
+  findRepository,
+  gitlabPath,
+  isGitlabRepository,
+} from 'src/services/zulip-expander.service';
 import { beforeEach, describe, expect, it, vitest } from 'vitest';
 
 type Tables = { groups: ZulipExpanderGroup[]; streams: ZulipExpander[]; defaults: ZulipExpanderDefault[] };
@@ -73,6 +79,38 @@ const fakeDatabase = (tables: Tables) => {
     }),
   } satisfies Partial<Record<keyof IDatabaseRepository, unknown>>;
 };
+
+describe('repository names', () => {
+  const repositories = [
+    'immich-app/immich',
+    'gitlab.futo.org/videostreaming/grayjay',
+    'gitlab.futo.org/videostreaming/plugins/kick',
+  ];
+
+  it('should tell GitLab projects by their host, in any case', () => {
+    expect(isGitlabRepository('gitlab.futo.org/videostreaming/grayjay')).toBe(true);
+    expect(isGitlabRepository('GitLab.FUTO.org/videostreaming/grayjay')).toBe(true);
+    expect(isGitlabRepository('immich-app/immich')).toBe(false);
+    expect(isGitlabRepository('gitlab.futo.organisation/x/y')).toBe(false);
+    expect(gitlabPath('gitlab.futo.org/videostreaming/plugins/kick')).toBe('videostreaming/plugins/kick');
+  });
+
+  it.each([
+    ['immich-app/immich', 'immich-app/immich'],
+    ['IMMICH', 'immich-app/immich'],
+    ['grayjay', 'gitlab.futo.org/videostreaming/grayjay'],
+    ['videostreaming/grayjay', 'gitlab.futo.org/videostreaming/grayjay'],
+    ['gitlab.futo.org/videostreaming/GrayJay', 'gitlab.futo.org/videostreaming/grayjay'],
+    ['plugins/kick', 'gitlab.futo.org/videostreaming/plugins/kick'],
+    ['kick', 'gitlab.futo.org/videostreaming/plugins/kick'],
+  ])('should find %s as %s', (wanted, found) => {
+    expect(findRepository(repositories, wanted)).toBe(found);
+  });
+
+  it.each(['jay', 'immich-app', 'other/immich', 'ugins/kick'])('should find nothing for %s', (wanted) => {
+    expect(findRepository(repositories, wanted)).toBeUndefined();
+  });
+});
 
 describe(ZulipExpanderService.name, () => {
   let tables: Tables;
