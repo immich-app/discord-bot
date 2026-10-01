@@ -11,6 +11,8 @@ export type ZulipRefs = {
   messageIds: number[];
   channels: ZulipChannelRef[];
   userIds: number[];
+  /** The names, in lower case, of the mentions written without a user ID, which Zulip does unless two users share the name. */
+  userNames: string[];
   uploads: string[];
   emojiNames: string[];
 };
@@ -20,6 +22,8 @@ export type ZulipMessageRef = {
   origin: 'discord' | 'zulip';
   discordAuthorId: string | null;
   authorName: string;
+  /** Who sent it on Zulip, from the mirror's row, which a typed quote header cannot change. */
+  zulipSenderId?: number | null;
 };
 
 export type ZulipRenderContext = {
@@ -31,6 +35,13 @@ export type ZulipRenderContext = {
   channels?: Map<string, string>;
   /** Verified team members only. */
   discordUserByZulipId: Map<number, string>;
+  /** Verified team members by their Zulip full name in lower case, for a mention without a user ID. */
+  discordUserByZulipName?: Map<string, string>;
+  /**
+   * The Discord name of the verified team member a quote of an unmirrored message names, shown as text in place of
+   * their Zulip name; never a pill, since the quoted text is whatever the sender typed.
+   */
+  quotedDiscordName?: string;
   emoji: (name: string) => string | undefined;
   /** Set when the message is mirrored late, as its Zulip `timestamp` in seconds. */
   lateTimestamp?: number;
@@ -44,6 +55,8 @@ type Lookups = {
   channel: (ref: ZulipChannelRef) => string | undefined;
   deleted: (id: number) => boolean;
   discordUser: (zulipId: number) => string | undefined;
+  discordUserByName: (name: string) => string | undefined;
+  quotedDiscordName: () => string | undefined;
   emoji: (name: string) => string | undefined;
 };
 
@@ -266,6 +279,10 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
     return channelId === undefined ? undefined : { mention: `<#${channelId}>` };
   };
 
+  /** The Discord user of a linked Zulip user, by ID when Zulip wrote one, else by name. */
+  const linkedUser = (name: string, zulipId?: number) =>
+    zulipId === undefined ? lookups.discordUserByName(name.trim().toLowerCase()) : lookups.discordUser(zulipId);
+
   /** `start` is the offset of `part` in `text`, or `undefined` for a link label, which queues nothing. */
   const translate = (part: string, start: number | undefined): string =>
     part
@@ -303,7 +320,7 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
           if (!byId && WILDCARDS.has(name.toLowerCase())) {
             return `@\u200B${name}`;
           }
-          const discordId = byId ? lookups.discordUser(Number(byId[2])) : undefined;
+          const discordId = byId ? linkedUser(byId[1], Number(byId[2])) : linkedUser(name);
           if (discordId) {
             return `<@${discordId}>`;
           }
@@ -411,15 +428,18 @@ const render = (raw: string, realmOrigin: string, lookups: Lookups, lateTimestam
   let body: string[];
   if (reply) {
     const target = lookups.message(reply.messageId);
+    const repliedId = typeof target?.zulipSenderId === 'number' ? lookups.discordUser(target.zulipSenderId) : undefined;
+    const replied = repliedId === undefined ? undefined : `<@${repliedId}>`;
+    const quotedName = lookups.quotedDiscordName();
     if (target?.origin === 'discord' && target.discordAuthorId) {
       head.push(`-# ↩ replying to <@${target.discordAuthorId}> · [jump](${target.jumpUrl})`);
       pingUserIds.push(target.discordAuthorId);
     } else if (target) {
-      head.push(`-# ↩ replying to ${escapeDiscordInline(target.authorName)} · [jump](${target.jumpUrl})`);
+      head.push(`-# ↩ replying to ${replied ?? escapeDiscordInline(target.authorName)} · [jump](${target.jumpUrl})`);
     } else if (lookups.deleted(reply.messageId)) {
       head.push('-# ↩ replying to a deleted message');
     } else {
-      head.push(`-# ↩ ${escapeDiscordInline(reply.name.trim()) || 'someone'} said:`);
+      head.push(`-# ↩ ${escapeDiscordInline((quotedName ?? reply.name).trim()) || 'someone'} said:`);
       const quote = visible([...output.keys()].slice(reply.fence.open + 1, reply.fence.close ?? lines.length));
       const shown = quote.slice(0, 5).map((line) => (line.startsWith('> ') ? line : `> ${line}`));
       if (quote.length > 5) {
@@ -450,12 +470,15 @@ export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
   const messageIds = new Set<number>();
   const channels = new Map<string, ZulipChannelRef>();
   const userIds = new Set<number>();
+  const userNames = new Set<string>();
   const emojiNames = new Set<string>();
   const { uploads, reply } = render(raw, realmOrigin, {
     message: (id) => void messageIds.add(id),
     channel: (ref) => void channels.set(channelRefKey(ref), ref),
     deleted: () => false,
     discordUser: (id) => void userIds.add(id),
+    discordUserByName: (name) => void userNames.add(name),
+    quotedDiscordName: () => undefined,
     emoji: (name) => void emojiNames.add(name),
   });
   return {
@@ -463,6 +486,7 @@ export const parseZulipRefs = (raw: string, realmOrigin: string): ZulipRefs => {
     messageIds: [...messageIds],
     channels: [...channels.values()],
     userIds: [...userIds],
+    userNames: [...userNames],
     uploads,
     emojiNames: [...emojiNames],
   };
@@ -477,6 +501,8 @@ export const toDiscordMirrorContent = (raw: string, ctx: ZulipRenderContext): Di
       channel: (ref) => ctx.channels?.get(channelRefKey(ref)),
       deleted: (id) => ctx.deletedMessageIds.has(id),
       discordUser: (id) => ctx.discordUserByZulipId.get(id),
+      discordUserByName: (name) => ctx.discordUserByZulipName?.get(name),
+      quotedDiscordName: () => ctx.quotedDiscordName,
       emoji: ctx.emoji,
     },
     ctx.lateTimestamp,

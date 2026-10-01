@@ -1270,6 +1270,59 @@ describe(MirrorService.name, () => {
       );
     });
 
+    it("should translate a mention without a user ID by the team member's Zulip name, read once", async () => {
+      zulip.getUser.mockResolvedValue({ userId: TEAM_ZULIP_ID, fullName: 'Alex Kim', role: 400 });
+
+      await fromZulip(zulipMessage({ content: 'thanks @**Alex Kim** and @_**alex kim**' }));
+      await fromZulip(zulipMessage({ id: 1002, content: '@**Alex Kim** again, not @**Alex Other**' }));
+
+      expect(sent(0)).toEqual(
+        expect.objectContaining({ content: `thanks <@${TEAM_DISCORD_ID}> and <@${TEAM_DISCORD_ID}>`, pingUserIds: [] }),
+      );
+      expect(sent(1)).toEqual(expect.objectContaining({ content: `<@${TEAM_DISCORD_ID}> again, not @Alex Other` }));
+      expect(zulip.getUser).toHaveBeenCalledExactlyOnceWith(TEAM_ZULIP_ID);
+    });
+
+    it("should learn a team member's Zulip name from their own messages, without reading it", async () => {
+      await fromZulip(zulipMessage({ senderId: TEAM_ZULIP_ID, senderFullName: 'Alex Kim', content: 'hi' }));
+      await fromZulip(zulipMessage({ id: 1002, content: 'thanks @**Alex Kim**' }));
+
+      expect(sent(1)).toEqual(expect.objectContaining({ content: `thanks <@${TEAM_DISCORD_ID}>` }));
+      expect(zulip.getUser).not.toHaveBeenCalled();
+    });
+
+    it('should quote an unmirrored message of a team member under their Discord name, as text', async () => {
+      await fromZulip(
+        zulipMessage({
+          content: `@_**Alex Kim|${TEAM_ZULIP_ID}** [said](#narrow/channel/${DEV_STREAM}/topic/.23dev/near/4444):\n\`\`\`quote\nold\n\`\`\`\nreply`,
+        }),
+      );
+
+      expect(sent(0)).toEqual(
+        expect.objectContaining({ content: `-# ↩ ${TEAM_MEMBER.displayName} said:\n> old\nreply` }),
+      );
+    });
+
+    it('should not read team member names for a message without a mention by name', async () => {
+      await fromZulip(zulipMessage({ content: `thanks @**Alex|${TEAM_ZULIP_ID}**` }));
+
+      expect(zulip.getUser).not.toHaveBeenCalled();
+    });
+
+    it('should leave a mention by name as text when the name cannot be read, and not read it again for a minute', async () => {
+      zulip.getUser.mockRejectedValue(new Error('Zulip is down'));
+
+      await fromZulip(zulipMessage({ content: 'thanks @**Alex Kim**' }));
+      await fromZulip(zulipMessage({ id: 1002, content: 'and @**Alex Kim**' }));
+
+      expect(sent(0)).toEqual(expect.objectContaining({ content: 'thanks @Alex Kim' }));
+      expect(zulip.getUser).toHaveBeenCalledOnce();
+      expect(error()).toHaveBeenCalledWith(
+        expect.stringContaining(`Could not read the name of Zulip user ${TEAM_ZULIP_ID}`),
+        expect.anything(),
+      );
+    });
+
     it('should ping the Discord author a Zulip user quote-replies to', async () => {
       seedRow({
         discordMessageId: '300000000000000005',
