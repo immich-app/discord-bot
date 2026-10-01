@@ -134,7 +134,8 @@ export class ZulipCommandService {
       description: 'this list',
       positionals: 0,
       options: [],
-      run: () => Promise.resolve(this.help()),
+      anyStream: true,
+      run: ({ message }) => Promise.resolve(this.help(message.streamId)),
     },
     'emote-sync': {
       usage: 'emote-sync',
@@ -325,7 +326,8 @@ export class ZulipCommandService {
     if (parsed.status === 'ignored') {
       return;
     }
-    const command = parsed.status === 'ok' ? this.commands[parsed.command.name] : undefined;
+    // A mention alone is `help`.
+    const command = parsed.status === 'ok' ? this.commands[parsed.command.name || 'help'] : undefined;
     const anyStream = command?.administrators || command?.anyStream;
     if (!anyStream && !Constants.Zulip.Commands.includes(streamId)) {
       return;
@@ -347,7 +349,7 @@ export class ZulipCommandService {
     }
     const { name, tokens } = parsed.command;
     if (name === '') {
-      return this.help();
+      return this.help(message.streamId);
     }
     const command = this.commands[name];
     if (!command) {
@@ -457,13 +459,19 @@ export class ZulipCommandService {
     return this.zulip.sendMessage({ stream: streamId!, topic, content: fit(content) });
   }
 
-  private help() {
-    const lines = Object.values(this.commands).map(
-      ({ usage, description, administrators, anyStream }) =>
-        `- ${code(usage)}${administrators ? ' (administrators)' : anyStream ? ' (any stream)' : ''}: ${description}`,
-    );
+  /** Outside the team streams, only the commands taken there. */
+  private help(streamId: number) {
+    const teamStream = Constants.Zulip.Commands.includes(streamId);
+    const lines = Object.values(this.commands)
+      .filter(({ administrators, anyStream }) => teamStream || administrators || anyStream)
+      .map(
+        ({ usage, description, administrators, anyStream }) =>
+          `- ${code(usage)}${administrators ? ' (administrators)' : anyStream ? ' (any stream)' : ''}: ${description}`,
+      );
     return [
-      'Mention me at the start of a message in a team stream, then one of:',
+      teamStream
+        ? 'Mention me at the start of a message in a team stream, then one of:'
+        : `Mention me at the start of a message, then one of the commands taken in this stream (the others are taken in the team streams only, where ${code('help')} lists every one):`,
       ...lines,
       // The blank line ends the list: without it, Markdown reads the next line as the last item's continuation.
       '',

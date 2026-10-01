@@ -303,7 +303,7 @@ const SERVER = 'the Immich Discord server (979116623879368755)';
 
 const HELP = [
   'Mention me at the start of a message in a team stream, then one of:',
-  '- `help`: this list',
+  '- `help` (any stream): this list',
   `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
   '- `backfill-pull-requests <number|all>`: create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
   '- `fourthwall update <id|all>`: fetch that Fourthwall order again and update its row in the database, or with `all` every order',
@@ -326,6 +326,15 @@ const HELP = [
   'Arguments are positional or `key=value`; quote a value with spaces (`text="two words"`). Every reply is posted here, in the topic.',
   'The commands marked (administrators) are taken in any stream, from organization administrators and owners only, and the ones marked (any stream) in any stream from anyone. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
 ].join('\n');
+
+const HELP_ELSEWHERE = HELP.split('\n')
+  .map((line, index) =>
+    index === 0
+      ? 'Mention me at the start of a message, then one of the commands taken in this stream (the others are taken in the team streams only, where `help` lists every one):'
+      : line,
+  )
+  .filter((line) => !line.startsWith('- ') || /\((administrators|any stream)\)/.test(line))
+  .join('\n');
 
 describe('tokenize', () => {
   it.each([
@@ -518,11 +527,24 @@ describe('ZulipCommandService', () => {
       expect(Constants.Zulip.Commands).toEqual([107, 108, 109, 110, 111, 112, 113]);
     });
 
-    it('should ignore a command in a stream that is not allowlisted, without a reply', async () => {
-      await send('@**Immich** help', { streamId: Constants.Zulip.Streams.Immich });
-      await send('@**Immich** help', { streamId: 999 });
+    it('should ignore a team command in a stream that is not allowlisted, without a reply', async () => {
+      await send('@**Immich** emote-sync', { streamId: Constants.Zulip.Streams.Immich });
+      await send('@**Immich** similar text="hello"', { streamId: 999 });
+      await send('@**Immich** nonsense', { streamId: 999 });
 
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should answer help and a bare mention in any stream, with the commands taken there', async () => {
+      await send('@**Immich** help', { streamId: Constants.Zulip.Streams.Immich });
+      await send('@**Immich**', { streamId: 999 });
+
+      expect(replies().map(({ stream, content }) => ({ stream, content }))).toEqual([
+        { stream: Constants.Zulip.Streams.Immich, content: HELP_ELSEWHERE },
+        { stream: 999, content: HELP_ELSEWHERE },
+      ]);
+      expect(HELP_ELSEWHERE).not.toContain('emote-sync');
+      expect(HELP_ELSEWHERE).toContain('`mirror-link');
     });
 
     it('should ignore a direct message, without a reply', async () => {
@@ -1643,7 +1665,7 @@ describe('ZulipCommandService', () => {
       mirrorLinksMock.unlink.mockResolvedValue(unlinked);
     });
 
-    it('should take the mirror commands in any stream, where the other commands stay ignored', async () => {
+    it('should take the mirror commands in any stream, where the team commands stay ignored', async () => {
       await send('@**Immich** mirror-link', { streamId: 120, topic: 'setup' });
       await send('@**Immich** mirror-list', { streamId: Constants.Zulip.Streams.Immich });
       await send('@**Immich** help', { streamId: 120 });
@@ -1659,6 +1681,7 @@ describe('ZulipCommandService', () => {
       expect(replies()).toEqual([
         { stream: 120, topic: 'setup', content: REQUESTED },
         { stream: 54, topic: 'deploy', content: 'No channel is mirrored.' },
+        { stream: 120, topic: 'deploy', content: HELP_ELSEWHERE },
       ]);
     });
 
