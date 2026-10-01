@@ -8,6 +8,7 @@ import {
   shorten,
   shortenCodePoints,
 } from 'src/format';
+import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { topicKey } from 'src/mirror/names';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
@@ -16,7 +17,14 @@ import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mi
 import { RSSService } from 'src/services/rss.service';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
-import { ExpanderGroupEmptyError, ZulipExpanderService, sameRepository } from 'src/services/zulip-expander.service';
+import {
+  ExpanderGroupEmptyError,
+  ZulipExpanderService,
+  findRepository,
+  gitlabPath,
+  isGitlabRepository,
+  sameRepository,
+} from 'src/services/zulip-expander.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
@@ -36,7 +44,7 @@ const ZULIP_ADMINISTRATOR_ROLE = 200;
 const MIRROR = 'change or list the Discord-Zulip mirror';
 
 const GITHUB_EXPANSION =
-  'issue, pull request and discussion links and `#1234` to their titles, file permalinks to code';
+  'issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code';
 
 const EXPANDER_GROUP_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
@@ -45,9 +53,17 @@ const MAX_THRESHOLD = 2_147_483_647;
 
 const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
 
-/** Takes `owner/repo` or the repository's GitHub URL. */
+const GITLAB_PROJECT_NAME = /^[\w.-]+(\/[\w.-]+)+$/;
+
+const REPOSITORY_FORMS = `\`owner/repo\` on GitHub or \`${Constants.Gitlab.Host}/namespace/project\``;
+
+/** Takes `owner/repo`, a GitLab project with its host, or either's URL. */
 const toRepositoryName = (given: string) =>
-  given.replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '').replace(/(\.git)?\/*$/i, '');
+  given
+    .replace(/^https?:\/\//i, '')
+    .replace(/^(www\.)?github\.com\//i, '')
+    .replace(/\/-\/.*$/, '')
+    .replace(/(\.git)?\/*$/i, '');
 
 /** Who made a row, for its `createdBy`. */
 const describeZulipSender = (message: StreamMessage) => `${message.senderFullName} on Zulip (user ${message.senderId})`;
@@ -234,7 +250,7 @@ export class ZulipCommandService {
       run: () => this.mirrorLinks.list('zulip'),
     },
     expanders: {
-      usage: 'expanders <on <group>|off [group]|default <owner/repo>|list>',
+      usage: 'expanders <on <group>|off [group]|default <repository>|list>',
       description: `turn GitHub expansion (${GITHUB_EXPANSION}) on or off in this stream for a group of repositories (\`off\` alone turns off every group), choose which of its repositories \`#1234\` goes to here, or \`list\` the groups and the streams they are on in; x.com links are mirrored on nitter.net in every stream`,
       positionals: 2,
       options: [],
@@ -242,9 +258,8 @@ export class ZulipCommandService {
       run: (context) => this.expanders(context),
     },
     'expander-group': {
-      usage: 'expander-group <create|add|remove> <group> <owner/repo>… | threshold <group> <number> | delete <group>',
-      description:
-        'create a group of repositories for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere',
+      usage: 'expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group>',
+      description: `create a group of repositories (${REPOSITORY_FORMS}, or their URLs) for \`expanders on\`, its first repository the default for \`#1234\`; add or remove repositories; with \`threshold\`, have a bare \`#1234\` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere`,
       positionals: Number.POSITIVE_INFINITY,
       options: [],
       anyStream: true,
@@ -270,6 +285,7 @@ export class ZulipCommandService {
 
   constructor(
     @Inject(IZulipInterface) private zulip: IZulipInterface,
+    @Inject(IGitlabInterface) private gitlab: IGitlabInterface,
     private zulipService: ZulipService,
     private chatService: ChatService,
     private githubService: GithubService,
@@ -723,10 +739,7 @@ export class ZulipCommandService {
     if (!scope) {
       return `GitHub expansion is off in this stream; turn it on with ${code('expanders on <group>')} first.`;
     }
-    const wanted = toRepositoryName(given);
-    const repository = scope.repositories.find((candidate) =>
-      wanted.includes('/') ? sameRepository(candidate, wanted) : sameRepository(candidate.split('/')[1], wanted),
-    );
+    const repository = findRepository(scope.repositories, toRepositoryName(given));
     if (!repository) {
       return `${code(given)} is in none of this stream's groups; the default must be one of ${scope.repositories.map((candidate) => code(candidate)).join(', ')}.`;
     }
@@ -737,7 +750,7 @@ export class ZulipCommandService {
   private async expanderList() {
     const groups = this.zulipExpanders.getGroups();
     if (groups.length === 0) {
-      return `There is no expander group yet; ${code('expander-group create <group> <owner/repo>…')} creates one.`;
+      return `There is no expander group yet; ${code('expander-group create <group> <repository>…')} creates one.`;
     }
     const lines = [
       'Expander groups:',
@@ -797,7 +810,7 @@ export class ZulipCommandService {
         const created = await this.zulipExpanders.createGroup(name, repositories, describeZulipSender(message));
         return created
           ? `Created the expander group ${code(name)} with ${listRepositories(repositories)}; ${code(repositories[0])} is the default for a bare ${code('#1234')}. Turn it on in a stream with ${code(`expanders on ${name}`)}.`
-          : `There is already an expander group ${code(name)}; ${code(`expander-group add ${name} <owner/repo>…`)} adds repositories to it.`;
+          : `There is already an expander group ${code(name)}; ${code(`expander-group add ${name} <repository>…`)} adds repositories to it.`;
       }
       case 'add': {
         if (rest.length === 0) {
@@ -867,17 +880,29 @@ export class ZulipCommandService {
     return this.usage('expander-group');
   }
 
-  /** The names as GitHub spells them, or the reply naming the ones it does not know. */
+  /** The names as GitHub and GitLab spell them, or the reply naming the ones they do not know. */
   private async findRepositories(given: string[]): Promise<string[] | string> {
     const wanted = given.map(toRepositoryName);
-    const malformed = wanted.filter((repository) => !REPOSITORY_NAME.test(repository));
+    const malformed = wanted.filter((repository) =>
+      isGitlabRepository(repository)
+        ? !GITLAB_PROJECT_NAME.test(gitlabPath(repository))
+        : !REPOSITORY_NAME.test(repository),
+    );
     if (malformed.length > 0) {
-      return `${listRepositories(malformed)} ${malformed.length === 1 ? 'is' : 'are'} not ${code('owner/repo')}.`;
+      return `${listRepositories(malformed)} ${malformed.length === 1 ? 'is' : 'are'} not ${REPOSITORY_FORMS}.`;
     }
-    const found = await Promise.all(wanted.map((repository) => this.githubService.getRepositoryName(repository)));
+    const found = await Promise.all(
+      wanted.map(async (repository) => {
+        if (!isGitlabRepository(repository)) {
+          return this.githubService.getRepositoryName(repository);
+        }
+        const path = await this.gitlab.getProjectPath(gitlabPath(repository));
+        return path && `${Constants.Gitlab.Host}/${path}`;
+      }),
+    );
     const unknown = wanted.filter((_, index) => found[index] === undefined);
     if (unknown.length > 0) {
-      return `GitHub has no repository ${listRepositories(unknown)}, or I cannot see it.`;
+      return `There is no repository ${listRepositories(unknown)}, or I cannot see it.`;
     }
     const repositories: string[] = [];
     for (const repository of found as string[]) {
@@ -891,7 +916,7 @@ export class ZulipCommandService {
   private noGroup(name: string) {
     const groups = this.zulipExpanders.getGroups();
     return groups.length === 0
-      ? `There is no expander group ${code(name)}; ${code('expander-group create <group> <owner/repo>…')} creates one.`
+      ? `There is no expander group ${code(name)}; ${code('expander-group create <group> <repository>…')} creates one.`
       : `There is no expander group ${code(name)}; the groups are ${groups.map((group) => code(group.name)).join(', ')}.`;
   }
 

@@ -4,6 +4,7 @@ import { IDiscordMirrorInterface } from 'src/interfaces/discord-mirror.interface
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { IHolidaysInterface } from 'src/interfaces/holidays.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
@@ -14,6 +15,7 @@ import { DatabaseRepository } from 'src/repositories/database.repository';
 import { DiscordRepository } from 'src/repositories/discord.repository';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { GithubRepository } from 'src/repositories/github.repository';
+import { GitlabRepository } from 'src/repositories/gitlab.repository';
 import { HolidaysRepository } from 'src/repositories/holidays.repository';
 import { LoopDedupeRepository } from 'src/repositories/loop-dedupe.repository';
 import { MattermostRepository } from 'src/repositories/mattermost.repository';
@@ -27,6 +29,7 @@ export const providers: Provider[] = [
   { provide: IDiscordMirrorInterface, useExisting: IDiscordInterface },
   { provide: IFourthwallRepository, useClass: FourthwallRepository },
   { provide: IGithubInterface, useClass: GithubRepository },
+  { provide: IGitlabInterface, useClass: GitlabRepository },
   { provide: IHolidaysInterface, useClass: HolidaysRepository },
   { provide: IOutlineInterface, useClass: OutlineRepository },
   { provide: IRSSInterface, useClass: RSSRepository },

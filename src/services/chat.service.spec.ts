@@ -8,6 +8,7 @@ import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
+import { GitlabItem, GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
@@ -202,6 +203,12 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   removeReaction: vitest.fn(),
 });
 
+const newGitlabMockRepository = (): Mocked<IGitlabInterface> => ({
+  getProjectPath: vitest.fn(),
+  getItem: vitest.fn().mockResolvedValue(undefined),
+  getFileContent: vitest.fn().mockResolvedValue(undefined),
+});
+
 const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
   getForText: vitest.fn(),
 });
@@ -212,6 +219,7 @@ describe('Bot test', () => {
   let discordMock: Mocked<IDiscordInterface>;
   let fourthwallMock: Mocked<IFourthwallRepository>;
   let githubMock: Mocked<IGithubInterface>;
+  let gitlabMock: Mocked<IGitlabInterface>;
   let loopDedupeMock: Mocked<ILoopDedupeInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
@@ -225,6 +233,7 @@ describe('Bot test', () => {
     discordMock = newDiscordMockRepository();
     fourthwallMock = newFourthwallMockRepository();
     githubMock = newGithubMockRepository();
+    gitlabMock = newGitlabMockRepository();
     loopDedupeMock = newLoopDedupeMockRepository();
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
@@ -241,6 +250,7 @@ describe('Bot test', () => {
       discordMock,
       fourthwallMock,
       githubMock,
+      gitlabMock,
       loopDedupeMock,
       outlineMock,
       mattermostMock,
@@ -2373,6 +2383,406 @@ describe('Bot test', () => {
 
       expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-core', 7, true);
       expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+    });
+
+    describe('GitLab', () => {
+      const GRAYJAY = expanderGroup('grayjay', [
+        'gitlab.futo.org/videostreaming/grayjay',
+        'gitlab.futo.org/videostreaming/plugins/kick',
+      ]);
+      const item = (kind: GitlabItemKind, title: string, path: string, iid: number, updatedAt = new Date(0)) =>
+        ({ kind, title, url: `https://gitlab.futo.org/${path}/-/${kind}/${iid}`, updatedAt }) satisfies GitlabItem;
+      const withItems = (...items: (GitlabItem & { path: string; iid: number })[]) =>
+        gitlabMock.getItem.mockImplementation(async (path, kind, iid) => {
+          const found = items.find(
+            (candidate) => candidate.path === path && candidate.kind === kind && candidate.iid === iid,
+          );
+          return found && { kind: found.kind, title: found.title, url: found.url, updatedAt: found.updatedAt };
+        });
+      const located = (kind: GitlabItemKind, title: string, path: string, iid: number, updatedAt?: Date) => ({
+        ...item(kind, title, path, iid, updatedAt),
+        path,
+        iid,
+      });
+      const reply = () => zulipMock.sendMessage.mock.calls.map(([message]) => message.content);
+
+      it('should expand issue and merge request links to any project in a stream with a group', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        withItems(
+          located('issues', 'Quoted posts', 'harbor/harbor', 310),
+          located('merge_requests', 'Fixed casting', 'videostreaming/grayjay', 194),
+        );
+
+        await send(
+          'https://gitlab.futo.org/harbor/harbor/-/issues/310 and https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/194',
+        );
+
+        expect(gitlabMock.getItem.mock.calls).toEqual([
+          ['harbor/harbor', 'issues', 310],
+          ['videostreaming/grayjay', 'merge_requests', 194],
+        ]);
+        expect(reply()).toEqual([
+          [
+            '[Issue] Quoted posts ([harbor/harbor#310](https://gitlab.futo.org/harbor/harbor/-/issues/310))',
+            '[Merge Request] Fixed casting ([videostreaming/grayjay#194](https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/194))',
+          ].join('\n'),
+        ]);
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      });
+
+      it('should expand no GitLab link in a stream without a group', async () => {
+        await setUp({ groups: [FHS], streamGroups: [] });
+
+        await send('https://gitlab.futo.org/harbor/harbor/-/issues/310');
+
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should fetch a link repeated in another case once', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+
+        await send(
+          'https://gitlab.futo.org/harbor/harbor/-/issues/310 https://gitlab.futo.org/Harbor/Harbor/-/issues/310',
+        );
+
+        expect(gitlabMock.getItem).toHaveBeenCalledExactlyOnceWith('harbor/harbor', 'issues', 310);
+      });
+
+      it('should read a work item link as an issue, and fetch it once beside its issue link', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+
+        await send(
+          'https://gitlab.futo.org/videostreaming/grayjay/-/work_items/1 https://gitlab.futo.org/videostreaming/grayjay/-/issues/1',
+        );
+
+        expect(gitlabMock.getItem).toHaveBeenCalledExactlyOnceWith('videostreaming/grayjay', 'issues', 1);
+      });
+
+      it.each([
+        { newer: 'merge_requests' as const, title: '[Merge Request] Fix the player' },
+        { newer: 'issues' as const, title: '[Issue] The player crashes' },
+      ])(
+        'should show the more recently updated of the issue and merge request #N, $newer newer',
+        async ({ newer, title }) => {
+          await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+          withItems(
+            located('issues', 'The player crashes', 'videostreaming/grayjay', 7, weeksAgo(newer === 'issues' ? 0 : 3)),
+            located(
+              'merge_requests',
+              'Fix the player',
+              'videostreaming/grayjay',
+              7,
+              weeksAgo(newer === 'issues' ? 3 : 0),
+            ),
+          );
+
+          await send('#7');
+
+          expect(gitlabMock.getItem.mock.calls).toEqual([
+            ['videostreaming/grayjay', 'issues', 7],
+            ['videostreaming/grayjay', 'merge_requests', 7],
+          ]);
+          expect(reply()).toHaveLength(1);
+          expect(reply()[0]).toMatch(
+            new RegExp(`^${title.replaceAll(/[[\]]/g, '\\$&')} \\(\\[videostreaming/grayjay#7\\]`),
+          );
+        },
+      );
+
+      it('should show #N when only one kind has that number', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+        withItems(located('merge_requests', 'Fix the player', 'videostreaming/grayjay', 7));
+
+        await send('#7');
+
+        expect(reply()).toEqual([
+          '[Merge Request] Fix the player ([videostreaming/grayjay#7](https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/7))',
+        ]);
+      });
+
+      it('should post nothing when neither kind has that number', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+
+        await send('#7');
+
+        expect(gitlabMock.getItem).toHaveBeenCalledTimes(2);
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should drop a bare #N below the threshold of a GitLab default', async () => {
+        await setUp({ groups: [{ ...GRAYJAY, threshold: 100 }], streamGroups: ['grayjay'] });
+
+        await send('#5');
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+
+        await send('#150');
+        expect(gitlabMock.getItem).toHaveBeenCalledWith('videostreaming/grayjay', 'issues', 150);
+      });
+
+      it.each([
+        { content: 'grayjay#7', path: 'videostreaming/grayjay' },
+        { content: 'GrayJay#7', path: 'videostreaming/grayjay' },
+        { content: 'VideoStreaming/GrayJay#7', path: 'videostreaming/grayjay' },
+        { content: 'plugins/kick#7', path: 'videostreaming/plugins/kick' },
+        { content: 'kick#7', path: 'videostreaming/plugins/kick' },
+      ])('should resolve $content to the GitLab project in the stream groups', async ({ content, path }) => {
+        await setUp({ groups: [FHS, GRAYJAY], streamGroups: ['fhs', 'grayjay'] });
+
+        await send(content);
+
+        expect(gitlabMock.getItem.mock.calls).toEqual([
+          [path, 'issues', 7],
+          [path, 'merge_requests', 7],
+        ]);
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      });
+
+      it('should keep owner/name#N that matches no GitLab project on GitHub', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+
+        await send('octokit/rest.js#5');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'octokit',
+          'rest.js',
+          5,
+          undefined,
+          true,
+        );
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+      });
+
+      it('should keep a github.com link on GitHub when its owner/name ends a GitLab project path', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+
+        await send('https://github.com/videostreaming/grayjay/issues/5');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'videostreaming',
+          'grayjay',
+          5,
+          undefined,
+          true,
+        );
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+      });
+
+      it('should send name#N that matches nothing to that name beside a GitLab default', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+
+        await send('other#5');
+
+        expect(gitlabMock.getItem.mock.calls).toEqual([
+          ['videostreaming/other', 'issues', 5],
+          ['videostreaming/other', 'merge_requests', 5],
+        ]);
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      });
+
+      const fileAt = (ref: string, file: string, lines: string[]) =>
+        gitlabMock.getFileContent.mockImplementation(async (_, givenRef, givenFile) =>
+          givenRef === ref && givenFile === file ? lines : undefined,
+        );
+
+      it.each(['#L2-4', '#L2-L4'])('should post the lines of a GitLab permalink ending %s', async (anchor) => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        fileAt('master', 'app/src/Main File.kt', ['one', 'two', 'three', 'four', 'five']);
+
+        await send(`https://gitlab.futo.org/videostreaming/grayjay/-/blob/master/app/src/Main%20File.kt${anchor}`);
+
+        expect(gitlabMock.getFileContent.mock.calls).toEqual([
+          ['videostreaming/grayjay', 'master', 'app/src/Main File.kt'],
+          ['videostreaming/grayjay', 'master/app', 'src/Main File.kt'],
+          ['videostreaming/grayjay', 'master/app/src', 'Main File.kt'],
+        ]);
+        expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
+        expect(reply()).toEqual(['```kt\ntwo\nthree\nfour\n```']);
+      });
+
+      it('should find the file of a permalink whose ref holds a slash', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        fileAt('feature/player', 'src/Main.kt', ['one', 'two']);
+
+        await send('https://gitlab.futo.org/videostreaming/grayjay/-/blob/feature/player/src/Main.kt#L2');
+
+        expect(reply()).toEqual(['```kt\ntwo\n```']);
+      });
+
+      it('should take the longest ref that has the file, as GitLab does', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        gitlabMock.getFileContent.mockImplementation(async (_, ref) =>
+          ref === 'feature' ? ['from feature'] : ref === 'feature/player' ? ['from feature/player'] : undefined,
+        );
+
+        await send('https://gitlab.futo.org/videostreaming/grayjay/-/blob/feature/player/src/Main.kt#L1');
+
+        expect(reply()).toEqual(['```kt\nfrom feature/player\n```']);
+      });
+
+      it('should try no more than five leading segments as the ref', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+
+        await send('https://gitlab.futo.org/videostreaming/grayjay/-/blob/a/b/c/d/e/f/g/Main.kt#L1');
+
+        expect(gitlabMock.getFileContent.mock.calls.map(([, ref]) => ref)).toEqual([
+          'a',
+          'a/b',
+          'a/b/c',
+          'a/b/c/d',
+          'a/b/c/d/e',
+        ]);
+      });
+
+      it('should skip a GitLab permalink of more than 20 lines', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        fileAt(
+          'master',
+          'app/Main.kt',
+          Array.from({ length: 30 }, (_, index) => `line ${index}`),
+        );
+
+        await send('https://gitlab.futo.org/videostreaming/grayjay/-/blob/master/app/Main.kt#L1-25');
+
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should skip a permalink with a malformed escape and still expand the rest of the message', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        fileAt('main', 'Main.kt', ['fine']);
+        gitlabMock.getItem.mockResolvedValue({
+          kind: 'issues',
+          title: 'Broken',
+          url: 'https://gitlab.futo.org/videostreaming/grayjay/-/issues/3',
+          updatedAt: new Date(),
+        });
+
+        await send(
+          [
+            'https://gitlab.futo.org/videostreaming/grayjay/-/blob/main/file%.kt#L1',
+            'https://github.com/immich-app/immich/blob/main/bad%zz.ts#L1',
+            'https://gitlab.futo.org/videostreaming/grayjay/-/blob/main/Main.kt#L1',
+            'https://gitlab.futo.org/videostreaming/grayjay/-/issues/3',
+          ].join(' '),
+        );
+
+        expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
+        expect(reply()).toEqual([
+          '```kt\nfine\n```\n[Issue] Broken ([videostreaming/grayjay#3](https://gitlab.futo.org/videostreaming/grayjay/-/issues/3))',
+        ]);
+      });
+
+      it('should fetch the snippets of a message at once, not one after another', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        const pending: (() => void)[] = [];
+        gitlabMock.getFileContent.mockImplementation(
+          () => new Promise((resolve) => pending.push(() => resolve(['line']))),
+        );
+
+        const sending = send(
+          [
+            'https://gitlab.futo.org/videostreaming/grayjay/-/blob/main/A.kt#L1',
+            'https://gitlab.futo.org/videostreaming/grayjay/-/blob/main/B.kt#L1',
+          ].join(' '),
+        );
+        await vitest.waitFor(() => expect(gitlabMock.getFileContent).toHaveBeenCalledTimes(2));
+        for (const resolve of pending) {
+          resolve();
+        }
+        await sending;
+
+        expect(reply()).toEqual(['```kt\nline\n```\n```kt\nline\n```']);
+      });
+
+      it('should read the files of the first five permalinks of a message only', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+
+        await send(
+          Array.from(
+            { length: 7 },
+            (_, index) => `https://gitlab.futo.org/videostreaming/grayjay/-/blob/main/File${index}.kt#L1`,
+          ).join(' '),
+        );
+
+        expect(gitlabMock.getFileContent.mock.calls.map(([, , file]) => file)).toEqual([
+          'File0.kt',
+          'File1.kt',
+          'File2.kt',
+          'File3.kt',
+          'File4.kt',
+        ]);
+      });
+
+      it('should read the first five permalinks of a message across GitHub and GitLab, in order', async () => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        const github = (name: string) => `https://github.com/immich-app/immich/blob/main/${name}.ts#L1`;
+        const gitlab = (name: string) => `https://gitlab.futo.org/videostreaming/grayjay/-/blob/main/${name}.kt#L1`;
+
+        await send(
+          [github('a'), gitlab('b'), gitlab('c'), github('d'), gitlab('e'), github('f'), gitlab('g')].join(' '),
+        );
+
+        expect(githubMock.getRepositoryFileContent.mock.calls.map(([, , , file]) => file)).toEqual(['a.ts', 'd.ts']);
+        expect(gitlabMock.getFileContent.mock.calls.map(([, , file]) => file)).toEqual(['b.kt', 'c.kt', 'e.kt']);
+      });
+
+      it('should leave the permalinks of Discord and Mattermost uncapped, read five at a time, in order', async () => {
+        let running = 0;
+        let mostRunning = 0;
+        githubMock.getRepositoryFileContent.mockImplementation(async (_org, _repo, _ref, path) => {
+          running++;
+          mostRunning = Math.max(mostRunning, running);
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          running--;
+          return [path];
+        });
+
+        const snippets = await sut.handleGithubFileReferences(
+          Array.from({ length: 7 }, (_, index) => `https://github.com/immich-app/immich/blob/main/${index}.ts#L1`).join(
+            ' ',
+          ),
+          false,
+        );
+
+        expect(githubMock.getRepositoryFileContent).toHaveBeenCalledTimes(7);
+        expect(mostRunning).toBe(5);
+        expect(snippets).toEqual(Array.from({ length: 7 }, (_, index) => `\`\`\`ts\n${index}.ts\n\`\`\``));
+      });
+
+      it('should post an item once when #N and its link both reach it', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+        gitlabMock.getItem.mockImplementation(async (_, kind) =>
+          kind === 'issues'
+            ? {
+                kind,
+                title: 'Seven',
+                url: 'https://gitlab.futo.org/videostreaming/grayjay/-/issues/7',
+                updatedAt: new Date(),
+              }
+            : undefined,
+        );
+
+        await send('#7 https://gitlab.futo.org/videostreaming/grayjay/-/issues/7');
+
+        expect(reply()).toEqual([
+          '[Issue] Seven ([videostreaming/grayjay#7](https://gitlab.futo.org/videostreaming/grayjay/-/issues/7))',
+        ]);
+      });
+
+      it('should keep GitHub permalinks on GitHub', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+
+        await send('https://github.com/immich-app/immich/blob/main/server/src/main.ts#L1');
+
+        expect(githubMock.getRepositoryFileContent).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'immich',
+          'main',
+          'server/src/main.ts',
+          true,
+        );
+        expect(gitlabMock.getFileContent).not.toHaveBeenCalled();
+      });
     });
   });
 });

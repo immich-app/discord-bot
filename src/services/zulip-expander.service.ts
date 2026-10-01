@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 
 export type ExpanderGroup = { name: string; repositories: string[]; threshold: number };
@@ -20,6 +21,18 @@ type Cache = {
 };
 
 export const sameRepository = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+const GITLAB_PREFIX = `${Constants.Gitlab.Host}/`;
+
+export const isGitlabRepository = (repository: string) => repository.toLowerCase().startsWith(GITLAB_PREFIX);
+
+/** The project's path on GitLab, `namespace/project`. */
+export const gitlabPath = (repository: string) => repository.slice(GITLAB_PREFIX.length);
+
+/** The repository named in full or by the end of its name: `name`, `owner/name`, a GitLab path without its host. */
+export const findRepository = (repositories: string[], wanted: string) =>
+  repositories.find((candidate) => sameRepository(candidate, wanted)) ??
+  repositories.find((candidate) => candidate.toLowerCase().endsWith(`/${wanted.toLowerCase()}`));
 
 const hasRepository = (repositories: string[], repository: string) =>
   repositories.some((candidate) => sameRepository(candidate, repository));
