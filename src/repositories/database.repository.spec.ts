@@ -1,7 +1,8 @@
 import { Kysely, sql } from 'kysely';
 import { DatabaseRepository } from 'src/repositories/database.repository';
 import { Database } from 'src/schema';
-import { down, up } from 'src/schema/migrations/1790263846796-ZulipExpanders';
+import * as expanders from 'src/schema/migrations/1790263846796-ZulipExpanders';
+import * as groups from 'src/schema/migrations/1790852102345-ZulipExpanderGroups';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -11,7 +12,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity and zulip_expander rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity and zulip_expander* rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -19,7 +20,9 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
   beforeEach(async () => {
     await db.deleteFrom('mirror_link').execute();
     await db.deleteFrom('mirror_identity').execute();
+    await db.deleteFrom('zulip_expander_default').execute();
     await db.deleteFrom('zulip_expander').execute();
+    await db.deleteFrom('zulip_expander_group').execute();
   });
 
   afterAll(async () => {
@@ -90,48 +93,146 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
 
   describe('zulip expanders', () => {
     const streams = (rows: { streamId: number }[]) => rows.map(({ streamId }) => streamId);
+    const group = (name: string, repositories = ['immich-app/immich']) =>
+      sut.createZulipExpanderGroup({ name, repositories, createdBy: 'Alice' });
 
-    it('should seed GitHub expansion in the Immich stream and every immich team stream', async () => {
+    it('should seed GitHub expansion of immich-app/immich in the Immich stream and every immich team stream', async () => {
       const rolledBack = new Error('rolled back');
       await expect(
         db.transaction().execute(async (trx) => {
-          await down(trx);
-          await up(trx);
+          await groups.down(trx);
+          await expanders.down(trx);
+          await expanders.up(trx);
+          await groups.up(trx);
           const rows = await trx.selectFrom('zulip_expander').selectAll().orderBy('streamId').execute();
           expect(streams(rows)).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
-          expect(new Set(rows.map(({ createdBy }) => createdBy))).toEqual(new Set(['migration']));
+          expect(new Set(rows.map(({ groupName }) => groupName))).toEqual(new Set(['immich']));
+          expect(
+            await trx.selectFrom('zulip_expander_group').select(['name', 'repositories', 'threshold']).execute(),
+          ).toEqual([{ name: 'immich', repositories: ['immich-app/immich'], threshold: 1000 }]);
           throw rolledBack;
         }),
       ).rejects.toBe(rolledBack);
     });
 
-    it('should add a stream once, keep who added it first, and list by stream', async () => {
-      expect(await sut.addZulipExpander(120, 'Alice on Zulip (user 12)')).toBe(true);
-      expect(await sut.addZulipExpander(120, 'Bob on Zulip (user 13)')).toBe(false);
-      expect(await sut.addZulipExpander(54, 'Bob on Zulip (user 13)')).toBe(true);
+    it('should keep one group per stream when the group migration is reverted', async () => {
+      const rolledBack = new Error('rolled back');
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await group('immich');
+          await group('fhs', ['futo-org/fhs-core']);
+          await trx
+            .insertInto('zulip_expander')
+            .values([
+              { streamId: 54, groupName: 'immich', createdBy: 'Alice', createdAt: new Date(1000) },
+              { streamId: 54, groupName: 'fhs', createdBy: 'Alice', createdAt: new Date(2000) },
+            ])
+            .execute();
+          await groups.down(trx);
+          expect(await sql`SELECT "streamId" FROM "zulip_expander"`.execute(trx)).toMatchObject({
+            rows: [{ streamId: 54 }],
+          });
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+    });
 
-      const rows = await sut.getZulipExpanders();
-      expect(rows).toEqual([
-        { streamId: 54, createdBy: 'Bob on Zulip (user 13)', createdAt: expect.any(Date) },
-        { streamId: 120, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
+    it('should create a group once and list the groups by name', async () => {
+      expect(await group('immich')).toBe(true);
+      expect(await group('immich', ['futo-org/fhs-core'])).toBe(false);
+      expect(await group('fhs', ['futo-org/fhs-core', 'futo-org/grayjay'])).toBe(true);
+
+      expect(await sut.getZulipExpanderGroups()).toEqual([
+        {
+          name: 'fhs',
+          repositories: ['futo-org/fhs-core', 'futo-org/grayjay'],
+          threshold: 0,
+          createdBy: 'Alice',
+          createdAt: expect.any(Date),
+        },
+        {
+          name: 'immich',
+          repositories: ['immich-app/immich'],
+          threshold: 0,
+          createdBy: 'Alice',
+          createdAt: expect.any(Date),
+        },
       ]);
     });
 
-    it('should remove only that stream, and resolve to whether it was there', async () => {
-      await sut.addZulipExpander(120, 'Alice');
-      await sut.addZulipExpander(121, 'Alice');
+    it('should update a group, and resolve to whether there was one', async () => {
+      await group('fhs', ['futo-org/fhs-core']);
 
-      expect(await sut.removeZulipExpander(120)).toBe(true);
-      expect(await sut.removeZulipExpander(120)).toBe(false);
-      expect(streams(await sut.getZulipExpanders())).toEqual([121]);
+      expect(await sut.updateZulipExpanderGroup('fhs', { repositories: ['futo-org/grayjay'], threshold: 10 })).toBe(
+        true,
+      );
+      expect(await sut.updateZulipExpanderGroup('nope', { threshold: 10 })).toBe(false);
+      expect(await sut.getZulipExpanderGroups()).toMatchObject([
+        { name: 'fhs', repositories: ['futo-org/grayjay'], threshold: 10 },
+      ]);
     });
 
-    it('should refuse a second row of the same stream', async () => {
-      await db.insertInto('zulip_expander').values({ streamId: 120, createdBy: 'Alice' }).execute();
+    it('should turn a group on in a stream once, and list by stream then by when it was turned on', async () => {
+      await group('immich');
+      await group('fhs', ['futo-org/fhs-core']);
 
-      await expect(
-        db.insertInto('zulip_expander').values({ streamId: 120, createdBy: 'Bob' }).execute(),
-      ).rejects.toThrow('zulip_expander_pkey');
+      expect(await sut.addZulipExpander(120, 'immich', 'Alice on Zulip (user 12)')).toBe(true);
+      expect(await sut.addZulipExpander(120, 'immich', 'Bob on Zulip (user 13)')).toBe(false);
+      expect(await sut.addZulipExpander(120, 'fhs', 'Bob on Zulip (user 13)')).toBe(true);
+      expect(await sut.addZulipExpander(54, 'fhs', 'Bob on Zulip (user 13)')).toBe(true);
+
+      expect(await sut.getZulipExpanders()).toEqual([
+        { streamId: 54, groupName: 'fhs', createdBy: 'Bob on Zulip (user 13)', createdAt: expect.any(Date) },
+        { streamId: 120, groupName: 'immich', createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
+        { streamId: 120, groupName: 'fhs', createdBy: 'Bob on Zulip (user 13)', createdAt: expect.any(Date) },
+      ]);
+    });
+
+    it('should refuse turning on a group that does not exist', async () => {
+      await expect(sut.addZulipExpander(120, 'nope', 'Alice')).rejects.toThrow('zulip_expander_groupName_fkey');
+    });
+
+    it('should turn off one group or every group of a stream, and drop its default with its last group', async () => {
+      await group('immich');
+      await group('fhs', ['futo-org/fhs-core']);
+      await sut.addZulipExpander(120, 'immich', 'Alice');
+      await sut.addZulipExpander(120, 'fhs', 'Alice');
+      await sut.addZulipExpander(121, 'immich', 'Alice');
+      await sut.setZulipExpanderDefault(120, 'futo-org/fhs-core', 'Alice');
+      await sut.setZulipExpanderDefault(121, 'immich-app/immich', 'Alice');
+
+      expect(await sut.removeZulipExpander(120, 'fhs')).toEqual(['fhs']);
+      expect(await sut.removeZulipExpander(120, 'fhs')).toEqual([]);
+      expect(streams(await sut.getZulipExpanderDefaults())).toEqual([120, 121]);
+
+      expect(await sut.removeZulipExpander(121)).toEqual(['immich']);
+      expect(streams(await sut.getZulipExpanders())).toEqual([120]);
+      expect(streams(await sut.getZulipExpanderDefaults())).toEqual([120]);
+    });
+
+    it('should set a default once per stream, replacing the one before', async () => {
+      await sut.setZulipExpanderDefault(120, 'immich-app/immich', 'Alice');
+      await sut.setZulipExpanderDefault(120, 'futo-org/fhs-core', 'Bob');
+
+      expect(await sut.getZulipExpanderDefaults()).toEqual([
+        { streamId: 120, repository: 'futo-org/fhs-core', createdBy: 'Bob', createdAt: expect.any(Date) },
+      ]);
+    });
+
+    it('should delete a group, turn it off everywhere and drop the defaults of streams left with none', async () => {
+      await group('immich');
+      await group('fhs', ['futo-org/fhs-core']);
+      await sut.addZulipExpander(120, 'fhs', 'Alice');
+      await sut.addZulipExpander(121, 'fhs', 'Alice');
+      await sut.addZulipExpander(121, 'immich', 'Alice');
+      await sut.setZulipExpanderDefault(120, 'futo-org/fhs-core', 'Alice');
+      await sut.setZulipExpanderDefault(121, 'immich-app/immich', 'Alice');
+
+      expect(await sut.removeZulipExpanderGroup('fhs')).toBe(true);
+      expect(await sut.removeZulipExpanderGroup('fhs')).toBe(false);
+
+      expect(await sut.getZulipExpanders()).toMatchObject([{ streamId: 121, groupName: 'immich' }]);
+      expect(streams(await sut.getZulipExpanderDefaults())).toEqual([121]);
     });
   });
 

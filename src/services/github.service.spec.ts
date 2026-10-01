@@ -19,6 +19,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   isCollaborator: vitest.fn(),
   getPullRequests: vitest.fn(),
   getPullRequest: vitest.fn(),
+  getRepositoryName: vitest.fn(),
 });
 
 const graphqlPullRequest = (number: number, overrides: Partial<PullRequest> = {}): PullRequest => ({

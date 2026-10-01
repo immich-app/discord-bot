@@ -18,6 +18,7 @@ import {
   NewPullRequest,
   NewRSSFeed,
   NewScheduledMessage,
+  NewZulipExpanderGroup,
   PullRequest,
   RSSFeed,
   ScheduledMessage,
@@ -27,7 +28,10 @@ import {
   UpdateMirrorMessage,
   UpdateRSSFeed,
   UpdateScheduledMessage,
+  UpdateZulipExpanderGroup,
   ZulipExpander,
+  ZulipExpanderDefault,
+  ZulipExpanderGroup,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
@@ -74,6 +78,7 @@ export interface IDatabaseRepository {
   getPullRequestById(nodeId: string): Promise<PullRequest | undefined>;
   updatePullRequest(entity: Updateable<PullRequestTable> & { nodeId: string }): Promise<void>;
   upsertPullRequest({ nodeId, ...entity }: NewPullRequest): Promise<void>;
+  getPullRequestsByNumber(number: number): Promise<PullRequest[]>;
   getLatestPullRequestByNumber(number: number): Promise<PullRequest | undefined>;
   getMirrorConversation(id: string): Promise<MirrorConversation | undefined>;
   getMirrorConversationByDiscord(
@@ -118,9 +123,18 @@ export interface IDatabaseRepository {
   setMirrorIdentity(zulipUserId: number, discordUserId: string): Promise<MirrorIdentity[]>;
   /** Resolves to the removed identity, `undefined` when there was none. */
   removeMirrorIdentity(owner: MirrorIdentityOwner): Promise<MirrorIdentity | undefined>;
+  getZulipExpanderGroups(): Promise<ZulipExpanderGroup[]>;
   getZulipExpanders(): Promise<ZulipExpander[]>;
-  /** Resolves to whether the stream was added, `false` when it was there already. */
-  addZulipExpander(streamId: number, createdBy: string): Promise<boolean>;
-  /** Resolves to whether the stream was there to remove. */
-  removeZulipExpander(streamId: number): Promise<boolean>;
+  getZulipExpanderDefaults(): Promise<ZulipExpanderDefault[]>;
+  /** Resolves to whether it was created, `false` when the name is taken. */
+  createZulipExpanderGroup(group: NewZulipExpanderGroup): Promise<boolean>;
+  /** Resolves to whether there was a group of that name. */
+  updateZulipExpanderGroup(name: string, update: UpdateZulipExpanderGroup): Promise<boolean>;
+  /** Also turns the group off in every stream; resolves to whether there was one. */
+  removeZulipExpanderGroup(name: string): Promise<boolean>;
+  /** Resolves to whether it was added, `false` when the group was on in the stream already. */
+  addZulipExpander(streamId: number, groupName: string, createdBy: string): Promise<boolean>;
+  /** Every group of the stream when none is named; resolves to the groups it turned off. */
+  removeZulipExpander(streamId: number, groupName?: string): Promise<string[]>;
+  setZulipExpanderDefault(streamId: number, repository: string, createdBy: string): Promise<void>;
 }

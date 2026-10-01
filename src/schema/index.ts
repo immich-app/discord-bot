@@ -12,6 +12,8 @@ import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 import { RSSFeedTable } from 'src/schema/tables/rss-feeds.table';
 import { ScheduledMessageTable } from 'src/schema/tables/scheduled-messages.table';
 import { SponsorTable } from 'src/schema/tables/sponsor.table';
+import { ZulipExpanderDefaultTable } from 'src/schema/tables/zulip-expander-default.table';
+import { ZulipExpanderGroupTable } from 'src/schema/tables/zulip-expander-group.table';
 import { ZulipExpanderTable } from 'src/schema/tables/zulip-expander.table';
 
 @Extensions(['uuid-ossp'])
@@ -30,7 +32,9 @@ export class DiscordBotDatabase {
     MirrorMessageTable,
     MirrorLinkTable,
     MirrorIdentityTable,
+    ZulipExpanderGroupTable,
     ZulipExpanderTable,
+    ZulipExpanderDefaultTable,
   ];
 }
 
@@ -78,6 +82,10 @@ export type MirrorIdentity = Selectable<MirrorIdentityTable>;
 export type NewMirrorIdentity = Insertable<MirrorIdentityTable>;
 
 export type ZulipExpander = Selectable<ZulipExpanderTable>;
+export type ZulipExpanderGroup = Selectable<ZulipExpanderGroupTable>;
+export type NewZulipExpanderGroup = Insertable<ZulipExpanderGroupTable>;
+export type UpdateZulipExpanderGroup = Updateable<ZulipExpanderGroupTable>;
+export type ZulipExpanderDefault = Selectable<ZulipExpanderDefaultTable>;
 
 export interface Database {
   payment: PaymentTable;
@@ -92,5 +100,7 @@ export interface Database {
   mirror_message: MirrorMessageTable;
   mirror_link: MirrorLinkTable;
   mirror_identity: MirrorIdentityTable;
+  zulip_expander_group: ZulipExpanderGroupTable;
   zulip_expander: ZulipExpanderTable;
+  zulip_expander_default: ZulipExpanderDefaultTable;
 }

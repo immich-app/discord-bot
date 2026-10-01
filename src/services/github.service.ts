@@ -48,6 +48,11 @@ export class GithubService {
     return pullRequests;
   }
 
+  getRepositoryName(fullName: string) {
+    const [org, repo] = fullName.split('/');
+    return this.repository.getRepositoryName({ org, repo });
+  }
+
   async getOpenPullRequest(number: number) {
     const pullRequest = await this.repository.getPullRequest({ ...IMMICH, number });
     return pullRequest?.state === 'OPEN' ? toPullRequestEvent(pullRequest) : undefined;
