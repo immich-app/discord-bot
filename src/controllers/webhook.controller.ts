@@ -1,9 +1,8 @@
-import { Body, Controller, Headers, HttpCode, Injectable, Param, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Headers, Injectable, Param, Post, Req, Res } from '@nestjs/common';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import { Request, Response } from 'express';
 import { GithubStatusComponent, GithubStatusIncident, StripeBase } from 'src/dtos/webhook.dto';
 import { FourthwallOrderCreateWebhook, FourthwallOrderUpdateWebhook } from 'src/interfaces/fourthwall.interface';
-import { CommandWebhookRequest, DialogResponse } from 'src/interfaces/mattermost.interface';
 import { WebhookService } from 'src/services/webhook.service';
 
 @Injectable()
@@ -47,17 +46,5 @@ export class WebhookController {
     @Param('slug') slug: string,
   ) {
     await this.service.onFourthwallOrder(dto, slug);
-  }
-
-  @Post('mattermost/command/:slug')
-  @HttpCode(200)
-  async onMattermostCommand(@Body() dto: CommandWebhookRequest<never>, @Param('slug') slug: string) {
-    return this.service.onMattermostCommand(dto, slug);
-  }
-
-  @Post('mattermost/dialog/:slug')
-  @HttpCode(200)
-  async onMattermostDialog(@Body() dto: DialogResponse, @Param('slug') slug: string) {
-    return this.service.onMattermostDialog(dto, slug);
   }
 }

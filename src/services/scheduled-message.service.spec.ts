@@ -2,7 +2,6 @@ import { Logger } from '@nestjs/common';
 import { MessageFlags, ModalBuilder, ModalSubmitInteraction } from 'discord.js';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { ScheduledMessage } from 'src/schema';
 import { ScheduledMessageService } from 'src/services/scheduled-message.service';
@@ -35,23 +34,6 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   setThreadArchived: vitest.fn(),
   createThread: vitest.fn(),
   updateThread: vitest.fn(),
-});
-
-const newMattermostMock = (): Mocked<IMattermostInterface> => ({
-  isInitialised: vitest.fn().mockReturnValue(true),
-  createEmote: vitest.fn(),
-  init: vitest.fn(),
-  joinChannel: vitest.fn(),
-  registerCommand: vitest.fn() as any,
-  registerEventListener: vitest.fn() as any,
-  reply: vitest.fn(),
-  runCommand: vitest.fn(),
-  send: vitest.fn(),
-  listEmoji: vitest.fn(),
-  streamChannels: vitest.fn(),
-  updatePost: vitest.fn(),
-  openDialog: vitest.fn(),
-  submitDialog: vitest.fn(),
 });
 
 const newZulipMock = (): Mocked<IZulipInterface> => ({
@@ -99,27 +81,14 @@ describe('ScheduledMessageService', () => {
   let sut: ScheduledMessageService;
   let databaseMock: ReturnType<typeof newDatabaseMock>;
   let discordMock: Mocked<IDiscordInterface>;
-  let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
 
   beforeEach(() => {
     databaseMock = newDatabaseMock();
     discordMock = newDiscordMock();
-    mattermostMock = newMattermostMock();
     zulipMock = newZulipMock();
-    sut = new ScheduledMessageService(
-      databaseMock as unknown as IDatabaseRepository,
-      discordMock,
-      mattermostMock,
-      zulipMock,
-    );
+    sut = new ScheduledMessageService(databaseMock as unknown as IDatabaseRepository, discordMock, zulipMock);
   });
-
-  const mattermostCommand = (trigger: string) => {
-    const registration = mattermostMock.registerCommand.mock.calls.find(([command]) => command.trigger === trigger);
-    expect(registration, trigger).toBeDefined();
-    return registration![1] as (request: unknown) => Promise<unknown>;
-  };
 
   describe('onModuleInit', () => {
     it('should load and register all scheduled messages from the database', async () => {
@@ -183,9 +152,9 @@ describe('ScheduledMessageService', () => {
       const msg = makeScheduledMessage({ id: 'rm-1', name: 'to-remove' });
       databaseMock.getScheduledMessage.mockResolvedValue(msg);
 
-      const result = await sut.removeScheduledMessage('to-remove', 'mattermost');
+      const result = await sut.removeScheduledMessage('to-remove', 'zulip');
 
-      expect(databaseMock.getScheduledMessage).toHaveBeenCalledExactlyOnceWith('to-remove', 'mattermost');
+      expect(databaseMock.getScheduledMessage).toHaveBeenCalledExactlyOnceWith('to-remove', 'zulip');
       expect(databaseMock.removeScheduledMessage).toHaveBeenCalledWith('rm-1');
       expect(result).toEqual('Removed scheduled message `to-remove`');
     });
@@ -287,7 +256,7 @@ describe('ScheduledMessageService', () => {
       expect(result).toHaveLength(2);
     });
 
-    it.each(['discord', 'mattermost'] as const)(
+    it.each(['discord', 'zulip'] as const)(
       'should pass the %s service through as the database filter and return its rows as they are',
       async (service) => {
         const messages = [makeScheduledMessage({ service })];
@@ -299,92 +268,6 @@ describe('ScheduledMessageService', () => {
         expect(result).toBe(messages);
       },
     );
-  });
-
-  describe('the mattermost commands', () => {
-    const request = {
-      user_id: 'u1',
-      parameters: { name: 'standup', cronExpression: '0 9 * * 1', message: 'Standup in **5 minutes**', channel: 'c1' },
-    };
-
-    beforeEach(async () => {
-      vitest.useFakeTimers();
-      await sut.init();
-    });
-
-    afterEach(() => {
-      vitest.clearAllTimers();
-      vitest.useRealTimers();
-    });
-
-    it('should store a schedule-add as a mattermost row for the mentioned channel, created by the caller', async () => {
-      databaseMock.createScheduledMessage.mockResolvedValue(
-        makeScheduledMessage({ id: 'new-1', name: 'standup', channelId: 'c1', createdBy: 'u1', service: 'mattermost' }),
-      );
-
-      const response = await mattermostCommand('schedule-add')(request);
-
-      expect(databaseMock.createScheduledMessage.mock.calls).toStrictEqual([
-        [
-          {
-            name: 'standup',
-            cronExpression: '0 9 * * 1',
-            message: 'Standup in **5 minutes**',
-            channelId: 'c1',
-            createdBy: 'u1',
-            service: 'mattermost',
-          },
-        ],
-      ]);
-      expect(response).toStrictEqual({
-        response_type: 'in_channel',
-        text: 'Scheduled message `standup` created with cron `0 9 * * 1` in ~c1',
-      });
-    });
-
-    it('should answer an invalid cron expression privately with the error, storing nothing', async () => {
-      const response = await mattermostCommand('schedule-add')({
-        ...request,
-        parameters: { ...request.parameters, cronExpression: 'not a cron' },
-      });
-
-      expect(databaseMock.createScheduledMessage).not.toHaveBeenCalled();
-      expect(response).toStrictEqual({
-        text: 'Failed to create scheduled message: Error: Invalid cron expression not a cron: Error: Unknown alias: not',
-      });
-    });
-
-    it('should answer a failed insert privately with the error', async () => {
-      databaseMock.createScheduledMessage.mockRejectedValue(
-        new Error('duplicate key value violates unique constraint'),
-      );
-
-      const response = await mattermostCommand('schedule-add')(request);
-
-      expect(databaseMock.createScheduledMessage).toHaveBeenCalledOnce();
-      expect(response).toStrictEqual({
-        text: 'Failed to create scheduled message: Error: duplicate key value violates unique constraint',
-      });
-    });
-
-    it('should look a schedule-remove up among mattermost rows only', async () => {
-      databaseMock.getScheduledMessage.mockResolvedValue(undefined);
-
-      const response = await mattermostCommand('schedule-remove')({ parameters: { name: 'to-remove' } });
-
-      expect(databaseMock.getScheduledMessage).toHaveBeenCalledExactlyOnceWith('to-remove', 'mattermost');
-      expect(databaseMock.removeScheduledMessage).not.toHaveBeenCalled();
-      expect(response).toStrictEqual({ response_type: 'in_channel', text: 'Scheduled message not found' });
-    });
-
-    it('should list mattermost rows only for a schedule-list', async () => {
-      databaseMock.getScheduledMessages.mockClear();
-
-      const response = await mattermostCommand('schedule-list')({});
-
-      expect(databaseMock.getScheduledMessages).toHaveBeenCalledExactlyOnceWith('mattermost');
-      expect(response).toStrictEqual({ text: 'No scheduled messages found.' });
-    });
   });
 
   describe('the cron tick', () => {
@@ -440,31 +323,7 @@ describe('ScheduledMessageService', () => {
         expect(discordMock.sendMessage.mock.calls).toStrictEqual([
           [{ channelId: '991930592843272342', message: { content: message, flags } }],
         ]);
-        expect(mattermostMock.send).not.toHaveBeenCalled();
-      },
-    );
-
-    it.each([
-      [true, { remove_link_preview: 'true' }],
-      [false, undefined],
-    ])(
-      'should send a mattermost row as its message, with suppressEmbeds %s as props %j',
-      async (suppressEmbeds, props) => {
-        databaseMock.getScheduledMessages.mockResolvedValue([
-          makeScheduledMessage({
-            cronExpression: everyMinute,
-            channelId: 'mattermost-channel',
-            message,
-            suppressEmbeds,
-            service: 'mattermost',
-          }),
-        ]);
-
-        await sut.init();
-        await nextMinute();
-
-        expect(mattermostMock.send.mock.calls).toStrictEqual([[{ channelId: 'mattermost-channel', message, props }]]);
-        expect(discordMock.sendMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       },
     );
 
@@ -475,10 +334,11 @@ describe('ScheduledMessageService', () => {
           id: '2',
           name: 'b',
           cronExpression: everyMinute,
-          channelId: 'mattermost-1',
+          channelId: '107',
+          topic: 'b',
           message: 'B',
           suppressEmbeds: false,
-          service: 'mattermost',
+          service: 'zulip',
         }),
         makeScheduledMessage({ id: '3', name: 'c', cronExpression: '0 0 1 1 *', channelId: 'discord-2', message: 'C' }),
       ]);
@@ -492,9 +352,9 @@ describe('ScheduledMessageService', () => {
         [{ channelId: 'discord-1', message: { content: 'A', flags: [MessageFlags.SuppressEmbeds] } }],
         [{ channelId: 'discord-1', message: { content: 'A', flags: [MessageFlags.SuppressEmbeds] } }],
       ]);
-      expect(mattermostMock.send.mock.calls).toStrictEqual([
-        [{ channelId: 'mattermost-1', message: 'B', props: undefined }],
-        [{ channelId: 'mattermost-1', message: 'B', props: undefined }],
+      expect(zulipMock.sendMessage.mock.calls).toStrictEqual([
+        [{ stream: 107, topic: 'b', content: 'B' }],
+        [{ stream: 107, topic: 'b', content: 'B' }],
       ]);
     });
 
@@ -521,7 +381,7 @@ describe('ScheduledMessageService', () => {
 
     it.each([
       ['discord', () => discordMock.sendMessage],
-      ['mattermost', () => mattermostMock.send],
+      ['zulip', () => zulipMock.sendMessage],
     ] as const)(
       'should log a failed %s send instead of throwing, and send again on the next tick',
       async (service, send) => {
@@ -587,37 +447,6 @@ describe('ScheduledMessageService', () => {
         [{ channelId: '123456', message: { content: 'Edited', flags: [] } }],
       ]);
     });
-
-    it('should send only the edited message after a Mattermost schedule-edit, which re-registers the job', async () => {
-      const row = makeScheduledMessage({
-        id: 'mm-1',
-        name: 'standup',
-        cronExpression: everyMinute,
-        channelId: 'mattermost-channel',
-        suppressEmbeds: false,
-        service: 'mattermost',
-      });
-      databaseMock.getScheduledMessages.mockResolvedValue([row]);
-      databaseMock.getScheduledMessage.mockResolvedValue(row);
-      databaseMock.updateScheduledMessage.mockResolvedValue({ ...row, message: 'Edited' });
-      mattermostMock.openDialog.mockResolvedValue({
-        cancelled: false,
-        cronExpression: everyMinute,
-        message: 'Edited',
-        suppressEmbeds: 'false',
-      } as any);
-
-      await sut.init();
-      await mattermostCommand('schedule-edit')({ trigger_id: 'trigger-1', parameters: { name: 'standup' } });
-      // The dialog runs detached from the command; let it finish before the tick.
-      await vitest.advanceTimersByTimeAsync(0);
-      expect(databaseMock.updateScheduledMessage).toHaveBeenCalledOnce();
-      await nextMinute();
-
-      expect(mattermostMock.send.mock.calls).toStrictEqual([
-        [{ channelId: 'mattermost-channel', message: 'Edited', props: undefined }],
-      ]);
-    });
   });
 
   describe('zulip rows', () => {
@@ -665,7 +494,6 @@ describe('ScheduledMessageService', () => {
           ],
         ]);
         expect(discordMock.sendMessage).not.toHaveBeenCalled();
-        expect(mattermostMock.send).not.toHaveBeenCalled();
       },
     );
 
@@ -762,62 +590,6 @@ describe('ScheduledMessageService', () => {
       await expect(sut.deleteScheduledMessage('standup', 'zulip')).resolves.toBeUndefined();
 
       expect(databaseMock.removeScheduledMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('the mattermost schedule-edit dialog', () => {
-    const row = makeScheduledMessage({ id: 'mm-1', name: 'standup', service: 'mattermost' });
-
-    beforeEach(async () => {
-      vitest.useFakeTimers();
-      vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
-      databaseMock.getScheduledMessage.mockResolvedValue(row);
-      databaseMock.updateScheduledMessage.mockResolvedValue(row);
-      await sut.init();
-    });
-
-    afterEach(() => {
-      vitest.clearAllTimers();
-      vitest.useRealTimers();
-      vitest.restoreAllMocks();
-    });
-
-    const edit = async (response: Record<string, unknown>) => {
-      mattermostMock.openDialog.mockResolvedValue(response as any);
-      await mattermostCommand('schedule-edit')({ trigger_id: 'trigger-1', parameters: { name: 'standup' } });
-      await vitest.advanceTimersByTimeAsync(0);
-    };
-
-    it('should store the edited fields only, not the rest of the dialog response', async () => {
-      await edit({
-        cancelled: false,
-        cronExpression: '0 9 * * 1',
-        message: 'Edited',
-        suppressEmbeds: false,
-        file_ids: [],
-      });
-
-      expect(databaseMock.updateScheduledMessage).toHaveBeenCalledExactlyOnceWith({
-        name: 'standup',
-        cronExpression: '0 9 * * 1',
-        message: 'Edited',
-        suppressEmbeds: false,
-      });
-    });
-
-    it('should log an invalid cron expression from the dialog and store nothing', async () => {
-      await edit({ cancelled: false, cronExpression: 'not a cron', message: 'Edited' });
-
-      expect(databaseMock.updateScheduledMessage).not.toHaveBeenCalled();
-      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
-        expect.stringMatching(/^Failed to edit scheduled message standup: Error: Invalid cron expression not a cron/),
-      );
-    });
-
-    it('should store nothing when the dialog is cancelled', async () => {
-      await edit({ cancelled: true });
-
-      expect(databaseMock.updateScheduledMessage).not.toHaveBeenCalled();
     });
   });
 });

@@ -2,7 +2,6 @@ import { DateTime, Settings } from 'luxon';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { NotificationService } from 'src/services/notification.service';
@@ -31,23 +30,6 @@ const newOutlineMock = (): Mocked<IOutlineInterface> => ({
   createDocument: vitest.fn(),
   shareDocument: vitest.fn(),
   searchDocuments: vitest.fn(),
-});
-
-const newMattermostMock = (): Mocked<IMattermostInterface> => ({
-  isInitialised: vitest.fn().mockReturnValue(true),
-  createEmote: vitest.fn(),
-  init: vitest.fn(),
-  joinChannel: vitest.fn(),
-  registerCommand: vitest.fn() as any,
-  registerEventListener: vitest.fn() as any,
-  reply: vitest.fn(),
-  runCommand: vitest.fn(),
-  send: vitest.fn(),
-  listEmoji: vitest.fn(),
-  streamChannels: vitest.fn(),
-  updatePost: vitest.fn(),
-  openDialog: vitest.fn(),
-  submitDialog: vitest.fn(),
 });
 
 const newZulipMock = (): Mocked<IZulipInterface> => ({
@@ -88,7 +70,7 @@ describe('ScheduleService', () => {
   let databaseMock: ReturnType<typeof newDatabaseMock>;
   let discordMock: Mocked<IDiscordInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
-  let mattermostMock: Mocked<IMattermostInterface>;
+  let zulipMock: Mocked<IZulipInterface>;
 
   const originalNow = Settings.now;
   const originalZone = Settings.defaultZone;
@@ -102,12 +84,13 @@ describe('ScheduleService', () => {
     databaseMock = newDatabaseMock();
     discordMock = newDiscordMock();
     outlineMock = newOutlineMock();
-    mattermostMock = newMattermostMock();
+    zulipMock = newZulipMock();
+    zulipMock.isInitialised.mockReturnValue(true);
     sut = new ScheduleService(
       databaseMock as unknown as IDatabaseRepository,
       discordMock,
       outlineMock,
-      new NotificationService(discordMock, mattermostMock, newZulipMock()),
+      new NotificationService(discordMock, zulipMock),
     );
   });
 
@@ -135,138 +118,22 @@ describe('ScheduleService', () => {
     it('should post a licenses report followed by an orders report to the purchases channel', async () => {
       await sut.onDailyReport();
 
-      expect(mattermostMock.send).toHaveBeenCalledTimes(2);
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
-
-      const [[licenses], [orders]] = mattermostMock.send.mock.calls;
-      expect(licenses.channelId).toBe(Constants.Mattermost.Channels.Purchases);
-      expect(orders.channelId).toBe(Constants.Mattermost.Channels.Purchases);
-      expect(licenses).not.toHaveProperty('silent');
-      expect(orders).not.toHaveProperty('silent');
-
-      expect(licenses).toMatchInlineSnapshot(`
-        {
-          "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-          "message": "",
-          "props": {
-            "mm_blocks": [
-              {
-                "accent_color": "#9b59b6",
-                "border": true,
-                "content": [
-                  {
-                    "text": "Daily product keys report for September 21, 2026",
-                    "type": "text",
-                  },
-                  {
-                    "text": "Total: $9,825",
-                    "type": "text",
-                  },
-                  {
-                    "type": "divider",
-                  },
-                  {
-                    "columns": [
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Server keys**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "$1,200 - 12 keys",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Client keys**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "$8,625 - 345 keys",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                    ],
-                    "type": "column_set",
-                  },
-                ],
-                "gap": "small",
-                "type": "container",
-              },
-            ],
-          },
-        }
+      expect(zulipMock.sendMessage).toHaveBeenCalledTimes(2);
+      const [[licenses], [orders]] = zulipMock.sendMessage.mock.calls;
+      expect(licenses).toMatchObject({ stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'reports' });
+      expect(orders).toMatchObject({ stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'reports' });
+      expect(licenses.content).toMatchInlineSnapshot(`
+        "🔑 **Daily product keys report for September 21, 2026**
+        Total: $9,825
+        **Server keys:** $1,200 - 12 keys
+        **Client keys:** $8,625 - 345 keys"
       `);
-      expect(orders).toMatchInlineSnapshot(`
-        {
-          "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-          "message": "",
-          "props": {
-            "mm_blocks": [
-              {
-                "accent_color": "#71368a",
-                "border": true,
-                "content": [
-                  {
-                    "text": "Daily orders report for September 21, 2026",
-                    "type": "text",
-                  },
-                  {
-                    "text": "Revenue: 1,234.5 USD; Profit: 678.25 USD",
-                    "type": "text",
-                  },
-                  {
-                    "type": "divider",
-                  },
-                  {
-                    "columns": [
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Revenue**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "1,234.5 USD",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Profit**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "678.25 USD",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                    ],
-                    "type": "column_set",
-                  },
-                ],
-                "gap": "small",
-                "type": "container",
-              },
-            ],
-          },
-        }
+      expect(orders.content).toMatchInlineSnapshot(`
+        "📦 **Daily orders report for September 21, 2026**
+        Revenue: 1,234.5 USD; Profit: 678.25 USD
+        **Revenue:** 1,234.5 USD
+        **Profit:** 678.25 USD"
       `);
     });
 
@@ -275,11 +142,9 @@ describe('ScheduleService', () => {
 
       await sut.onDailyReport();
 
-      const [[licenses], [orders]] = mattermostMock.send.mock.calls;
-      expect((licenses.props as any).mm_blocks[0].content[0].text).toBe(
-        'Daily product keys report for September 30, 2026',
-      );
-      expect((orders.props as any).mm_blocks[0].content[0].text).toBe('Daily orders report for September 30, 2026');
+      const [[licenses], [orders]] = zulipMock.sendMessage.mock.calls;
+      expect(licenses.content).toContain('Daily product keys report for September 30, 2026');
+      expect(orders.content).toContain('Daily orders report for September 30, 2026');
     });
   });
 
@@ -301,138 +166,22 @@ describe('ScheduleService', () => {
     it('should post a licenses report followed by an orders report to the purchases channel', async () => {
       await sut.onWeeklyReport();
 
-      expect(mattermostMock.send).toHaveBeenCalledTimes(2);
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
-
-      const [[licenses], [orders]] = mattermostMock.send.mock.calls;
-      expect(licenses.channelId).toBe(Constants.Mattermost.Channels.Purchases);
-      expect(orders.channelId).toBe(Constants.Mattermost.Channels.Purchases);
-      expect(licenses).not.toHaveProperty('silent');
-      expect(orders).not.toHaveProperty('silent');
-
-      expect(licenses).toMatchInlineSnapshot(`
-        {
-          "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-          "message": "",
-          "props": {
-            "mm_blocks": [
-              {
-                "accent_color": "#9b59b6",
-                "border": true,
-                "content": [
-                  {
-                    "text": "Weekly licenses report for September 16 - September 23",
-                    "type": "text",
-                  },
-                  {
-                    "text": "Total: $9,825",
-                    "type": "text",
-                  },
-                  {
-                    "type": "divider",
-                  },
-                  {
-                    "columns": [
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Server keys**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "$1,200 - 12 keys",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Client keys**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "$8,625 - 345 keys",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                    ],
-                    "type": "column_set",
-                  },
-                ],
-                "gap": "small",
-                "type": "container",
-              },
-            ],
-          },
-        }
+      expect(zulipMock.sendMessage).toHaveBeenCalledTimes(2);
+      const [[licenses], [orders]] = zulipMock.sendMessage.mock.calls;
+      expect(licenses).toMatchObject({ stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'reports' });
+      expect(orders).toMatchObject({ stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'reports' });
+      expect(licenses.content).toMatchInlineSnapshot(`
+        "🔑 **Weekly licenses report for September 16 - September 23**
+        Total: $9,825
+        **Server keys:** $1,200 - 12 keys
+        **Client keys:** $8,625 - 345 keys"
       `);
-      expect(orders).toMatchInlineSnapshot(`
-        {
-          "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-          "message": "",
-          "props": {
-            "mm_blocks": [
-              {
-                "accent_color": "#71368a",
-                "border": true,
-                "content": [
-                  {
-                    "text": "Weekly orders report for September 16 - September 23",
-                    "type": "text",
-                  },
-                  {
-                    "text": "Revenue: 1,234.5 USD; Profit: 678.25 USD",
-                    "type": "text",
-                  },
-                  {
-                    "type": "divider",
-                  },
-                  {
-                    "columns": [
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Revenue**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "1,234.5 USD",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Profit**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "678.25 USD",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                    ],
-                    "type": "column_set",
-                  },
-                ],
-                "gap": "small",
-                "type": "container",
-              },
-            ],
-          },
-        }
+      expect(orders.content).toMatchInlineSnapshot(`
+        "📦 **Weekly orders report for September 16 - September 23**
+        Revenue: 1,234.5 USD; Profit: 678.25 USD
+        **Revenue:** 1,234.5 USD
+        **Profit:** 678.25 USD"
       `);
     });
 
@@ -441,13 +190,9 @@ describe('ScheduleService', () => {
 
       await sut.onWeeklyReport();
 
-      const [[licenses], [orders]] = mattermostMock.send.mock.calls;
-      expect((licenses.props as any).mm_blocks[0].content[0].text).toBe(
-        'Weekly licenses report for September 23 - September 30',
-      );
-      expect((orders.props as any).mm_blocks[0].content[0].text).toBe(
-        'Weekly orders report for September 23 - September 30',
-      );
+      const [[licenses], [orders]] = zulipMock.sendMessage.mock.calls;
+      expect(licenses.content).toContain('Weekly licenses report for September 23 - September 30');
+      expect(orders.content).toContain('Weekly orders report for September 23 - September 30');
     });
   });
 
@@ -469,138 +214,22 @@ describe('ScheduleService', () => {
     it('should post a licenses report followed by an orders report to the purchases channel', async () => {
       await sut.onMonthlyReport();
 
-      expect(mattermostMock.send).toHaveBeenCalledTimes(2);
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
-
-      const [[licenses], [orders]] = mattermostMock.send.mock.calls;
-      expect(licenses.channelId).toBe(Constants.Mattermost.Channels.Purchases);
-      expect(orders.channelId).toBe(Constants.Mattermost.Channels.Purchases);
-      expect(licenses).not.toHaveProperty('silent');
-      expect(orders).not.toHaveProperty('silent');
-
-      expect(licenses).toMatchInlineSnapshot(`
-        {
-          "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-          "message": "",
-          "props": {
-            "mm_blocks": [
-              {
-                "accent_color": "#9b59b6",
-                "border": true,
-                "content": [
-                  {
-                    "text": "Monthly licenses report for August 18 - September 18",
-                    "type": "text",
-                  },
-                  {
-                    "text": "Total: $9,825",
-                    "type": "text",
-                  },
-                  {
-                    "type": "divider",
-                  },
-                  {
-                    "columns": [
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Server keys**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "$1,200 - 12 keys",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Client keys**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "$8,625 - 345 keys",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                    ],
-                    "type": "column_set",
-                  },
-                ],
-                "gap": "small",
-                "type": "container",
-              },
-            ],
-          },
-        }
+      expect(zulipMock.sendMessage).toHaveBeenCalledTimes(2);
+      const [[licenses], [orders]] = zulipMock.sendMessage.mock.calls;
+      expect(licenses).toMatchObject({ stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'reports' });
+      expect(orders).toMatchObject({ stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'reports' });
+      expect(licenses.content).toMatchInlineSnapshot(`
+        "🔑 **Monthly licenses report for August 18 - September 18**
+        Total: $9,825
+        **Server keys:** $1,200 - 12 keys
+        **Client keys:** $8,625 - 345 keys"
       `);
-      expect(orders).toMatchInlineSnapshot(`
-        {
-          "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-          "message": "",
-          "props": {
-            "mm_blocks": [
-              {
-                "accent_color": "#71368a",
-                "border": true,
-                "content": [
-                  {
-                    "text": "Monthly orders report for August 18 - September 18",
-                    "type": "text",
-                  },
-                  {
-                    "text": "Revenue: 1,234.5 USD; Profit: 678.25 USD",
-                    "type": "text",
-                  },
-                  {
-                    "type": "divider",
-                  },
-                  {
-                    "columns": [
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Revenue**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "1,234.5 USD",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                      {
-                        "gap": "small",
-                        "items": [
-                          {
-                            "text": "**Profit**",
-                            "type": "text",
-                          },
-                          {
-                            "text": "678.25 USD",
-                            "type": "text",
-                          },
-                        ],
-                        "type": "column",
-                      },
-                    ],
-                    "type": "column_set",
-                  },
-                ],
-                "gap": "small",
-                "type": "container",
-              },
-            ],
-          },
-        }
+      expect(orders.content).toMatchInlineSnapshot(`
+        "📦 **Monthly orders report for August 18 - September 18**
+        Revenue: 1,234.5 USD; Profit: 678.25 USD
+        **Revenue:** 1,234.5 USD
+        **Profit:** 678.25 USD"
       `);
     });
 
@@ -609,13 +238,9 @@ describe('ScheduleService', () => {
 
       await sut.onMonthlyReport();
 
-      const [[licenses], [orders]] = mattermostMock.send.mock.calls;
-      expect((licenses.props as any).mm_blocks[0].content[0].text).toBe(
-        'Monthly licenses report for December 18 - January 18',
-      );
-      expect((orders.props as any).mm_blocks[0].content[0].text).toBe(
-        'Monthly orders report for December 18 - January 18',
-      );
+      const [[licenses], [orders]] = zulipMock.sendMessage.mock.calls;
+      expect(licenses.content).toContain('Monthly licenses report for December 18 - January 18');
+      expect(orders.content).toContain('Monthly orders report for December 18 - January 18');
     });
   });
 
@@ -760,7 +385,7 @@ describe('ScheduleService', () => {
         message: "<@&1184258769312551053> <@&1491828281811402833> let's start with this month's recap! 🚀",
       });
 
-      expect(mattermostMock.send).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
     it('should create the document before the thread, and the thread before the kickoff message', async () => {

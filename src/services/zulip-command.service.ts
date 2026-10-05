@@ -162,12 +162,12 @@ export class ZulipCommandService {
     },
     'emote-sync': {
       usage: 'emote-sync',
-      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
+      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip, skipping a name Zulip already has`,
       positionals: 0,
       options: [],
       run: (context) =>
         this.inBackground('emote-sync', context, {
-          ack: `Syncing the emotes of ${EMOTE_SYNC_SERVER} to Zulip and Mattermost, this can take a few minutes…`,
+          ack: `Syncing the emotes of ${EMOTE_SYNC_SERVER} to Zulip, this can take a few minutes…`,
           work: async () => {
             const report = await this.chatService.syncEmotes(Constants.Discord.EmoteSyncServer.id);
             return neutraliseZulipMentions(formatEmoteSyncReport(report, `the emotes of ${EMOTE_SYNC_SERVER}`));

@@ -1,16 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { NotificationDestination, NotificationRoute, NotificationRoutes } from 'src/constants';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { Notification, NotificationTarget } from 'src/interfaces/notification.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { toDiscordMessage } from 'src/renderers/discord.renderer';
-import { toMattermostBlock } from 'src/renderers/mattermost.renderer';
 import { toZulipMessage } from 'src/renderers/zulip.renderer';
 
 type Platform = keyof NotificationRoute;
 type DiscordRoute = NonNullable<NotificationRoute['discord']>;
-type MattermostRoute = NonNullable<NotificationRoute['mattermost']>;
 type ZulipRoute = NonNullable<NotificationRoute['zulip']>;
 
 /**
@@ -25,7 +22,6 @@ export class NotificationService {
 
   constructor(
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
-    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -34,15 +30,11 @@ export class NotificationService {
    * rejection would skip every destination after it.
    */
   async notify(destination: NotificationDestination, notification: Notification) {
-    const { discord, mattermost, zulip }: NotificationRoute = NotificationRoutes[destination];
+    const { discord, zulip }: NotificationRoute = NotificationRoutes[destination];
     const delivered: boolean[] = [];
 
     if (discord && this.discord.isReady()) {
       delivered.push(await this.toDiscord(destination, notification, discord));
-    }
-
-    if (mattermost && this.mattermost.isInitialised()) {
-      delivered.push(await this.toMattermost(destination, notification, mattermost));
     }
 
     if (zulip && this.zulip.isInitialised()) {
@@ -59,11 +51,6 @@ export class NotificationService {
       case 'discord': {
         return this.discord.isReady() && this.toDiscord(`channel ${target.channelId}`, notification, target);
       }
-      case 'mattermost': {
-        return (
-          this.mattermost.isInitialised() && this.toMattermost(`channel ${target.channelId}`, notification, target)
-        );
-      }
       case 'zulip': {
         const label = `stream ${target.stream}, topic "${target.topic}"`;
         return this.zulip.isInitialised() && this.toZulip(label, notification, target);
@@ -78,16 +65,6 @@ export class NotificationService {
       ...(crosspost ? { crosspost: true } : {}),
     });
     return this.deliver(label, 'discord', render, (dto) => this.discord.sendMessage(dto));
-  }
-
-  private toMattermost(label: string, notification: Notification, { channelId, silent }: MattermostRoute) {
-    const render = () => ({
-      channelId,
-      message: '',
-      ...(silent ? { silent: true } : {}),
-      props: { mm_blocks: [toMattermostBlock(notification)] },
-    });
-    return this.deliver(label, 'mattermost', render, (post) => this.mattermost.send(post));
   }
 
   private toZulip(label: string, notification: Notification, { stream, topic }: ZulipRoute) {
@@ -119,4 +96,4 @@ export const toNotificationTarget = ({
 }): NotificationTarget =>
   service === 'zulip'
     ? { platform: 'zulip', stream: Number(channelId), topic: topic ?? '' }
-    : { platform: service, channelId };
+    : { platform: 'discord', channelId };

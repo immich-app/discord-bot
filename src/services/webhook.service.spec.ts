@@ -14,7 +14,6 @@ import {
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
@@ -24,10 +23,9 @@ import { BackfillReport, WebhookService, formatBackfillReport } from 'src/servic
 import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 /**
- * Characterization tests: these pin the CURRENT payloads sent to Discord, Mattermost and Zulip
- * for every notification path in WebhookService. They intentionally pin quirks of the current
- * implementation (trailing `undefined` entries in Mattermost `content` arrays, etc). If a snapshot
- * changes during a refactor, the refactor drifted - fix the code, never the snapshot.
+ * Characterization tests: these pin the CURRENT payloads sent to Discord and Zulip for every
+ * notification path in WebhookService, quirks included. If a snapshot changes during a refactor,
+ * the refactor drifted - fix the code, never the snapshot.
  */
 
 vitest.mock('src/config', () => ({
@@ -154,26 +152,9 @@ const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
   searchDocuments: vitest.fn(),
 });
 
-const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
-  isInitialised: vitest.fn().mockReturnValue(true),
-  init: vitest.fn(),
-  registerEventListener: vitest.fn() as any,
-  send: vitest.fn(),
-  reply: vitest.fn(),
-  updatePost: vitest.fn(),
-  createEmote: vitest.fn(),
-  listEmoji: vitest.fn(),
-  streamChannels: vitest.fn(),
-  joinChannel: vitest.fn(),
-  registerCommand: vitest.fn() as any,
-  runCommand: vitest.fn(),
-  openDialog: vitest.fn(),
-  submitDialog: vitest.fn(),
-});
-
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
-  isInitialised: vitest.fn().mockReturnValue(false),
+  isInitialised: vitest.fn().mockReturnValue(true),
   createEmote: vitest.fn(),
   sendMessage: vitest.fn(),
   sendDirectMessage: vitest.fn(),
@@ -390,7 +371,6 @@ describe(WebhookService.name, () => {
   let fourthwallMock: Mocked<IFourthwallRepository>;
   let githubMock: Mocked<IGithubInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
-  let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
 
   /** Everything that was posted, with Discord embeds serialised via `toJSON()` so the snapshot shows the wire shape. */
@@ -405,7 +385,6 @@ describe(WebhookService.name, () => {
               embeds: dto.message.embeds?.map((embed) => (embed instanceof EmbedBuilder ? embed.toJSON() : embed)),
             },
     })),
-    mattermost: mattermostMock.send.mock.calls.map(([post]) => post),
     zulip: zulipMock.sendMessage.mock.calls.map(([payload]) => payload),
   });
 
@@ -415,7 +394,6 @@ describe(WebhookService.name, () => {
     fourthwallMock = newFourthwallMockRepository();
     githubMock = newGithubMockRepository();
     outlineMock = newOutlineMockRepository();
-    mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
 
     sut = new WebhookService(
@@ -424,9 +402,8 @@ describe(WebhookService.name, () => {
       fourthwallMock,
       githubMock,
       outlineMock,
-      mattermostMock,
       zulipMock,
-      new NotificationService(discordMock, mattermostMock, zulipMock),
+      new NotificationService(discordMock, zulipMock),
     );
   });
 
@@ -442,12 +419,12 @@ describe(WebhookService.name, () => {
   describe('onGithubStatus', () => {
     it('should reject an unknown slug', async () => {
       await expect(sut.onGithubStatus(makeIncident(), 'wrong-slug')).rejects.toBeInstanceOf(UnauthorizedException);
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore component updates', async () => {
       await sut.onGithubStatus(componentUpdate, 'github-status-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should post a minor incident (Orange)', async () => {
@@ -479,45 +456,18 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "4ht6ooks83n3fq8t8kijbnyeww",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#e67e22",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[GitHub Status](https://githubstatus.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Minor Service Outage](https://stspg.io/abc123)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "**Incident with Actions**",
-                        "type": "text",
-                      },
-                      {
-                        "text": "We are investigating reports of degraded performance.
-        More updates soon.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "⚠️ **[Minor Service Outage](https://stspg.io/abc123)** — [GitHub Status](https://githubstatus.com)
+        **Incident with Actions**
+        ~~~ quote
+        We are investigating reports of degraded performance.
+        More updates soon.
+        ~~~",
+              "stream": 111,
+              "topic": "github status",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -551,45 +501,18 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "4ht6ooks83n3fq8t8kijbnyeww",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#ed4245",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[GitHub Status](https://githubstatus.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Minor Service Outage](https://stspg.io/abc123)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "**Incident with Actions**",
-                        "type": "text",
-                      },
-                      {
-                        "text": "We are investigating reports of degraded performance.
-        More updates soon.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🚨 **[Minor Service Outage](https://stspg.io/abc123)** — [GitHub Status](https://githubstatus.com)
+        **Incident with Actions**
+        ~~~ quote
+        We are investigating reports of degraded performance.
+        More updates soon.
+        ~~~",
+              "stream": 111,
+              "topic": "github status",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -623,45 +546,18 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "4ht6ooks83n3fq8t8kijbnyeww",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#95a5a6",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[GitHub Status](https://githubstatus.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Minor Service Outage](https://stspg.io/abc123)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "**Incident with Actions**",
-                        "type": "text",
-                      },
-                      {
-                        "text": "We are investigating reports of degraded performance.
-        More updates soon.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "❓ **[Minor Service Outage](https://stspg.io/abc123)** — [GitHub Status](https://githubstatus.com)
+        **Incident with Actions**
+        ~~~ quote
+        We are investigating reports of degraded performance.
+        More updates soon.
+        ~~~",
+              "stream": 111,
+              "topic": "github status",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -695,45 +591,18 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "4ht6ooks83n3fq8t8kijbnyeww",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[GitHub Status](https://githubstatus.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Minor Service Outage](https://stspg.io/abc123)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "**Incident with Actions**",
-                        "type": "text",
-                      },
-                      {
-                        "text": "We are investigating reports of degraded performance.
-        More updates soon.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "✅ **[Minor Service Outage](https://stspg.io/abc123)** — [GitHub Status](https://githubstatus.com)
+        **Incident with Actions**
+        ~~~ quote
+        We are investigating reports of degraded performance.
+        More updates soon.
+        ~~~",
+              "stream": 111,
+              "topic": "github status",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -761,7 +630,7 @@ describe(WebhookService.name, () => {
       expect(fourthwallMock.getOrder).toHaveBeenCalledWith({ id: 'ord_1', user: 'fw-user', password: 'fw-password' });
     });
 
-    it('should post an ORDER_PLACED order (DarkGreen) to Mattermost only', async () => {
+    it('should post an ORDER_PLACED order (DarkGreen) to the team only', async () => {
       await run(makeOrderPlaced());
 
       expect(databaseMock.createFourthwallOrder).toHaveBeenCalledWith({
@@ -783,89 +652,17 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#1f8b4c",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[Fourthwall](https://fourthwall.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Immich merch purchased](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/ord_1)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Price: 40 USD; Profit: 12 USD",
-                        "type": "text",
-                      },
-                      {
-                        "type": "divider",
-                      },
-                      {
-                        "columns": [
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Revenue**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "500 USD",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Profit**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "250 USD",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Message**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "Love the project!",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                        ],
-                        "type": "column_set",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
+              "content": "🛒 **[Immich merch purchased](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/ord_1)** — [Fourthwall](https://fourthwall.com)
+        Price: 40 USD; Profit: 12 USD
+        **Revenue:** 500 USD
+        **Profit:** 250 USD
+        **Message:** Love the project!",
+              "stream": 111,
+              "topic": "purchases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -891,75 +688,16 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#ed4245",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[Fourthwall](https://fourthwall.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Immich merch order updated](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/ord_1)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Price: 40 USD; Profit: 12 USD",
-                        "type": "text",
-                      },
-                      {
-                        "type": "divider",
-                      },
-                      {
-                        "columns": [
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Revenue**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "500 USD",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Profit**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "250 USD",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                        ],
-                        "type": "column_set",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
+              "content": "❌ **[Immich merch order updated](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/ord_1)** — [Fourthwall](https://fourthwall.com)
+        Price: 40 USD; Profit: 12 USD
+        **Revenue:** 500 USD
+        **Profit:** 250 USD",
+              "stream": 111,
+              "topic": "purchases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -969,7 +707,7 @@ describe(WebhookService.name, () => {
 
       expect(databaseMock.updateFourthwallOrder).toHaveBeenCalledOnce();
       expect(databaseMock.getTotalFourthwallOrders).not.toHaveBeenCalled();
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should post a test mode order (Yellow) with a randomised profit', async () => {
@@ -984,89 +722,17 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#fee75c",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[Fourthwall](https://fourthwall.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [TEST ORDER - Immich merch purchased](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/ord_1)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Price: 40 USD; Profit: 20 USD",
-                        "type": "text",
-                      },
-                      {
-                        "type": "divider",
-                      },
-                      {
-                        "columns": [
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Revenue**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "500 USD",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Profit**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "250 USD",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Message**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "Love the project!",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                        ],
-                        "type": "column_set",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
+              "content": "🧪 **[TEST ORDER - Immich merch purchased](https://immich-shop.fourthwall.com/admin/dashboard/contributions/orders/ord_1)** — [Fourthwall](https://fourthwall.com)
+        Price: 40 USD; Profit: 20 USD
+        **Revenue:** 500 USD
+        **Profit:** 250 USD
+        **Message:** Love the project!",
+              "stream": 111,
+              "topic": "purchases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1077,7 +743,7 @@ describe(WebhookService.name, () => {
       databaseMock.getTotalLicenseCount.mockResolvedValue({ server: 3, client: 4 });
     });
 
-    it('should post a live Stripe payment (Green) to Mattermost only', async () => {
+    it('should post a live Stripe payment (Green) to the team only', async () => {
       const event = makeStripeEvent();
 
       await sut['handlePayment'](event);
@@ -1096,75 +762,16 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[Stripe payments](https://stripe.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Immich server product key purchased](https://dashboard.stripe.com/payments/pi_1)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Price: 100 USD",
-                        "type": "text",
-                      },
-                      {
-                        "type": "divider",
-                      },
-                      {
-                        "columns": [
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Server keys**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "$300 - 3 keys",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Client keys**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "$100 - 4 keys",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                        ],
-                        "type": "column_set",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
+              "content": "💰 **[Immich server product key purchased](https://dashboard.stripe.com/payments/pi_1)** — [Stripe payments](https://stripe.com)
+        Price: 100 USD
+        **Server keys:** $300 - 3 keys
+        **Client keys:** $100 - 4 keys",
+              "stream": 111,
+              "topic": "purchases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1178,75 +785,16 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#fee75c",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[Stripe payments](https://stripe.com)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [TEST PAYMENT - Immich client product key purchased](https://dashboard.stripe.com/test/payments/pi_1)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Price: 100 USD",
-                        "type": "text",
-                      },
-                      {
-                        "type": "divider",
-                      },
-                      {
-                        "columns": [
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Server keys**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "$300 - 3 keys",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Client keys**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "$100 - 4 keys",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                        ],
-                        "type": "column_set",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
+              "content": "🧪 **[TEST PAYMENT - Immich client product key purchased](https://dashboard.stripe.com/test/payments/pi_1)** — [Stripe payments](https://stripe.com)
+        Price: 100 USD
+        **Server keys:** $300 - 3 keys
+        **Client keys:** $100 - 4 keys",
+              "stream": 111,
+              "topic": "purchases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1268,75 +816,16 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "ijh1ciffcp8fdyy4y5snxnornr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "is_subtle": true,
-                        "size": "small",
-                        "text": "[Polar Payments](https://polar.sh)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "##### [Immich server product key purchased](https://polar.sh/dashboard/immich-server/sales/order_1)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Price: 25 USD",
-                        "type": "text",
-                      },
-                      {
-                        "type": "divider",
-                      },
-                      {
-                        "columns": [
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Server keys**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "$300 - 3 keys",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                          {
-                            "gap": "small",
-                            "items": [
-                              {
-                                "text": "**Client keys**",
-                                "type": "text",
-                              },
-                              {
-                                "text": "$100 - 4 keys",
-                                "type": "text",
-                              },
-                            ],
-                            "type": "column",
-                          },
-                        ],
-                        "type": "column_set",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
+              "content": "💰 **[Immich server product key purchased](https://polar.sh/dashboard/immich-server/sales/order_1)** — [Polar Payments](https://polar.sh)
+        Price: 25 USD
+        **Server keys:** $300 - 3 keys
+        **Client keys:** $100 - 4 keys",
+              "stream": 111,
+              "topic": "purchases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1346,7 +835,7 @@ describe(WebhookService.name, () => {
 
       expect(databaseMock.createPayment).toHaveBeenCalledOnce();
       expect(databaseMock.getTotalLicenseCount).not.toHaveBeenCalled();
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should report a failed insert to Discord bot-spam and the Zulip bot topic, and carry on', async () => {
@@ -1363,7 +852,6 @@ describe(WebhookService.name, () => {
             message: 'Failed to insert payment into database: Error: invalid input syntax for type integer: "@**all**"',
           },
         ],
-        mattermost: [],
         zulip: [
           {
             stream: Constants.Zulip.Streams.ImmichAlerts,
@@ -1387,8 +875,11 @@ describe(WebhookService.name, () => {
         message: 'Failed to insert payment into database: Error: connection lost',
       });
       expect(purchase).toBeUndefined();
-      const [post] = mattermostMock.send.mock.calls[0];
-      expect(JSON.stringify(post.props)).toContain('$0 - 0 keys');
+      expect(
+        sent()
+          .zulip.map(({ content }) => content)
+          .join('\n'),
+      ).toContain('$0 - 0 keys');
     });
   });
 
@@ -1400,7 +891,7 @@ describe(WebhookService.name, () => {
       await expect(sut.onGithub(pullRequestEvent('opened', makePullRequest()), 'wrong-slug')).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should post an opened PR from renovate without its body', async () => {
@@ -1445,56 +936,16 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "This PR adds a thing.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🆕 **[&#91;immich-app/immich&#93; Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)
+        ~~~ quote
+        This PR adds a thing.
+        ~~~",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1523,56 +974,16 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#95a5a6",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "This PR adds a thing.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "📝 **[&#91;immich-app/immich&#93; Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)
+        ~~~ quote
+        This PR adds a thing.
+        ~~~",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1604,53 +1015,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#9b59b6",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request merged: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🔀 **[&#91;immich-app/immich&#93; Pull request merged: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1679,53 +1050,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#ed4245",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request closed: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "❌ **[&#91;immich-app/immich&#93; Pull request closed: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1733,11 +1064,11 @@ describe(WebhookService.name, () => {
     it('should post a closed PR with unknown merge state without a colour', async () => {
       await sut.onGithub(pullRequestEvent('closed', makePullRequest({ merged: null })), 'github-slug');
 
-      const { discord, mattermost } = sent();
+      const { discord, zulip } = sent();
       expect(discord).toHaveLength(1);
-      expect(mattermost).toHaveLength(1);
+      expect(zulip).toHaveLength(1);
       expect((discord[0].message as { embeds: { color?: number }[] }).embeds[0].color).toBeUndefined();
-      expect((mattermost[0].props!.mm_blocks as { accent_color?: string }[])[0].accent_color).toBeUndefined();
+      expect(zulip[0].content).toMatch(/^\*\*/);
     });
 
     it('should post a PR converted to draft (Grey) without its body', async () => {
@@ -1764,53 +1095,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#95a5a6",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request converted to draft: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "📝 **[&#91;immich-app/immich&#93; Pull request converted to draft: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1839,53 +1130,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Pull request ready for review: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🆕 **[&#91;immich-app/immich&#93; Pull request ready for review: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -1907,147 +1158,53 @@ describe(WebhookService.name, () => {
     it('should truncate a long body to 500 characters', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest({ body: 'x'.repeat(600) })), 'github-slug');
 
-      const { discord, mattermost } = sent();
+      const { discord, zulip } = sent();
       const expected = 'x'.repeat(497) + '...';
       expect((discord[0].message as { embeds: { description?: string }[] }).embeds[0].description).toBe(expected);
-      expect((mattermost[0].props!.mm_blocks as { content: { text: string }[] }[])[0].content[2].text).toBe(expected);
+      expect(zulip[0].content).toContain(`\n${expected}\n`);
     });
 
     it('should omit the body of an opened PR when it is empty', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest({ body: null })), 'github-slug');
 
-      const { discord, mattermost } = sent();
+      const { discord, zulip } = sent();
       expect((discord[0].message as { embeds: { description?: string }[] }).embeds[0].description).toBeUndefined();
-      expect((mattermost[0].props!.mm_blocks as { content: unknown[] }[])[0].content).toHaveLength(3);
-      expect((mattermost[0].props!.mm_blocks as { content: unknown[] }[])[0].content[2]).toBeUndefined();
+      expect(zulip[0].content).not.toContain('~~~ quote');
     });
 
     it('should ignore other PR actions', async () => {
       await sut.onGithub(pullRequestEvent('synchronize', makePullRequest()), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
-    it('should post a private immich repo PR to Mattermost only', async () => {
+    it('should post a private immich repo PR to the team only', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest(), immichPrivateRepo), 'github-slug');
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "i1fbjrqj67n1ibx4f6isuioguc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich-private] Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "This PR adds a thing.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🆕 **[&#91;immich-app/immich-private&#93; Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)** — [alextran1502](https://github.com/alextran1502)
+        ~~~ quote
+        This PR adds a thing.
+        ~~~",
+              "stream": 111,
+              "topic": "pull requests",
             },
           ],
-          "zulip": [],
         }
       `);
     });
 
-    it('should post a FUTO fhs-core PR to the FHS Mattermost channel only', async () => {
+    it('should post nothing for a FUTO fhs-core PR', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest(), fhsCoreRepo), 'github-slug');
-      expect(sent()).toMatchInlineSnapshot(`
-        {
-          "discord": [],
-          "mattermost": [
-            {
-              "channelId": "b3dajyaywffymb8updr8sb64ay",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[futo-org/fhs-core] Pull request opened: #1234 feat: add thing](https://github.com/immich-app/immich/pull/1234)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "This PR adds a thing.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
-            },
-          ],
-          "zulip": [],
-        }
-      `);
+
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore PRs from unrelated repositories', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest(), unrelatedRepo), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
   });
 
@@ -2079,56 +1236,16 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Issue opened: #42 Bug: thumbnails missing](https://github.com/immich-app/immich/issues/42)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "Steps to reproduce: open the timeline.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🆕 **[&#91;immich-app/immich&#93; Issue opened: #42 Bug: thumbnails missing](https://github.com/immich-app/immich/issues/42)** — [alextran1502](https://github.com/alextran1502)
+        ~~~ quote
+        Steps to reproduce: open the timeline.
+        ~~~",
+              "stream": 111,
+              "topic": "issues",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -2157,53 +1274,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#1f8b4c",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Issue reopened: #42 Bug: thumbnails missing](https://github.com/immich-app/immich/issues/42)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🔁 **[&#91;immich-app/immich&#93; Issue reopened: #42 Bug: thumbnails missing](https://github.com/immich-app/immich/issues/42)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "issues",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -2232,65 +1309,25 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#23272a",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Issue closed: #42 Bug: thumbnails missing](https://github.com/immich-app/immich/issues/42)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "✅ **[&#91;immich-app/immich&#93; Issue closed: #42 Bug: thumbnails missing](https://github.com/immich-app/immich/issues/42)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "issues",
             },
           ],
-          "zulip": [],
         }
       `);
     });
 
     it('should ignore other issue actions', async () => {
       await sut.onGithub(issueEvent('edited'), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore issues in private repositories', async () => {
       await sut.onGithub(issueEvent('opened', immichPrivateRepo), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
   });
 
@@ -2322,56 +1359,16 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#e67e22",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Discussion created: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)",
-                        "type": "text",
-                      },
-                      {
-                        "text": "It would be nice if the timeline were nicer.",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "💬 **[&#91;immich-app/immich&#93; Discussion created: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)** — [alextran1502](https://github.com/alextran1502)
+        ~~~ quote
+        It would be nice if the timeline were nicer.
+        ~~~",
+              "stream": 111,
+              "topic": "discussions",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -2400,53 +1397,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#a84300",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Discussion reopened: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🔁 **[&#91;immich-app/immich&#93; Discussion reopened: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "discussions",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -2475,53 +1432,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#23272a",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Discussion deleted: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "🗑️ **[&#91;immich-app/immich&#93; Discussion deleted: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "discussions",
             },
           ],
-          "zulip": [],
         }
       `);
     });
@@ -2550,65 +1467,25 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "zpn38kj84pyg3bmbj7d66kdnge",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": "#57f287",
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "size": "small",
-                        "text": "##### [[immich-app/immich] Discussion answered: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "✅ **[&#91;immich-app/immich&#93; Discussion answered: #7 Feature: nicer timeline](https://github.com/immich-app/immich/discussions/7)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "discussions",
             },
           ],
-          "zulip": [],
         }
       `);
     });
 
     it('should ignore other discussion actions', async () => {
       await sut.onGithub(discussionEvent('edited'), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore discussions in private repositories', async () => {
       await sut.onGithub(discussionEvent('created', immichPrivateRepo), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
   });
 
@@ -2620,7 +1497,7 @@ describe(WebhookService.name, () => {
       vitest.spyOn(_, 'sample').mockReturnValue(releaseMessage as never);
     });
 
-    it('should post an immich minor release to releases, announcements, Mattermost and Zulip', async () => {
+    it('should post an immich minor release to releases, announcements and the team', async () => {
       await sut.onGithub(releaseEvent(makeRelease()), 'github-slug');
 
       expect(_.sample).toHaveBeenCalledWith(ReleaseMessages);
@@ -2664,56 +1541,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
-            {
-              "channelId": "97d9ihrnb3rwbcoob6erhdfrcr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": undefined,
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "text": "##### [[immich-app/immich] New release: v1.2.0](https://github.com/immich-app/immich/releases/tag/v1.2.0)",
-                        "type": "text",
-                      },
-                      {
-                        "size": "small",
-                        "text": "A day with a release is a good day!",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
-            },
-          ],
           "zulip": [
+            {
+              "content": "**[&#91;immich-app/immich&#93; New release: v1.2.0](https://github.com/immich-app/immich/releases/tag/v1.2.0)** — [alextran1502](https://github.com/alextran1502)
+        A day with a release is a good day!",
+              "stream": 111,
+              "topic": "releases",
+            },
             {
               "content": "A day with a release is a good day! https://github.com/immich-app/immich/releases/tag/v1.2.0",
               "stream": 54,
@@ -2757,56 +1591,13 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [
-            {
-              "channelId": "97d9ihrnb3rwbcoob6erhdfrcr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": undefined,
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "text": "##### [[immich-app/immich] New release: v1.2.3](https://github.com/immich-app/immich/releases/tag/v1.2.3)",
-                        "type": "text",
-                      },
-                      {
-                        "size": "small",
-                        "text": "A day with a release is a good day!",
-                        "type": "text",
-                      },
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
-            },
-          ],
           "zulip": [
+            {
+              "content": "**[&#91;immich-app/immich&#93; New release: v1.2.3](https://github.com/immich-app/immich/releases/tag/v1.2.3)** — [alextran1502](https://github.com/alextran1502)
+        A day with a release is a good day!",
+              "stream": 111,
+              "topic": "releases",
+            },
             {
               "content": "A day with a release is a good day! https://github.com/immich-app/immich/releases/tag/v1.2.3",
               "stream": 54,
@@ -2829,10 +1620,9 @@ describe(WebhookService.name, () => {
         'github-slug',
       );
 
-      const { discord, mattermost, zulip } = sent();
+      const { discord, zulip } = sent();
       expect(discord.map(({ channelId }) => channelId)).toEqual(['991477056791658567']);
-      expect(mattermost.map(({ channelId }) => channelId)).toEqual(['97d9ihrnb3rwbcoob6erhdfrcr']);
-      expect(zulip).toHaveLength(1);
+      expect(zulip.map(({ topic }) => topic)).toEqual(['releases', 'release']);
     });
 
     it('should fall back to the tag name when the release has no name', async () => {
@@ -2844,21 +1634,21 @@ describe(WebhookService.name, () => {
       );
     });
 
-    it('should keep the raw description on Discord but shorten it for Mattermost', async () => {
+    it('should keep the raw description on Discord and in the Zulip announcement, but shorten it for the team', async () => {
       vitest.spyOn(_, 'sample').mockReturnValue('y'.repeat(600) as never);
 
       await sut.onGithub(releaseEvent(makeRelease()), 'github-slug');
 
-      const { discord, mattermost, zulip } = sent();
+      const { discord, zulip } = sent();
       expect((discord[0].message as { embeds: { description: string }[] }).embeds[0].description).toBe('y'.repeat(600));
       expect((discord[1].message as { embeds: { description: string }[] }).embeds[0].description).toBe('y'.repeat(600));
-      expect((mattermost[0].props!.mm_blocks as { content: { text: string }[] }[])[0].content[2].text).toBe(
-        'y'.repeat(497) + '...',
-      );
-      expect(zulip[0].content).toBe(`${'y'.repeat(600)} https://github.com/immich-app/immich/releases/tag/v1.2.0`);
+      const [team, announcement] = zulip;
+      expect(team.content).toContain(`\n${'y'.repeat(497)}...`);
+      expect(team.content).not.toContain('y'.repeat(498));
+      expect(announcement.content).toBe(`${'y'.repeat(600)} https://github.com/immich-app/immich/releases/tag/v1.2.0`);
     });
 
-    it('should post a private immich-app release to Mattermost only, without a description', async () => {
+    it('should post a private immich-app release to the team only, without a description', async () => {
       await sut.onGithub(
         releaseEvent(
           makeRelease({ html_url: 'https://github.com/immich-app/immich-private/releases/tag/v1.2.0' }),
@@ -2871,57 +1661,18 @@ describe(WebhookService.name, () => {
       expect(sent()).toMatchInlineSnapshot(`
         {
           "discord": [],
-          "mattermost": [
+          "zulip": [
             {
-              "channelId": "97d9ihrnb3rwbcoob6erhdfrcr",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": undefined,
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "text": "##### [[immich-app/immich-private] New release: v1.2.0](https://github.com/immich-app/immich-private/releases/tag/v1.2.0)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-              "silent": true,
+              "content": "**[&#91;immich-app/immich-private&#93; New release: v1.2.0](https://github.com/immich-app/immich-private/releases/tag/v1.2.0)** — [alextran1502](https://github.com/alextran1502)",
+              "stream": 111,
+              "topic": "releases",
             },
           ],
-          "zulip": [],
         }
       `);
     });
 
-    it('should post a public non-main immich-app release to Discord and Mattermost without a description', async () => {
+    it('should post a public non-main immich-app release to Discord and the team without a description', async () => {
       await sut.onGithub(
         releaseEvent(
           makeRelease({ html_url: 'https://github.com/immich-app/static-pages/releases/tag/v1.2.0' }),
@@ -2930,14 +1681,16 @@ describe(WebhookService.name, () => {
         'github-slug',
       );
 
-      const { discord, mattermost, zulip } = sent();
+      const { discord, zulip } = sent();
       expect(discord.map(({ channelId }) => channelId)).toEqual(['991477056791658567']);
       expect((discord[0].message as { embeds: { description?: string }[] }).embeds[0].description).toBeUndefined();
-      expect(mattermost.map(({ channelId }) => channelId)).toEqual(['97d9ihrnb3rwbcoob6erhdfrcr']);
-      expect(zulip).toEqual([]);
+      expect(zulip.map(({ stream, topic }) => ({ stream, topic }))).toEqual([
+        { stream: Constants.Zulip.Streams.ImmichThirdParties, topic: 'releases' },
+      ]);
+      expect(zulip[0].content).not.toContain('~~~ quote');
     });
 
-    it('should post a FUTO fhs-core release to the FHS Mattermost channel only', async () => {
+    it('should post nothing for a FUTO fhs-core release', async () => {
       await sut.onGithub(
         releaseEvent(
           makeRelease({ html_url: 'https://github.com/futo-org/fhs-core/releases/tag/v1.2.0' }),
@@ -2945,61 +1698,13 @@ describe(WebhookService.name, () => {
         ),
         'github-slug',
       );
-      expect(sent()).toMatchInlineSnapshot(`
-        {
-          "discord": [],
-          "mattermost": [
-            {
-              "channelId": "ggnayby577f45reuin1j143xsc",
-              "message": "",
-              "props": {
-                "mm_blocks": [
-                  {
-                    "accent_color": undefined,
-                    "border": true,
-                    "content": [
-                      {
-                        "content": [
-                          {
-                            "alt_text": "alextran1502's avatar",
-                            "horizontal_alignment": "left",
-                            "image_style": "person",
-                            "max_width": 26,
-                            "size": "small",
-                            "type": "image",
-                            "url": "https://avatars.githubusercontent.com/u/1?v=4",
-                          },
-                          {
-                            "is_subtle": true,
-                            "text": "[alextran1502](https://github.com/alextran1502)",
-                            "type": "text",
-                          },
-                        ],
-                        "flow": "horizontal",
-                        "gap": "small",
-                        "type": "container",
-                      },
-                      {
-                        "text": "##### [[futo-org/fhs-core] New release: v1.2.0](https://github.com/futo-org/fhs-core/releases/tag/v1.2.0)",
-                        "type": "text",
-                      },
-                      undefined,
-                    ],
-                    "gap": "small",
-                    "type": "container",
-                  },
-                ],
-              },
-            },
-          ],
-          "zulip": [],
-        }
-      `);
+
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore releases that are not published', async () => {
       await sut.onGithub(releaseEvent(makeRelease(), immichRepo, 'edited'), 'github-slug');
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore published releases without a sender', async () => {
@@ -3007,7 +1712,7 @@ describe(WebhookService.name, () => {
         githubEvent('release', { action: 'published', sender: null, repository: immichRepo, release: makeRelease() }),
         'github-slug',
       );
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should fail the webhook when the Zulip announcement fails, after the other posts were made', async () => {
@@ -3019,9 +1724,8 @@ describe(WebhookService.name, () => {
 
       await vitest.waitFor(() => {
         expect(discordMock.sendMessage).toHaveBeenCalledTimes(2);
-        expect(mattermostMock.send).toHaveBeenCalledOnce();
       });
-      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendMessage).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -3062,8 +1766,14 @@ describe(WebhookService.name, () => {
               },
             },
           ],
-          "mattermost": [],
-          "zulip": [],
+          "zulip": [
+            {
+              "content": "🚨 **Release Workflow Failed**
+        [Release v1.2.0](https://github.com/immich-app/immich/actions/runs/1)",
+              "stream": 113,
+              "topic": "release workflow",
+            },
+          ],
         }
       `);
     });
@@ -3074,7 +1784,7 @@ describe(WebhookService.name, () => {
 
       await sut.onGithub(workflowRunEvent('failure'), 'github-slug');
 
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should ignore a failure in a repository without a release, without logging an error', async () => {
@@ -3092,14 +1802,14 @@ describe(WebhookService.name, () => {
       await sut.onGithub(workflowRunEvent('success'), 'github-slug');
 
       expect(githubMock.getCheckSuiteTriggerCommit).not.toHaveBeenCalled();
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
     it('should swallow errors from the GitHub API', async () => {
       githubMock.getCheckSuiteTriggerCommit.mockRejectedValue(new Error('boom'));
 
       await expect(sut.onGithub(workflowRunEvent('timed_out'), 'github-slug')).resolves.toBeUndefined();
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
     });
   });
   describe('handlePullRequestZulipTopic', () => {

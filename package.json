@@ -28,7 +28,6 @@
   "dependencies": {
     "@discordx/importer": "^1.2.3",
     "@immich/sql-tools": "^0.6.0",
-    "@mattermost/client": "^11.9.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
@@ -60,7 +59,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@mattermost/types": "^11.9.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",

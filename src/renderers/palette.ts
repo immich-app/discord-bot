@@ -1,10 +1,6 @@
 import { NotificationAccent } from 'src/interfaces/notification.interface';
 
-/*
- * The colours are discord.js's `Colors` values, spelled out so this module depends on no platform.
- * Mattermost has always mirrored the Discord embed colour, so both renderers read this one table:
- * Discord passes the number to the embed and Mattermost formats it as `#rrggbb`.
- */
+/* The colours are discord.js's `Colors` values, spelled out so this module depends on no platform. */
 const Green = 0x57_f2_87;
 const DarkGreen = 0x1f_8b_4c;
 const Purple = 0x9b_59_b6;

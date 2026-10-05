@@ -1,4 +1,3 @@
-import { ClientError, WebSocketEvents } from '@mattermost/client';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import {
@@ -21,7 +20,6 @@ import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
-import { IMattermostInterface, MattermostEventMessage, Post } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
@@ -141,16 +139,6 @@ const decode = (text: string) => {
 const GITHUB_FILE_REGEX =
   /https:\/\/github.com\/(?<org>[\w\-.,]+)\/(?<repo>[\w\-.,]+)\/blob\/(?<ref>[\w\-.,]+)\/(?<path>[\w\-.,/%\d]+)(#L(?<lineFrom>\d+)(-L(?<lineTo>\d+))?)?/g;
 
-const defaultGithubOrg = {
-  [Constants.Mattermost.Teams.Immich]: GithubOrg.ImmichApp,
-  [Constants.Mattermost.Teams.FHS]: GithubOrg.FUTO,
-};
-
-const defaultGithubRepo = {
-  [Constants.Mattermost.Teams.Immich]: GithubRepo.Immich,
-  [Constants.Mattermost.Teams.FHS]: GithubRepo.FHSCore,
-};
-
 /**
  * Zulip allows only letters, digits, `-` and `_` (read as a space), ignores case, and refuses a name that
  * ends in `_` or `-`, a rule its spec leaves out.
@@ -189,8 +177,6 @@ export const zulipEmojiNames = (emoteNames: string[], builtIn: string[], existin
   return emoteNames.map((name) => claimZulipEmojiName(name, claimed));
 };
 
-const MATTERMOST_DUPLICATE_EMOJI = 'api.emoji.create.duplicate.app_error';
-
 type ZulipSkipReason = 'unlisted' | 'builtins' | 'refused';
 
 const ZULIP_SKIP_REASONS: Record<ZulipSkipReason, string> = {
@@ -202,27 +188,14 @@ const ZULIP_SKIP_REASONS: Record<ZulipSkipReason, string> = {
 export type EmoteSyncReport = {
   total: number;
   zulipUploaded: number;
-  mattermostUploaded: number;
   zulipSkipped?: ZulipSkipReason;
-  mattermostSkipped?: true;
   failed: string[];
   renamed: string[];
   alreadyOnZulip: string[];
-  alreadyOnMattermost: string[];
 };
 
 export const formatEmoteSyncReport = (
-  {
-    total,
-    zulipUploaded,
-    mattermostUploaded,
-    zulipSkipped,
-    mattermostSkipped,
-    failed,
-    renamed,
-    alreadyOnZulip,
-    alreadyOnMattermost,
-  }: EmoteSyncReport,
+  { total, zulipUploaded, zulipSkipped, failed, renamed, alreadyOnZulip }: EmoteSyncReport,
   subject?: string,
 ) => {
   const done = subject ? `Done syncing ${subject}` : 'Done syncing';
@@ -232,12 +205,9 @@ export const formatEmoteSyncReport = (
   const outcome = [
     plural(total, 'emote'),
     `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ` (skipped: ${ZULIP_SKIP_REASONS[zulipSkipped]})` : ''}`,
-    `${mattermostUploaded} uploaded to Mattermost${mattermostSkipped ? ' (skipped: not configured)' : ''}`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
     alreadyOnZulip.length > 0 && `${alreadyOnZulip.length} already on Zulip: ${alreadyOnZulip.join(', ')}`,
-    alreadyOnMattermost.length > 0 &&
-      `${alreadyOnMattermost.length} already on Mattermost: ${alreadyOnMattermost.join(', ')}`,
   ];
   return `${done}: ${outcome.filter(Boolean).join(', ')}`;
 };
@@ -254,7 +224,6 @@ export class ChatService {
     @Inject(IGitlabInterface) private gitlab: IGitlabInterface,
     @Inject(ILoopDedupeInterface) private loopDedupe: ILoopDedupeInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
-    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
     private zulipService: ZulipService,
     private notifications: NotificationService,
@@ -264,36 +233,7 @@ export class ChatService {
   async init() {
     this.discord.onHandlerError((error) => this.onError(error));
     // The Zulip clients are initialised once, by ZulipService.
-    await this.mattermost.init();
-    this.mattermost.registerEventListener(WebSocketEvents.Posted, (msg) => this.onMattermostPosted(msg));
-    this.mattermost.registerEventListener(WebSocketEvents.PostEdited, (msg) => this.onMattermostEdited(msg));
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
-  }
-
-  async onMattermostPosted(msg: MattermostEventMessage<WebSocketEvents.Posted>) {
-    const post = JSON.parse(msg.data.post) as Post;
-
-    if (post.props.from_bot === 'true') {
-      return;
-    }
-
-    const messageParts = await this.handleGithubReferences(
-      { content: post.message, teamId: msg.broadcast.team_id },
-      true,
-    );
-
-    if (messageParts.length !== 0) {
-      await this.mattermost.updatePost({
-        message: `${post.message}
-
----
-
-${messageParts.join('\n')}`,
-        id: post.id,
-        props: { remove_link_preview: 'true' },
-      });
-    }
-    await this.suppressMattermostEmbeds(post);
   }
 
   async onZulipMessage({ type, streamId, topic, content }: ZulipReceivedMessage) {
@@ -328,11 +268,6 @@ ${messageParts.join('\n')}`,
     if (parts.length !== 0) {
       await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });
     }
-  }
-
-  async onMattermostEdited(msg: MattermostEventMessage<WebSocketEvents.PostEdited>) {
-    const post = JSON.parse(msg.data.post) as Post;
-    await this.suppressMattermostEmbeds(post);
   }
 
   @Cron(Constants.Cron.ImmichBirthday)
@@ -549,11 +484,11 @@ ${messageParts.join('\n')}`,
   }
 
   async handleGithubReferences(
-    { content, channelParentId, teamId }: { content: string; channelParentId?: string | null; teamId?: string },
+    { content, channelParentId }: { content: string; channelParentId?: string | null },
     isPrivileged: boolean,
   ) {
     const codeSnippets = await this.handleGithubFileReferences(content, isPrivileged);
-    const links = await this.handleGithubThreadReferences({ content, channelParentId, teamId }, isPrivileged);
+    const links = await this.handleGithubThreadReferences({ content, channelParentId }, isPrivileged);
 
     return [...codeSnippets, ...links].filter((e) => e !== undefined);
   }
@@ -562,12 +497,10 @@ ${messageParts.join('\n')}`,
     {
       content,
       channelParentId,
-      teamId,
       scope,
     }: {
       content: string;
       channelParentId?: string | null;
-      teamId?: string;
       scope?: ExpanderScope;
     },
     isPrivileged: boolean,
@@ -615,8 +548,8 @@ ${messageParts.join('\n')}`,
 
       links.push({
         id,
-        org: org || orgPage || latestPr?.organization || (teamId ? defaultGithubOrg[teamId] : GithubOrg.ImmichApp),
-        repo: repo || repoPage || latestPr?.repository || (teamId ? defaultGithubRepo[teamId] : GithubRepo.Immich),
+        org: org || orgPage || latestPr?.organization || GithubOrg.ImmichApp,
+        repo: repo || repoPage || latestPr?.repository || GithubRepo.Immich,
         type: latestPr ? 'pull' : (category as LinkType),
         discordThreadId:
           channelParentId === undefined
@@ -1071,8 +1004,6 @@ ${formattedCode}
       );
     }
     const existing = await this.listZulipEmoji();
-    const mattermostSkipped = !this.mattermost.isInitialised();
-    const onMattermost = mattermostSkipped ? undefined : await this.listMattermostEmoji();
     const builtIn = existing ? await this.listZulipBuiltInEmoji() : undefined;
     const zulipNames =
       existing && builtIn
@@ -1085,17 +1016,14 @@ ${formattedCode}
 
     let zulipSkipped: ZulipSkipReason | undefined = existing ? (builtIn ? undefined : 'builtins') : 'unlisted';
     let zulipUploaded = 0;
-    let mattermostUploaded = 0;
     const failed: string[] = [];
     const renamed: string[] = [];
     const alreadyOnZulip: string[] = [];
-    const alreadyOnMattermost: string[] = [];
     for (const [index, emote] of emotes.entries()) {
       const name = emote.name ?? emote.identifier;
       const url = emote.animated ? emote.url.replace(/\.(?<extension>[a-zA-Z]+?)$/, '.gif') : emote.url;
 
-      // One bad emote, or one platform being down, must not abort the rest of the sync.
-      let zulipFailed = false;
+      // One bad emote must not abort the rest of the sync.
       if (existing && !zulipSkipped) {
         const zulipName = zulipNames[index];
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
@@ -1110,62 +1038,22 @@ ${formattedCode}
               renamed.push(asZulip);
             }
             zulipUploaded += zulip === 'uploaded' ? 1 : 0;
-            zulipFailed = zulip === 'failed';
+            if (zulip === 'failed') {
+              failed.push(name);
+            }
           }
         }
-      }
-      const mattermost = mattermostSkipped
-        ? 'skipped'
-        : onMattermost?.has(name)
-          ? 'exists'
-          : await this.uploadToMattermost(name, url);
-      if (mattermost === 'uploaded') {
-        mattermostUploaded++;
-      } else if (mattermost === 'exists') {
-        alreadyOnMattermost.push(name);
-      }
-      if (zulipFailed || mattermost === 'failed') {
-        failed.push(name);
       }
     }
 
     return {
       total: emotes.length,
       zulipUploaded,
-      mattermostUploaded,
       zulipSkipped,
-      ...(mattermostSkipped ? { mattermostSkipped } : {}),
       failed,
       renamed,
       alreadyOnZulip,
-      alreadyOnMattermost,
     };
-  }
-
-  private async listMattermostEmoji() {
-    try {
-      return new Set(await this.mattermost.listEmoji());
-    } catch (error) {
-      this.logger.error(
-        'Could not list the Mattermost emoji, so every emote is uploaded and a name Mattermost already has counts as already there',
-        error,
-      );
-      return undefined;
-    }
-  }
-
-  /** Checked on the upload too, not only against the listing: the listing may have failed, or the name been taken since. */
-  private async uploadToMattermost(name: string, url: string): Promise<'uploaded' | 'exists' | 'failed'> {
-    try {
-      await this.mattermost.createEmote(name, url);
-      return 'uploaded';
-    } catch (error) {
-      if (error instanceof ClientError && error.server_error_id === MATTERMOST_DUPLICATE_EMOJI) {
-        return 'exists';
-      }
-      this.logger.error(`Could not sync emote ${name} - ${url} to Mattermost`, error);
-      return 'failed';
-    }
   }
 
   private async listZulipEmoji() {
@@ -1283,15 +1171,5 @@ ${formattedCode}
       shipping: order.currentAmounts.shipping.value,
       tax: order.currentAmounts.tax.value,
     });
-  }
-
-  private async suppressMattermostEmbeds(post: Post) {
-    if (!post.metadata?.embeds || post.metadata.embeds.length === 0 || post.props.remove_link_preview === 'true') {
-      return;
-    }
-
-    if (this.hasBlacklistUrl(post.metadata.embeds.map(({ url }) => url).filter((url) => url))) {
-      await this.mattermost.updatePost({ id: post.id, props: { remove_link_preview: 'true' } });
-    }
   }
 }

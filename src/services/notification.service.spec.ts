@@ -2,7 +2,6 @@ import { Logger } from '@nestjs/common';
 import { EmbedBuilder } from 'discord.js';
 import { Constants, NotificationDestination, NotificationRoutes } from 'src/constants';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { Notification, NotificationKind } from 'src/interfaces/notification.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { toZulipMessage } from 'src/renderers/zulip.renderer';
@@ -24,23 +23,6 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   setThreadArchived: vitest.fn(),
   createThread: vitest.fn(),
   updateThread: vitest.fn(),
-});
-
-const newMattermostMock = (): Mocked<IMattermostInterface> => ({
-  isInitialised: vitest.fn().mockReturnValue(true),
-  init: vitest.fn(),
-  registerEventListener: vitest.fn() as any,
-  send: vitest.fn(),
-  reply: vitest.fn(),
-  updatePost: vitest.fn(),
-  createEmote: vitest.fn(),
-  listEmoji: vitest.fn(),
-  streamChannels: vitest.fn(),
-  joinChannel: vitest.fn(),
-  registerCommand: vitest.fn() as any,
-  runCommand: vitest.fn(),
-  openDialog: vitest.fn(),
-  submitDialog: vitest.fn(),
 });
 
 const newZulipMock = (): Mocked<IZulipInterface> => ({
@@ -77,46 +59,34 @@ const ExpectedRoutes: Record<
   NotificationDestination,
   {
     discord?: { channelId: string; crosspost?: true };
-    mattermost?: { channelId: string; silent?: true };
     zulip?: { stream: number; topic: string };
   }
 > = {
   'community.github-status': { discord: { channelId: DiscordChannel.GithubStatus } },
   'team.github-status': {
-    mattermost: { channelId: Constants.Mattermost.Channels.GithubStatus, silent: true },
     zulip: { stream: ImmichThirdParties, topic: 'github status' },
   },
   'community.pull-requests': { discord: { channelId: DiscordChannel.PullRequests } },
   'team.pull-requests': {
-    mattermost: { channelId: Constants.Mattermost.Channels.GithubPullRequests, silent: true },
     zulip: { stream: ImmichThirdParties, topic: 'pull requests' },
-  },
-  'team.fhs-pull-requests': {
-    mattermost: { channelId: Constants.Mattermost.Channels.FHSGithubPullRequests, silent: true },
   },
   'community.issues': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
   'team.issues': {
-    mattermost: { channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions, silent: true },
     zulip: { stream: ImmichThirdParties, topic: 'issues' },
   },
   'community.discussions': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
   'team.discussions': {
-    mattermost: { channelId: Constants.Mattermost.Channels.GithubIssuesAndDiscussions, silent: true },
     zulip: { stream: ImmichThirdParties, topic: 'discussions' },
   },
   'community.releases': { discord: { channelId: DiscordChannel.Releases, crosspost: true } },
   'community.announcements': { discord: { channelId: DiscordChannel.Announcements, crosspost: true } },
   'team.releases': {
-    mattermost: { channelId: Constants.Mattermost.Channels.GithubReleases, silent: true },
     zulip: { stream: ImmichThirdParties, topic: 'releases' },
   },
-  'team.fhs-releases': { mattermost: { channelId: Constants.Mattermost.Channels.FHSGithubReleases } },
   'team.purchases': {
-    mattermost: { channelId: Constants.Mattermost.Channels.Purchases },
     zulip: { stream: ImmichThirdParties, topic: 'purchases' },
   },
   'team.reports': {
-    mattermost: { channelId: Constants.Mattermost.Channels.Purchases },
     zulip: { stream: ImmichThirdParties, topic: 'reports' },
   },
   'team.release-alerts': {
@@ -142,16 +112,14 @@ const notification: Notification = {
 describe(NotificationService.name, () => {
   let sut: NotificationService;
   let discordMock: Mocked<IDiscordInterface>;
-  let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
   let loggerMock: MockInstance;
   let fatalMock: MockInstance;
 
   beforeEach(() => {
     discordMock = newDiscordMock();
-    mattermostMock = newMattermostMock();
     zulipMock = newZulipMock();
-    sut = new NotificationService(discordMock, mattermostMock, zulipMock);
+    sut = new NotificationService(discordMock, zulipMock);
     loggerMock = vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     fatalMock = vitest.spyOn(Logger.prototype, 'fatal').mockImplementation(() => {});
   });
@@ -169,9 +137,8 @@ describe(NotificationService.name, () => {
       for (const destination of destinations) {
         const expected = ExpectedRoutes[destination];
         discordMock = newDiscordMock();
-        mattermostMock = newMattermostMock();
         zulipMock = newZulipMock();
-        sut = new NotificationService(discordMock, mattermostMock, zulipMock);
+        sut = new NotificationService(discordMock, zulipMock);
 
         await sut.notify(destination, notification);
 
@@ -188,20 +155,6 @@ describe(NotificationService.name, () => {
           expect(discordMock.sendMessage, destination).not.toHaveBeenCalled();
         }
 
-        if (expected.mattermost) {
-          expect(mattermostMock.send, destination).toHaveBeenCalledOnce();
-          const [post] = mattermostMock.send.mock.calls[0];
-          expect(post.channelId, destination).toBe(expected.mattermost.channelId);
-          expect(post.message, destination).toBe('');
-          if (expected.mattermost.silent) {
-            expect(post.silent, destination).toBe(true);
-          } else {
-            expect(post, destination).not.toHaveProperty('silent');
-          }
-        } else {
-          expect(mattermostMock.send, destination).not.toHaveBeenCalled();
-        }
-
         if (expected.zulip) {
           expect(zulipMock.sendMessage, destination).toHaveBeenCalledOnce();
           const [payload] = zulipMock.sendMessage.mock.calls[0];
@@ -213,10 +166,10 @@ describe(NotificationService.name, () => {
       }
     });
 
-    it('should route every team destination except FHS to Zulip, and no community destination', () => {
+    it('should route every team destination to Zulip, and no community destination', () => {
       for (const destination of destinations) {
         const { zulip } = NotificationRoutes[destination] as { zulip?: unknown };
-        if (destination.startsWith('community.') || destination.startsWith('team.fhs-')) {
+        if (destination.startsWith('community.')) {
           expect(zulip, destination).toBeUndefined();
         } else {
           expect(zulip, destination).toBeDefined();
@@ -267,15 +220,6 @@ describe(NotificationService.name, () => {
       });
     });
 
-    it('should send the rendered block tree to Mattermost', async () => {
-      await sut.notify('team.pull-requests', notification);
-
-      const [post] = mattermostMock.send.mock.calls[0];
-      expect(post.props).toEqual({
-        mm_blocks: [expect.objectContaining({ type: 'container', accent_color: '#57f287', border: true })],
-      });
-    });
-
     it('should send the rendered markdown to the routed Zulip channel and topic', async () => {
       await sut.notify('team.pull-requests', notification);
 
@@ -294,19 +238,14 @@ describe(NotificationService.name, () => {
       await sut.notify('team.release-alerts', notification);
 
       expect(discordMock.sendMessage).toHaveBeenCalledOnce();
-      expect(mattermostMock.send).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).toHaveBeenCalledTimes(2);
     });
 
-    it('should send Discord first, then Mattermost, then Zulip, waiting for each', async () => {
+    it('should send Discord first, then Zulip, waiting for each', async () => {
       const order: string[] = [];
       discordMock.sendMessage.mockImplementation(async () => {
         await new Promise((resolve) => setTimeout(resolve, 2));
         order.push('discord');
-      });
-      mattermostMock.send.mockImplementation(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        order.push('mattermost');
       });
       zulipMock.sendMessage.mockImplementation(async () => {
         order.push('zulip');
@@ -317,7 +256,7 @@ describe(NotificationService.name, () => {
       await sut.notify('team.releases', notification);
       await sut.notify('team.release-alerts', notification);
 
-      expect(order).toEqual(['discord', 'mattermost', 'zulip', 'discord', 'zulip']);
+      expect(order).toEqual(['discord', 'zulip', 'discord', 'zulip']);
     });
 
     it('should skip Zulip silently when it is not initialised', async () => {
@@ -325,19 +264,7 @@ describe(NotificationService.name, () => {
 
       await expect(sut.notify('team.releases', notification)).resolves.toBeUndefined();
 
-      expect(mattermostMock.send).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
-      expect(loggerMock).not.toHaveBeenCalled();
-      expect(fatalMock).not.toHaveBeenCalled();
-    });
-
-    it('should skip Mattermost silently when it is not configured', async () => {
-      mattermostMock.isInitialised.mockReturnValue(false);
-
-      await expect(sut.notify('team.releases', notification)).resolves.toBeUndefined();
-
-      expect(mattermostMock.send).not.toHaveBeenCalled();
-      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
       expect(loggerMock).not.toHaveBeenCalled();
       expect(fatalMock).not.toHaveBeenCalled();
     });
@@ -389,17 +316,6 @@ describe(NotificationService.name, () => {
   });
 
   describe('failure isolation', () => {
-    it('should keep posting to Zulip when Mattermost fails, log it and resolve', async () => {
-      mattermostMock.send.mockRejectedValue(new Error('mattermost down'));
-
-      await expect(sut.notify('team.releases', notification)).resolves.toBeUndefined();
-
-      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
-      expect(loggerMock).toHaveBeenCalledOnce();
-      expect(loggerMock.mock.calls[0][0]).toBe('Could not notify team.releases on mattermost: Error: mattermost down');
-      expect(fatalMock).not.toHaveBeenCalled();
-    });
-
     it('should keep posting to Zulip when Discord fails, log it and resolve', async () => {
       discordMock.sendMessage.mockRejectedValue(new Error('discord down'));
 
@@ -411,29 +327,31 @@ describe(NotificationService.name, () => {
       expect(fatalMock).not.toHaveBeenCalled();
     });
 
-    it('should keep the Mattermost post when Zulip fails, log it and resolve', async () => {
+    it('should keep the Discord post when Zulip fails, log it and resolve', async () => {
       zulipMock.sendMessage.mockRejectedValue(new Error('zulip down'));
 
-      await expect(sut.notify('team.purchases', notification)).resolves.toBeUndefined();
+      await expect(sut.notify('team.release-alerts', notification)).resolves.toBeUndefined();
 
-      expect(mattermostMock.send).toHaveBeenCalledOnce();
+      expect(discordMock.sendMessage).toHaveBeenCalledOnce();
       expect(loggerMock).toHaveBeenCalledOnce();
-      expect(loggerMock.mock.calls[0][0]).toBe('Could not notify team.purchases on zulip: Error: zulip down');
+      expect(loggerMock.mock.calls[0][0]).toBe('Could not notify team.release-alerts on zulip: Error: zulip down');
       expect(fatalMock).not.toHaveBeenCalled();
     });
 
     it('should resolve, log each failure and one fatal line when every routed platform fails', async () => {
-      mattermostMock.send.mockRejectedValue(new Error('mattermost down'));
+      discordMock.sendMessage.mockRejectedValue(new Error('discord down'));
       zulipMock.sendMessage.mockRejectedValue(new Error('zulip down'));
 
-      await expect(sut.notify('team.issues', notification)).resolves.toBeUndefined();
+      await expect(sut.notify('team.release-alerts', notification)).resolves.toBeUndefined();
 
       expect(loggerMock.mock.calls.map(([message]) => message)).toEqual([
-        'Could not notify team.issues on mattermost: Error: mattermost down',
-        'Could not notify team.issues on zulip: Error: zulip down',
+        'Could not notify team.release-alerts on discord: Error: discord down',
+        'Could not notify team.release-alerts on zulip: Error: zulip down',
       ]);
       expect(fatalMock).toHaveBeenCalledOnce();
-      expect(fatalMock).toHaveBeenCalledWith('Could not notify team.issues on any platform: notification dropped');
+      expect(fatalMock).toHaveBeenCalledWith(
+        'Could not notify team.release-alerts on any platform: notification dropped',
+      );
     });
 
     it('should resolve and log when the only routed platform fails', async () => {
@@ -451,11 +369,11 @@ describe(NotificationService.name, () => {
       );
     });
 
-    it('should resolve and log when Zulip is skipped and Mattermost fails', async () => {
+    it('should resolve and log when Zulip is skipped and Discord fails', async () => {
       zulipMock.isInitialised.mockReturnValue(false);
-      mattermostMock.send.mockRejectedValue(new Error('mattermost down'));
+      discordMock.sendMessage.mockRejectedValue(new Error('discord down'));
 
-      await expect(sut.notify('team.releases', notification)).resolves.toBeUndefined();
+      await expect(sut.notify('team.release-alerts', notification)).resolves.toBeUndefined();
 
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       expect(loggerMock).toHaveBeenCalledOnce();
@@ -463,12 +381,12 @@ describe(NotificationService.name, () => {
     });
 
     it('should still attempt every platform after a failure', async () => {
-      mattermostMock.send.mockRejectedValue(new Error('mattermost down'));
+      discordMock.sendMessage.mockRejectedValue(new Error('discord down'));
       zulipMock.sendMessage.mockRejectedValue(new Error('zulip down'));
 
-      await sut.notify('team.reports', notification);
+      await sut.notify('team.release-alerts', notification);
 
-      expect(mattermostMock.send).toHaveBeenCalledOnce();
+      expect(discordMock.sendMessage).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
     });
 
@@ -479,7 +397,6 @@ describe(NotificationService.name, () => {
       await sut.notify('team.pull-requests', notification);
 
       expect(discordMock.sendMessage).toHaveBeenCalledOnce();
-      expect(mattermostMock.send).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
       expect(fatalMock).toHaveBeenCalledOnce();
     });
@@ -491,7 +408,6 @@ describe(NotificationService.name, () => {
 
       expect(loggerMock).not.toHaveBeenCalled();
       expect(fatalMock).not.toHaveBeenCalled();
-      expect(mattermostMock.send).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
@@ -503,19 +419,6 @@ describe(NotificationService.name, () => {
       await expect(sut.notify('team.release-alerts', notification)).rejects.toThrow('zulip renderer bug');
 
       expect(discordMock.sendMessage).toHaveBeenCalledOnce();
-      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
-      expect(loggerMock).not.toHaveBeenCalled();
-      expect(fatalMock).not.toHaveBeenCalled();
-    });
-
-    it('should let a Zulip renderer error propagate without undoing the Mattermost post before it', async () => {
-      vitest.mocked(toZulipMessage).mockImplementationOnce(() => {
-        throw new TypeError('zulip renderer bug');
-      });
-
-      await expect(sut.notify('team.pull-requests', notification)).rejects.toThrow('zulip renderer bug');
-
-      expect(mattermostMock.send).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       expect(loggerMock).not.toHaveBeenCalled();
       expect(fatalMock).not.toHaveBeenCalled();
@@ -536,27 +439,6 @@ describe(NotificationService.name, () => {
         url: 'https://example.com/post',
         description: 'Summary',
       });
-      expect(mattermostMock.send).not.toHaveBeenCalled();
-      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
-    });
-
-    it('should resolve false and send nothing to Mattermost when it is not configured', async () => {
-      mattermostMock.isInitialised.mockReturnValue(false);
-
-      await expect(sut.notifyTarget({ platform: 'mattermost', channelId: 'town-square' }, rss)).resolves.toBe(false);
-
-      expect(mattermostMock.send).not.toHaveBeenCalled();
-    });
-
-    it('should send the rendered block tree to the Mattermost channel, and resolve true', async () => {
-      await expect(sut.notifyTarget({ platform: 'mattermost', channelId: 'town-square' }, rss)).resolves.toBe(true);
-
-      expect(mattermostMock.send).toHaveBeenCalledExactlyOnceWith({
-        channelId: 'town-square',
-        message: '',
-        props: { mm_blocks: [expect.objectContaining({ type: 'container' })] },
-      });
-      expect(discordMock.sendMessage).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
@@ -569,7 +451,6 @@ describe(NotificationService.name, () => {
         content: '**[Post](https://example.com/post)**\n~~~ quote\nSummary\n~~~',
       });
       expect(discordMock.sendMessage).not.toHaveBeenCalled();
-      expect(mattermostMock.send).not.toHaveBeenCalled();
     });
 
     it('should skip Zulip without rendering or logging when it is not initialised, and resolve false', async () => {
@@ -593,7 +474,6 @@ describe(NotificationService.name, () => {
 
     it.each([
       ['discord', { platform: 'discord', channelId: '123' }, 'channel 123', () => discordMock.sendMessage],
-      ['mattermost', { platform: 'mattermost', channelId: 'c1' }, 'channel c1', () => mattermostMock.send],
       [
         'zulip',
         { platform: 'zulip', stream: 107, topic: 'blog' },
@@ -628,14 +508,10 @@ describe(NotificationService.name, () => {
   });
 
   describe('toNotificationTarget', () => {
-    it('should address a Discord or Mattermost row by its channel', () => {
+    it('should address a Discord row by its channel', () => {
       expect(toNotificationTarget({ service: 'discord', channelId: '123', topic: null })).toStrictEqual({
         platform: 'discord',
         channelId: '123',
-      });
-      expect(toNotificationTarget({ service: 'mattermost', channelId: 'c1', topic: null })).toStrictEqual({
-        platform: 'mattermost',
-        channelId: 'c1',
       });
     });
 

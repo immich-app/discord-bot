@@ -124,22 +124,6 @@ const outlineDocuments = {
   YuccaFocusTopic: 'ad2e16ee-094e-4f29-bfd4-cbf6b2f20f66',
 };
 
-const mattermostChannels = {
-  Purchases: 'ijh1ciffcp8fdyy4y5snxnornr',
-  BotSpam: 'xqjc3tfr5jbidni4awi1ibkdcw',
-  GithubStatus: '4ht6ooks83n3fq8t8kijbnyeww',
-  GithubIssuesAndDiscussions: 'zpn38kj84pyg3bmbj7d66kdnge',
-  GithubPullRequests: 'i1fbjrqj67n1ibx4f6isuioguc',
-  GithubReleases: '97d9ihrnb3rwbcoob6erhdfrcr',
-  FHSGithubPullRequests: 'b3dajyaywffymb8updr8sb64ay',
-  FHSGithubReleases: 'ggnayby577f45reuin1j143xsc',
-};
-
-const mattermostTeams = {
-  Immich: 'ejumard7n7budjfeayghjrr3or',
-  FHS: 'ewmb789rq3ya98sjkeqoon4y5y',
-};
-
 const zulipStreams = {
   Immich: 54,
   FUTOStaff: 2,
@@ -168,47 +152,36 @@ const zulipTeamStreams = {
  */
 export type NotificationRoute = {
   discord?: { channelId: DiscordChannel | string; crosspost?: boolean };
-  mattermost?: { channelId: string; silent?: boolean };
   zulip?: { stream: number; topic: string };
 };
 
 export const NotificationRoutes = {
   'community.github-status': { discord: { channelId: DiscordChannel.GithubStatus } },
   'team.github-status': {
-    mattermost: { channelId: mattermostChannels.GithubStatus, silent: true },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'github status' },
   },
   'community.pull-requests': { discord: { channelId: DiscordChannel.PullRequests } },
   'team.pull-requests': {
-    mattermost: { channelId: mattermostChannels.GithubPullRequests, silent: true },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'pull requests' },
   },
-  // FHS has its own pull request setup for now, so the FHS destinations stay on Mattermost only.
-  'team.fhs-pull-requests': { mattermost: { channelId: mattermostChannels.FHSGithubPullRequests, silent: true } },
   'community.issues': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
   'team.issues': {
-    mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'issues' },
   },
   'community.discussions': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
   'team.discussions': {
-    mattermost: { channelId: mattermostChannels.GithubIssuesAndDiscussions, silent: true },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'discussions' },
   },
   'community.releases': { discord: { channelId: DiscordChannel.Releases, crosspost: true } },
   'community.announcements': { discord: { channelId: DiscordChannel.Announcements, crosspost: true } },
   'team.releases': {
-    mattermost: { channelId: mattermostChannels.GithubReleases, silent: true },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'releases' },
   },
-  'team.fhs-releases': { mattermost: { channelId: mattermostChannels.FHSGithubReleases } },
   // Purchases and reports share a channel today but are separate destinations, like issues and discussions.
   'team.purchases': {
-    mattermost: { channelId: mattermostChannels.Purchases },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'purchases' },
   },
   'team.reports': {
-    mattermost: { channelId: mattermostChannels.Purchases },
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'reports' },
   },
   'team.release-alerts': {
@@ -251,10 +224,6 @@ export const Constants = {
   Outline: {
     Collections: outlineCollections,
     Documents: outlineDocuments,
-  },
-  Mattermost: {
-    Channels: mattermostChannels,
-    Teams: mattermostTeams,
   },
   Zulip: {
     Streams: zulipStreams,

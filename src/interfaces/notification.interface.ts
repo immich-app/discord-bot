@@ -24,7 +24,7 @@ export type NotificationKind =
  * Semantic outcome of the event, namespaced by domain. A token names the event at its call site and
  * nothing else: several tokens may render identically (see `src/renderers/palette.ts`), but no call
  * site may borrow a token because its colour happens to match. Each renderer maps a token to its own
- * affordance: Discord picks an embed colour, Mattermost an accent hex, Zulip (later) a leading emoji.
+ * affordance: Discord picks an embed colour, Zulip a leading emoji.
  */
 export type NotificationAccent =
   | 'pr.opened'
@@ -82,6 +82,4 @@ export type Notification = {
 };
 
 export type NotificationTarget =
-  | { platform: 'discord'; channelId: string }
-  | { platform: 'mattermost'; channelId: string }
-  | { platform: 'zulip'; stream: number; topic: string };
+  { platform: 'discord'; channelId: string } | { platform: 'zulip'; stream: number; topic: string };

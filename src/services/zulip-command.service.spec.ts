@@ -5,7 +5,6 @@ import { IDatabaseRepository, MirrorIdentityOwner } from 'src/interfaces/databas
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
 import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
 import {
@@ -305,7 +304,7 @@ const SERVER = 'the Immich Discord server (979116623879368755)';
 const HELP = [
   'Mention me at the start of a message in a team stream, then one of:',
   '- `help` (any stream): this list',
-  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip and Mattermost, skipping a name the platform already has`,
+  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has`,
   '- `backfill-pull-requests <number|all>`: create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
   '- `fourthwall update <id|all>`: fetch that Fourthwall order again and update its row in the database, or with `all` every order',
   '- `schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]`: post the message in this stream on that cron schedule, in the topic given or this one; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
@@ -493,7 +492,6 @@ describe('ZulipCommandService', () => {
     rssMock = { getFeed: vitest.fn() };
     mirrorLinksMock = newMirrorLinkServiceMock();
     const discord = discordMock as unknown as IDiscordInterface;
-    const mattermost = {} as IMattermostInterface;
     const db = database as unknown as IDatabaseRepository;
     zulipExpanders = new ZulipExpanderService(
       db,
@@ -507,8 +505,8 @@ describe('ZulipCommandService', () => {
       chatServiceMock as unknown as ChatService,
       githubServiceMock as unknown as GithubService,
       webhookServiceMock as unknown as WebhookService,
-      new ScheduledMessageService(db, discord, mattermost, zulipMock),
-      new RSSService(db, new NotificationService(discord, mattermost, zulipMock), rssMock),
+      new ScheduledMessageService(db, discord, zulipMock),
+      new RSSService(db, new NotificationService(discord, zulipMock), rssMock),
       mirrorLinksMock as unknown as MirrorLinkService,
       zulipExpanders,
     );
@@ -730,13 +728,11 @@ describe('ZulipCommandService', () => {
     const report: EmoteSyncReport = {
       total: 3,
       zulipUploaded: 3,
-      mattermostUploaded: 3,
       failed: [],
       renamed: ['nameless:3 → nameless_3'],
       alreadyOnZulip: [],
-      alreadyOnMattermost: [],
     };
-    const DONE = `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 renamed: nameless:3 → nameless_3`;
+    const DONE = `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 1 renamed: nameless:3 → nameless_3`;
 
     it('should acknowledge at once, naming the server, sync it in the background and post the report when done', async () => {
       let finish!: (report: EmoteSyncReport) => void;
@@ -747,14 +743,14 @@ describe('ZulipCommandService', () => {
       expect(chatServiceMock.syncEmotes).toHaveBeenCalledExactlyOnceWith(Constants.Discord.EmoteSyncServer.id);
       expect(Constants.Discord.EmoteSyncServer).toEqual({ id: '979116623879368755', name: 'Immich' });
       expect(replies().map(({ content }) => content)).toEqual([
-        `Syncing the emotes of ${SERVER} to Zulip and Mattermost, this can take a few minutes…`,
+        `Syncing the emotes of ${SERVER} to Zulip, this can take a few minutes…`,
       ]);
 
       finish(report);
       await flush();
 
       expect(replies().map(({ content }) => content)).toEqual([
-        `Syncing the emotes of ${SERVER} to Zulip and Mattermost, this can take a few minutes…`,
+        `Syncing the emotes of ${SERVER} to Zulip, this can take a few minutes…`,
         DONE,
       ]);
     });
@@ -763,19 +759,17 @@ describe('ZulipCommandService', () => {
       chatServiceMock.syncEmotes.mockResolvedValue({
         total: 3,
         zulipUploaded: 0,
-        mattermostUploaded: 2,
         zulipSkipped: 'unlisted',
         failed: ['pepeD'],
         renamed: [],
         alreadyOnZulip: ['catJAM', 'CatJam → catjam2'],
-        alreadyOnMattermost: ['kekw'],
       });
 
       await send('@**Immich** emote-sync');
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2, 1 already on Mattermost: kekw`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 1 failed: pepeD, 2 already on Zulip: catJAM, CatJam → catjam2`,
       );
     });
 
@@ -790,7 +784,7 @@ describe('ZulipCommandService', () => {
       await flush();
 
       expect(replies().at(-1)?.content).toBe(
-        `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 failed: @\u200B**all**, 1 renamed: #\u200B**general** → general`,
+        `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 1 failed: @\u200B**all**, 1 renamed: #\u200B**general** → general`,
       );
     });
 
@@ -807,7 +801,7 @@ describe('ZulipCommandService', () => {
 
       const outcome = replies().at(-1)!.content;
       expect(outcome).toMatch(
-        /^Done syncing the emotes of the Immich Discord server \(979116623879368755\): 1000 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1000 failed: emote_number_0, /,
+        /^Done syncing the emotes of the Immich Discord server \(979116623879368755\): 1000 emotes, 3 uploaded to Zulip, 1000 failed: emote_number_0, /,
       );
       expect(outcome).toMatch(/\.\.\.$/);
       expect(outcome).toHaveLength(10_000);

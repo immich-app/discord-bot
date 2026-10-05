@@ -13,11 +13,10 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { Discord, ModalComponent } from 'discordx';
-import { Constants, DiscordModal } from 'src/constants';
+import { DiscordModal } from 'src/constants';
 import { shorten } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { NewScheduledMessage, ScheduledMessage, UpdateScheduledMessage } from 'src/schema';
 
@@ -32,7 +31,6 @@ export class ScheduledMessageService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IDiscordInterface) private discord: IDiscordInterface,
-    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
   ) {}
 
@@ -41,12 +39,6 @@ export class ScheduledMessageService {
       this.discord.sendMessage({
         channelId,
         message: { content: message, flags: suppressEmbeds ? [MessageFlags.SuppressEmbeds] : [] },
-      }),
-    mattermost: ({ channelId, message, suppressEmbeds }) =>
-      this.mattermost.send({
-        channelId,
-        message,
-        props: suppressEmbeds ? { remove_link_preview: 'true' } : undefined,
       }),
     zulip: ({ channelId, topic, message }) =>
       this.zulip.sendMessage({ stream: Number(channelId), topic: topic ?? '', content: message }),
@@ -57,132 +49,6 @@ export class ScheduledMessageService {
     for (const message of messages) {
       this.registerJob(message);
     }
-
-    await this.mattermost.registerCommand(
-      {
-        trigger: 'schedule-add',
-        display_name: 'Schedule add',
-        description: 'Create a recurring scheduled message',
-        auto_complete: true,
-        auto_complete_desc: 'cron is a regular cron expression. The message may include role mentions and markdown.',
-        team_id: Constants.Mattermost.Teams.Immich,
-        parameters: [
-          { name: 'name', type: 'text', optional: false },
-          { name: 'cronExpression', type: 'text', optional: false },
-          { name: 'message', type: 'text', optional: false },
-          { name: 'channel', type: 'channelMention', optional: false },
-        ],
-      },
-      async ({ user_id, parameters: { name, cronExpression, message, channel } }) => {
-        try {
-          await this.createScheduledMessage({
-            name,
-            cronExpression,
-            message,
-            channelId: channel,
-            createdBy: user_id,
-            service: 'mattermost',
-          });
-          return {
-            response_type: 'in_channel',
-            text: `Scheduled message ${inlineCode(name)} created with cron ${inlineCode(cronExpression)} in ~${channel}`,
-          };
-        } catch (error) {
-          return { text: `Failed to create scheduled message: ${error}` };
-        }
-      },
-    );
-
-    await this.mattermost.registerCommand(
-      {
-        trigger: 'schedule-remove',
-        display_name: 'Schedule add',
-        description: 'Remove scheduled message',
-        auto_complete: true,
-        team_id: Constants.Mattermost.Teams.Immich,
-        parameters: [{ name: 'name', type: 'text', optional: false }],
-      },
-      async ({ parameters: { name } }) => {
-        const message = await this.removeScheduledMessage(name, 'mattermost');
-        return {
-          response_type: 'in_channel',
-          text: message,
-        };
-      },
-    );
-
-    await this.mattermost.registerCommand(
-      {
-        trigger: 'schedule-list',
-        display_name: 'Schedule lists',
-        description: 'List all scheduled messages',
-        auto_complete: true,
-        team_id: Constants.Mattermost.Teams.Immich,
-      },
-      async () => {
-        const messages = await this.listScheduledMessages('mattermost');
-
-        if (messages.length === 0) {
-          return { text: 'No scheduled messages found.' };
-        }
-
-        return {
-          text: messages
-            .map(
-              (message) =>
-                `- **${message.name}**:  ${inlineCode(message.cronExpression)} in ~${message.channelId}: ${message.message}`,
-            )
-            .join('\n'),
-        };
-      },
-    );
-
-    await this.mattermost.registerCommand(
-      {
-        trigger: 'schedule-edit',
-        display_name: 'Edit schedule',
-        description: 'Edit an existing scheduled message',
-        team_id: Constants.Mattermost.Teams.Immich,
-        auto_complete: true,
-        auto_complete_desc: 'The name of the scheduled message to edit',
-        parameters: [{ name: 'name', type: 'text', optional: false }],
-      },
-      async ({ trigger_id, parameters: { name } }) => {
-        const message = await this.database.getScheduledMessage(name, 'mattermost');
-        if (!message) {
-          return 'Scheduled message not found';
-        }
-
-        void (async () => {
-          const response = await this.mattermost.openDialog(trigger_id, {
-            title: message.name,
-            elements: [
-              {
-                type: 'text',
-                display_name: 'Cron expression',
-                name: 'cronExpression',
-                default: message.cronExpression,
-              },
-              { type: 'textarea', display_name: 'Message', name: 'message', default: message.message },
-              {
-                type: 'bool',
-                display_name: 'Suppress embeds',
-                name: 'suppressEmbeds',
-                optional: true,
-                default: String(message.suppressEmbeds),
-              },
-            ],
-          });
-
-          if (response.cancelled) {
-            return;
-          }
-
-          const { cronExpression, message: text, suppressEmbeds } = response;
-          await this.updateScheduledMessage(name, 'mattermost', { cronExpression, message: text, suppressEmbeds });
-        })().catch((error) => this.logger.error(`Failed to edit scheduled message ${name}: ${error}`));
-      },
-    );
   }
 
   private registerJob(scheduledMessage: ScheduledMessage) {
