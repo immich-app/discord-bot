@@ -318,8 +318,8 @@ const HELP = [
   '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on <group>|off [group]|default <repository>|list>` (any stream): turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the groups and the streams they are on in; x.com links are mirrored on nitter.net in every stream',
-  '- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group>` (any stream): create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or their URLs) for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere',
+  '- `expanders <on <group>|off [group]|default <repository>|list>` (any stream): turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream',
+  "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list` (any stream): create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or their URLs) for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
@@ -2181,28 +2181,11 @@ describe('ZulipCommandService', () => {
     });
 
     describe('list', () => {
-      const GROUPS = [
-        'Expander groups:',
-        '- `fhs`: `futo-org/fhs-core` (default), `futo-org/fhs-web`',
-        '- `immich`: `immich-app/immich` (default); a bare `#N` below 1000 expands only for a recent pull request',
-        '',
-      ];
-
-      it('should say there is no group yet', async () => {
-        await reset();
-
-        await send('@**Immich** expanders list');
-
-        expect(contents()).toEqual([
-          'There is no expander group yet; `expander-group create <group> <repository>…` creates one.',
-        ]);
-      });
-
-      it('should list the groups and say when GitHub expansion is on in no stream', async () => {
+      it('should say when GitHub expansion is on in no stream, and point to the groups', async () => {
         await send('@**Immich** expanders off');
         await send('@**Immich** expanders list');
 
-        expect(contents()[1]).toBe([...GROUPS, 'GitHub expansion is on in no stream.'].join('\n'));
+        expect(contents()[1]).toBe('GitHub expansion is on in no stream; `expander-group list` lists the groups.');
         expect(zulipMock.getStream).not.toHaveBeenCalled();
       });
 
@@ -2227,7 +2210,6 @@ describe('ZulipCommandService', () => {
 
         expect(contents()).toEqual([
           [
-            ...GROUPS,
             HEADER,
             '- **#Immich** (54): `immich`; `#1234` goes to `immich-app/immich`',
             '- **#immich-general** (107): `immich`, `fhs`; `#1234` goes to `futo-org/fhs-web`',
@@ -2244,7 +2226,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders list');
 
         expect(contents()).toEqual([
-          [...GROUPS, HEADER, '- **#immich-general** (107): `immich`; `#1234` goes to `immich-app/immich`'].join('\n'),
+          [HEADER, '- **#immich-general** (107): `immich`; `#1234` goes to `immich-app/immich`'].join('\n'),
         ]);
       });
     });
@@ -2286,7 +2268,7 @@ describe('ZulipCommandService', () => {
     describe('expander-group', () => {
       const REPOSITORY_FORMS = '`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`';
       const GROUP_USAGE =
-        'Usage: `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group>`';
+        'Usage: `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list`';
 
       describe('create', () => {
         it('should create a group with the names GitHub spells, from names and URLs, without duplicates', async () => {
@@ -2540,6 +2522,82 @@ describe('ZulipCommandService', () => {
         );
       });
 
+      describe('list', () => {
+        it('should say there is no group yet', async () => {
+          await reset();
+
+          await send('@**Immich** expander-group list');
+
+          expect(contents()).toEqual([
+            'There is no expander group yet; `expander-group create <group> <repository>…` creates one.',
+          ]);
+        });
+
+        it('should list every group with its size, its default and how many streams it is on in', async () => {
+          database.expanders.push(row(54));
+          await zulipExpanders.init();
+
+          await send('@**Immich** expander-group list');
+
+          expect(contents()).toEqual([
+            [
+              'Expander groups:',
+              '- `fhs`: 2 repositories, default `futo-org/fhs-core`; on in 0 streams',
+              '- `immich`: 1 repository, default `immich-app/immich`; on in 2 streams',
+              '',
+              '`expander-group info <group>` shows one in full.',
+            ].join('\n'),
+          ]);
+          expect(zulipMock.getStream).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('info', () => {
+        it('should show every repository, the threshold and the streams by name', async () => {
+          database.expanders.push(row(140));
+          await zulipExpanders.init();
+          zulipMock.getStream.mockImplementation((streamId) =>
+            streamId === 140
+              ? Promise.reject(new Error('Invalid channel ID'))
+              : Promise.resolve({ streamId, name: 'immich-general', inviteOnly: false }),
+          );
+          zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 107 }]);
+
+          await send('@**Immich** expander-group info IMMICH');
+
+          expect(contents()).toEqual([
+            [
+              'Expander group `immich`:',
+              "- Repositories: `immich-app/immich` (the group's default for `#1234`)",
+              '- A bare `#N` below 1000 expands only for a pull request updated in the last two weeks.',
+              `- On in: **#immich-general** (107), stream 140${NOT_SUBSCRIBED_MARK}`,
+              'A stream can send a bare `#1234` elsewhere with `expanders default <repository>`; `expanders list` shows where each one goes.',
+            ].join('\n'),
+          ]);
+        });
+
+        it('should say when a group expands every bare #N and is on in no stream', async () => {
+          await send('@**Immich** expander-group info fhs');
+
+          expect(contents()).toEqual([
+            [
+              'Expander group `fhs`:',
+              "- Repositories: `futo-org/fhs-core` (the group's default for `#1234`), `futo-org/fhs-web`",
+              '- Every bare `#N` expands.',
+              '- On in no stream; `expanders on fhs` turns it on in the stream it is given in.',
+              'A stream can send a bare `#1234` elsewhere with `expanders default <repository>`; `expanders list` shows where each one goes.',
+            ].join('\n'),
+          ]);
+          expect(zulipMock.getStream).not.toHaveBeenCalled();
+        });
+
+        it('should refuse an unknown group', async () => {
+          await send('@**Immich** expander-group info nope');
+
+          expect(contents()).toEqual(['There is no expander group `nope`; the groups are `fhs`, `immich`.']);
+        });
+      });
+
       describe('delete', () => {
         it('should delete a group, turn it off in every stream and forget the defaults that go with it', async () => {
           database.expanders.push(row(107, 'fhs'), row(120, 'fhs'));
@@ -2591,6 +2649,9 @@ describe('ZulipCommandService', () => {
         '@**Immich** expander-group threshold fhs',
         '@**Immich** expander-group delete fhs extra',
         '@**Immich** expander-group rename fhs apps',
+        '@**Immich** expander-group info',
+        '@**Immich** expander-group info fhs extra',
+        '@**Immich** expander-group list fhs',
       ])('should answer %j with the usage and change nothing', async (content) => {
         await send(content);
 
