@@ -7,7 +7,6 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { IHolidaysInterface } from 'src/interfaces/holidays.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
@@ -18,7 +17,6 @@ import { GithubRepository } from 'src/repositories/github.repository';
 import { GitlabRepository } from 'src/repositories/gitlab.repository';
 import { HolidaysRepository } from 'src/repositories/holidays.repository';
 import { LoopDedupeRepository } from 'src/repositories/loop-dedupe.repository';
-import { MattermostRepository } from 'src/repositories/mattermost.repository';
 import { OutlineRepository } from 'src/repositories/outline.repository';
 import { RSSRepository } from 'src/repositories/rss.repository';
 import { ZulipRepository } from 'src/repositories/zulip.repository';
@@ -35,5 +33,4 @@ export const providers: Provider[] = [
   { provide: IRSSInterface, useClass: RSSRepository },
   { provide: IZulipInterface, useClass: ZulipRepository },
   { provide: ILoopDedupeInterface, useClass: LoopDedupeRepository },
-  { provide: IMattermostInterface, useClass: MattermostRepository },
 ];

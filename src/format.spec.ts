@@ -1,5 +1,4 @@
 import {
-  asHexColor,
   isResolvedTopic,
   mapOutsideCode,
   neutraliseZulipLabel,
@@ -31,16 +30,6 @@ describe('shorten', () => {
 
   it('should default to 100 characters', () => {
     expect(shorten('x'.repeat(101))).toBe('x'.repeat(97) + '...');
-  });
-});
-
-describe('asHexColor', () => {
-  it('should format a colour as #rrggbb', () => {
-    expect(asHexColor(0x57_f2_87)).toBe('#57f287');
-  });
-
-  it('should not zero-pad, matching what has always been sent', () => {
-    expect(asHexColor(0x00_ff_00)).toBe('#ff00');
   });
 });
 

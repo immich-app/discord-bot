@@ -15,9 +15,6 @@ export const shortenCodePoints = (text: string, maxLength: number) => {
 
 export const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
-/** `#rrggbb` for a Mattermost accent. Deliberately not zero-padded: that is what has always been sent. */
-export const asHexColor = (color: number) => `#${color.toString(16)}`;
-
 /** Zulip has no backslash escaping, so a zero-width space after the sigil is the only way to stop a mention. */
 export const neutraliseZulipMentions = (text: string) => text.replaceAll(/([@#])(?=_?\*)/g, '$1\u200B');
 

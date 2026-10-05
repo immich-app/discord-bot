@@ -18,8 +18,6 @@ const REQUIRED = {
   LOOPDEDUPE_SEARCH_API_KEY: 'loop-key',
   POLAR_PAYMENT_IMMICH_CLIENT_WEBHOOK_SECRET: 'client-secret',
   POLAR_PAYMENT_IMMICH_SERVER_WEBHOOK_SECRET: 'server-secret',
-  MATTERMOST_DOMAIN: 'https://mattermost.example.com',
-  MATTERMOST_BOT_TOKEN: 'mattermost-token',
 };
 
 describe('getConfig', () => {

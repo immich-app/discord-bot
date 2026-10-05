@@ -30,7 +30,6 @@ import {
   IFourthwallRepository,
 } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
-import { CommandWebhookRequest, DialogResponse, IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { Notification, NotificationAccent, NotificationAuthor } from 'src/interfaces/notification.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
@@ -237,7 +236,6 @@ export class WebhookService {
     @Inject(IFourthwallRepository) private fourthwall: FourthwallRepository,
     @Inject(IGithubInterface) private github: IGithubInterface,
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
-    @Inject(IMattermostInterface) private mattermost: IMattermostInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
     private notifications: NotificationService,
   ) {}
@@ -372,14 +370,6 @@ export class WebhookService {
     }
 
     void this.handleFourthwallOrder(dto);
-  }
-
-  async onMattermostCommand(dto: CommandWebhookRequest<never>, slug: string) {
-    return this.mattermost.runCommand(slug, dto);
-  }
-
-  async onMattermostDialog(dto: DialogResponse, slug: string) {
-    return this.mattermost.submitDialog(dto, slug);
   }
 
   private async handleFourthwallOrder(dto: FourthwallOrderCreateWebhook | FourthwallOrderUpdateWebhook) {
@@ -628,8 +618,6 @@ export class WebhookService {
           await this.notifications.notify('community.pull-requests', notification);
         }
         await this.notifications.notify('team.pull-requests', notification);
-      } else if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
-        await this.notifications.notify('team.fhs-pull-requests', notification);
       }
     }
   }
@@ -695,8 +683,8 @@ export class WebhookService {
       body: description,
     };
 
+    // FHS releases stay out of the Immich destinations.
     if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
-      await this.notifications.notify('team.fhs-releases', notification);
       return;
     }
 

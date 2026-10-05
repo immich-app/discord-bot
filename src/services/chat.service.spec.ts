@@ -1,4 +1,3 @@
-import { ClientError } from '@mattermost/client';
 import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
 import { Constants } from 'src/constants';
@@ -10,7 +9,6 @@ import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { GitlabItem, GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
@@ -152,23 +150,6 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   setZulipExpanderDefault: vitest.fn(),
 });
 
-const newMattermostMockRepository = (): Mocked<IMattermostInterface> => ({
-  isInitialised: vitest.fn().mockReturnValue(true),
-  init: vitest.fn(),
-  registerEventListener: vitest.fn() as any,
-  send: vitest.fn(),
-  reply: vitest.fn(),
-  updatePost: vitest.fn(),
-  createEmote: vitest.fn(),
-  listEmoji: vitest.fn(),
-  streamChannels: vitest.fn(),
-  joinChannel: vitest.fn(),
-  registerCommand: vitest.fn() as any,
-  runCommand: vitest.fn(),
-  openDialog: vitest.fn(),
-  submitDialog: vitest.fn(),
-});
-
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
   getOrder: vitest.fn(),
 });
@@ -225,7 +206,6 @@ describe('Bot test', () => {
   let loopDedupeMock: Mocked<ILoopDedupeInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let databaseMock: Mocked<IDatabaseRepository>;
-  let mattermostMock: Mocked<IMattermostInterface>;
   let zulipMock: Mocked<IZulipInterface>;
   let zulipServiceMock: ReturnType<typeof newZulipServiceMock>;
   let zulipExpanders: ZulipExpanderService;
@@ -239,7 +219,6 @@ describe('Bot test', () => {
     loopDedupeMock = newLoopDedupeMockRepository();
     outlineMock = newOutlineMockRepository();
     databaseMock = newDatabaseMockRepository();
-    mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
     zulipServiceMock = newZulipServiceMock();
     zulipExpanders = new ZulipExpanderService(databaseMock, githubMock, gitlabMock);
@@ -255,10 +234,9 @@ describe('Bot test', () => {
       gitlabMock,
       loopDedupeMock,
       outlineMock,
-      mattermostMock,
       zulipMock,
       zulipServiceMock as unknown as ZulipService,
-      new NotificationService(discordMock, mattermostMock, zulipMock),
+      new NotificationService(discordMock, zulipMock),
       zulipExpanders,
     );
   });
@@ -502,7 +480,7 @@ describe('Bot test', () => {
       expect(databaseMock.getLatestPullRequestByNumber).not.toHaveBeenCalled();
     });
 
-    it('should resolve a bare reference with the latest pull request of that number when no scope is given, as Discord and Mattermost do', async () => {
+    it('should resolve a bare reference with the latest pull request of that number when no scope is given, as Discord does', async () => {
       await expect(sut.handleGithubThreadReferences({ content: '#4242' }, false)).resolves.toEqual([
         'https://github.com/immich-app/immich/pull/4242',
       ]);
@@ -591,7 +569,6 @@ describe('Bot test', () => {
       expect(zulipMock.createEmote).toHaveBeenCalledWith('catJAM', 'https://example.com/catJAM.png');
       expect(discordMock.createEmote).toHaveBeenCalledOnce();
       expect(discordMock.createEmote).toHaveBeenCalledWith('catJAM', 'https://example.com/catJAM.png', 'guild-1');
-      expect(mattermostMock.createEmote).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
 
       const [zulip] = zulipMock.createEmote.mock.invocationCallOrder;
@@ -754,10 +731,9 @@ describe('Bot test', () => {
     beforeEach(() => {
       zulipMock.listEmoji.mockResolvedValue([]);
       zulipMock.getEmojiCodes.mockResolvedValue({ unicode: { fire: '🔥', tada: '🎉', wave: '👋' }, names: {} });
-      mattermostMock.listEmoji.mockResolvedValue([]);
     });
 
-    it('should upload every Discord emote to Zulip and Mattermost, then report done', async () => {
+    it('should upload every Discord emote to Zulip, then report done', async () => {
       const { interaction, deferReply, reply } = newInteraction();
       discordMock.getEmotes.mockResolvedValue([
         {
@@ -793,18 +769,13 @@ describe('Bot test', () => {
         ['peped', 'https://cdn.discordapp.com/emojis/2.gif'],
         ['nameless_3', 'https://cdn.discordapp.com/emojis/3.png'],
       ]);
-      expect(mattermostMock.createEmote.mock.calls).toEqual([
-        ['catJAM', 'https://cdn.discordapp.com/emojis/1.webp'],
-        ['pepeD', 'https://cdn.discordapp.com/emojis/2.gif'],
-        ['nameless:3', 'https://cdn.discordapp.com/emojis/3.png'],
-      ]);
       expect(discordMock.createEmote).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
 
       expect(deferReply).toHaveBeenCalledOnce();
       expect(reply.edit).toHaveBeenCalledOnce();
       expect(reply.edit).toHaveBeenCalledWith(
-        'Done syncing: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 1 renamed: nameless:3 → nameless_3',
+        'Done syncing: 3 emotes, 3 uploaded to Zulip, 1 renamed: nameless:3 → nameless_3',
       );
     });
 
@@ -837,11 +808,9 @@ describe('Bot test', () => {
 
       expect(zulipMock.createEmote).toHaveBeenCalledOnce();
       expect(zulipMock.createEmote).toHaveBeenCalledWith('catjam', expected);
-      expect(mattermostMock.createEmote).toHaveBeenCalledOnce();
-      expect(mattermostMock.createEmote).toHaveBeenCalledWith('catJAM', expected);
     });
 
-    it('should defer the reply, upload each emote to Zulip then Mattermost one at a time, then edit the reply', async () => {
+    it('should defer the reply, upload each emote to Zulip one at a time, then edit the reply', async () => {
       const { interaction, deferReply, reply } = newInteraction();
       discordMock.getEmotes.mockResolvedValue([
         {
@@ -866,16 +835,13 @@ describe('Bot test', () => {
       const [getEmotes] = discordMock.getEmotes.mock.invocationCallOrder;
       const [listEmoji] = zulipMock.listEmoji.mock.invocationCallOrder;
       const [zulipFirst, zulipSecond] = zulipMock.createEmote.mock.invocationCallOrder;
-      const [mattermostFirst, mattermostSecond] = mattermostMock.createEmote.mock.invocationCallOrder;
       const [edit] = reply.edit.mock.invocationCallOrder;
       expect(defer).toBeLessThan(getEmotes);
       expect(getEmotes).toBeLessThan(zulipFirst);
       expect(getEmotes).toBeLessThan(listEmoji);
       expect(listEmoji).toBeLessThan(zulipFirst);
-      expect(zulipFirst).toBeLessThan(mattermostFirst);
-      expect(mattermostFirst).toBeLessThan(zulipSecond);
-      expect(zulipSecond).toBeLessThan(mattermostSecond);
-      expect(mattermostSecond).toBeLessThan(edit);
+      expect(zulipFirst).toBeLessThan(zulipSecond);
+      expect(zulipSecond).toBeLessThan(edit);
     });
 
     describe('Zulip names', () => {
@@ -906,7 +872,6 @@ describe('Bot test', () => {
 
         expect(zulipMock.createEmote).toHaveBeenCalledOnce();
         expect(zulipMock.createEmote).toHaveBeenCalledWith(expected, 'https://cdn.discordapp.com/emojis/1.webp');
-        expect(mattermostMock.createEmote).toHaveBeenCalledWith(name, 'https://cdn.discordapp.com/emojis/1.webp');
       });
 
       it('should not report a name that only changed case', async () => {
@@ -915,7 +880,7 @@ describe('Bot test', () => {
 
         await syncEmotes(interaction);
 
-        expect(reply.edit).toHaveBeenCalledWith('Done syncing: 1 emote, 1 uploaded to Zulip, 1 uploaded to Mattermost');
+        expect(reply.edit).toHaveBeenCalledWith('Done syncing: 1 emote, 1 uploaded to Zulip');
       });
 
       it('should suffix the names of emotes that collide within the run, in Discord order, and report them', async () => {
@@ -929,13 +894,8 @@ describe('Bot test', () => {
           ['catjam2', 'https://cdn.discordapp.com/emojis/2.webp'],
           ['catjam3', 'https://cdn.discordapp.com/emojis/3.webp'],
         ]);
-        expect(mattermostMock.createEmote.mock.calls).toEqual([
-          ['catJAM', 'https://cdn.discordapp.com/emojis/1.webp'],
-          ['CatJam', 'https://cdn.discordapp.com/emojis/2.webp'],
-          ['CATJAM', 'https://cdn.discordapp.com/emojis/3.webp'],
-        ]);
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: CatJam → catjam2, CATJAM → catjam3',
+          'Done syncing: 3 emotes, 3 uploaded to Zulip, 2 renamed: CatJam → catjam2, CATJAM → catjam3',
         );
       });
 
@@ -951,13 +911,8 @@ describe('Bot test', () => {
           ['tada2', 'https://cdn.discordapp.com/emojis/2.webp'],
           ['catjam', 'https://cdn.discordapp.com/emojis/3.webp'],
         ]);
-        expect(mattermostMock.createEmote.mock.calls).toEqual([
-          ['fire', 'https://cdn.discordapp.com/emojis/1.webp'],
-          ['Tada', 'https://cdn.discordapp.com/emojis/2.webp'],
-          ['catJAM', 'https://cdn.discordapp.com/emojis/3.webp'],
-        ]);
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: fire → fire2, Tada → tada2',
+          'Done syncing: 3 emotes, 3 uploaded to Zulip, 2 renamed: fire → fire2, Tada → tada2',
         );
       });
 
@@ -972,7 +927,7 @@ describe('Bot test', () => {
           ['zulip3', 'https://cdn.discordapp.com/emojis/2.webp'],
         ]);
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 2 emotes, 2 uploaded to Zulip, 2 uploaded to Mattermost, 2 renamed: Zulip → zulip2, zulip → zulip3',
+          'Done syncing: 2 emotes, 2 uploaded to Zulip, 2 renamed: Zulip → zulip2, zulip → zulip3',
         );
       });
 
@@ -989,7 +944,7 @@ describe('Bot test', () => {
           ['fire5', 'https://cdn.discordapp.com/emojis/3.webp'],
         ]);
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 3 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: fire → fire4, FIRE → fire5',
+          'Done syncing: 3 emotes, 3 uploaded to Zulip, 2 renamed: fire → fire4, FIRE → fire5',
         );
       });
 
@@ -1005,7 +960,7 @@ describe('Bot test', () => {
           ['tada2', 'https://cdn.discordapp.com/emojis/3.webp'],
         ]);
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 2 uploaded to Zulip, 3 uploaded to Mattermost, 2 renamed: Fire → fire2, tada → tada2, 1 already on Zulip: fire',
+          'Done syncing: 3 emotes, 2 uploaded to Zulip, 2 renamed: Fire → fire2, tada → tada2, 1 already on Zulip: fire',
         );
       });
 
@@ -1031,9 +986,8 @@ describe('Bot test', () => {
 
         expect(zulipMock.createEmote).toHaveBeenCalledOnce();
         expect(zulipMock.createEmote).toHaveBeenCalledWith('peped', 'https://cdn.discordapp.com/emojis/2.webp');
-        expect(mattermostMock.createEmote).toHaveBeenCalledTimes(2);
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 2 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 already on Zulip: catJAM',
+          'Done syncing: 2 emotes, 1 uploaded to Zulip, 1 already on Zulip: catJAM',
         );
       });
 
@@ -1046,7 +1000,7 @@ describe('Bot test', () => {
 
         expect(zulipMock.createEmote).toHaveBeenCalledOnce();
         expect(zulipMock.createEmote).toHaveBeenCalledWith('catjam', 'https://cdn.discordapp.com/emojis/1.webp');
-        expect(reply.edit).toHaveBeenCalledWith('Done syncing: 1 emote, 1 uploaded to Zulip, 1 uploaded to Mattermost');
+        expect(reply.edit).toHaveBeenCalledWith('Done syncing: 1 emote, 1 uploaded to Zulip');
       });
 
       it('should be a no-op on Zulip when synced twice, suffixed and built-in names included', async () => {
@@ -1080,7 +1034,7 @@ describe('Bot test', () => {
 
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 4 emotes, 0 uploaded to Zulip, 4 uploaded to Mattermost, 4 already on Zulip: catJAM, CatJam → catjam2, nameless:3 → nameless_3, wave → wave2',
+          'Done syncing: 4 emotes, 0 uploaded to Zulip, 4 already on Zulip: catJAM, CatJam → catjam2, nameless:3 → nameless_3, wave → wave2',
         );
       });
     });
@@ -1092,7 +1046,6 @@ describe('Bot test', () => {
       await syncEmotes(interaction);
 
       expect(zulipMock.createEmote).not.toHaveBeenCalled();
-      expect(mattermostMock.createEmote).not.toHaveBeenCalled();
       expect(reply.edit).toHaveBeenCalledWith(
         'Done syncing: the Discord server has no emotes, so nothing was uploaded',
       );
@@ -1107,107 +1060,6 @@ describe('Bot test', () => {
 
       expect(zulipMock.listEmoji).not.toHaveBeenCalled();
       expect(zulipMock.createEmote).not.toHaveBeenCalled();
-      expect(mattermostMock.createEmote).not.toHaveBeenCalled();
-    });
-
-    describe('Mattermost names', () => {
-      const emotes = [
-        {
-          id: '1',
-          identifier: 'catJAM:1',
-          name: 'catJAM',
-          url: 'https://cdn.discordapp.com/emojis/1.webp',
-          animated: false,
-        },
-        {
-          id: '2',
-          identifier: 'pepeD:2',
-          name: 'pepeD',
-          url: 'https://cdn.discordapp.com/emojis/2.webp',
-          animated: false,
-        },
-      ];
-      const duplicate = () =>
-        new ClientError('https://mattermost.example.com', {
-          message: 'Unable to create emoji. Another emoji with the same name already exists.',
-          server_error_id: 'api.emoji.create.duplicate.app_error',
-          status_code: 400,
-          url: 'https://mattermost.example.com/api/v4/emoji',
-        });
-
-      beforeEach(() => {
-        vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
-        discordMock.getEmotes.mockResolvedValue(emotes);
-      });
-
-      afterEach(() => {
-        vitest.restoreAllMocks();
-      });
-
-      it('should skip a name Mattermost already has instead of uploading it again, and say so', async () => {
-        const { interaction, reply } = newInteraction();
-        mattermostMock.listEmoji.mockResolvedValue(['catJAM', 'someone_elses']);
-
-        await syncEmotes(interaction);
-
-        expect(mattermostMock.createEmote.mock.calls).toEqual([['pepeD', 'https://cdn.discordapp.com/emojis/2.webp']]);
-        expect(zulipMock.createEmote).toHaveBeenCalledTimes(2);
-        expect(Logger.prototype.error).not.toHaveBeenCalled();
-        expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 already on Mattermost: catJAM',
-        );
-      });
-
-      it('should count a name Mattermost refuses as a duplicate as already there, not as a failure', async () => {
-        const { interaction, reply } = newInteraction();
-        mattermostMock.createEmote.mockRejectedValueOnce(duplicate());
-
-        await syncEmotes(interaction);
-
-        expect(mattermostMock.createEmote).toHaveBeenCalledTimes(2);
-        expect(Logger.prototype.error).not.toHaveBeenCalled();
-        expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 already on Mattermost: catJAM',
-        );
-      });
-
-      it('should still report another Mattermost refusal as a failure', async () => {
-        const { interaction, reply } = newInteraction();
-        mattermostMock.createEmote.mockRejectedValueOnce(
-          new ClientError('https://mattermost.example.com', {
-            message: 'Invalid emoji name.',
-            server_error_id: 'model.emoji.name.app_error',
-            status_code: 400,
-          }),
-        );
-
-        await syncEmotes(interaction);
-
-        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
-          'Could not sync emote catJAM - https://cdn.discordapp.com/emojis/1.webp to Mattermost',
-          expect.any(ClientError),
-        );
-        expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 failed: catJAM',
-        );
-      });
-
-      it('should upload every emote when Mattermost cannot list its emoji, still counting a duplicate as already there', async () => {
-        const { interaction, reply } = newInteraction();
-        mattermostMock.listEmoji.mockRejectedValue(new Error('fetch failed'));
-        mattermostMock.createEmote.mockRejectedValueOnce(duplicate());
-
-        await syncEmotes(interaction);
-
-        expect(mattermostMock.createEmote).toHaveBeenCalledTimes(2);
-        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
-          'Could not list the Mattermost emoji, so every emote is uploaded and a name Mattermost already has counts as already there',
-          expect.any(Error),
-        );
-        expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 2 emotes, 2 uploaded to Zulip, 1 uploaded to Mattermost, 1 already on Mattermost: catJAM',
-        );
-      });
     });
 
     describe('failures', () => {
@@ -1239,11 +1091,6 @@ describe('Bot test', () => {
         ['peped', 'https://cdn.discordapp.com/emojis/2.webp'],
         ['nameless_3', 'https://cdn.discordapp.com/emojis/3.png'],
       ];
-      const mattermostUploads = [
-        ['catJAM', 'https://cdn.discordapp.com/emojis/1.webp'],
-        ['pepeD', 'https://cdn.discordapp.com/emojis/2.webp'],
-        ['nameless:3', 'https://cdn.discordapp.com/emojis/3.png'],
-      ];
       const renamed = '1 renamed: nameless:3 → nameless_3';
 
       beforeEach(() => {
@@ -1262,7 +1109,6 @@ describe('Bot test', () => {
         await syncEmotes(interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads);
-        expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
         expect(Logger.prototype.error).toHaveBeenCalledOnce();
         expect(Logger.prototype.error).toHaveBeenCalledWith(
           'Could not sync emote catJAM - https://cdn.discordapp.com/emojis/1.webp to Zulip',
@@ -1270,43 +1116,24 @@ describe('Bot test', () => {
         );
         expect(reply.edit).toHaveBeenCalledOnce();
         expect(reply.edit).toHaveBeenCalledWith(
-          `Done syncing: 3 emotes, 2 uploaded to Zulip, 3 uploaded to Mattermost, 1 failed: catJAM, ${renamed}`,
+          `Done syncing: 3 emotes, 2 uploaded to Zulip, 1 failed: catJAM, ${renamed}`,
         );
       });
 
-      it('should keep syncing when a Mattermost upload fails and report the emote', async () => {
-        const { interaction, reply } = newInteraction();
-        mattermostMock.createEmote.mockResolvedValueOnce().mockRejectedValueOnce(new Error('boom'));
-
-        await syncEmotes(interaction);
-
-        expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads);
-        expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
-        expect(Logger.prototype.error).toHaveBeenCalledWith(
-          'Could not sync emote pepeD - https://cdn.discordapp.com/emojis/2.webp to Mattermost',
-          expect.any(Error),
-        );
-        expect(reply.edit).toHaveBeenCalledWith(
-          `Done syncing: 3 emotes, 3 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, ${renamed}`,
-        );
-      });
-
-      it('should report each failed emote once, whichever platforms failed', async () => {
+      it('should report every emote Zulip failed to take', async () => {
         const { interaction, reply } = newInteraction();
         zulipMock.createEmote.mockRejectedValueOnce(new Error('zulip')).mockRejectedValueOnce(new Error('zulip'));
-        mattermostMock.createEmote.mockRejectedValueOnce(new Error('mattermost'));
 
         await syncEmotes(interaction);
 
         expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads);
-        expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
-        expect(Logger.prototype.error).toHaveBeenCalledTimes(3);
+        expect(Logger.prototype.error).toHaveBeenCalledTimes(2);
         expect(reply.edit).toHaveBeenCalledWith(
-          `Done syncing: 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 2 failed: catJAM, pepeD, ${renamed}`,
+          `Done syncing: 3 emotes, 1 uploaded to Zulip, 2 failed: catJAM, pepeD, ${renamed}`,
         );
       });
 
-      it('should skip Zulip and say so, blaming no emote, when the realm emoji cannot be listed, and still sync Mattermost', async () => {
+      it('should skip Zulip and say so, blaming no emote, when the realm emoji cannot be listed', async () => {
         const { interaction, reply } = newInteraction();
         zulipMock.listEmoji.mockRejectedValue(new Error('Zulip client not initialised'));
 
@@ -1314,57 +1141,29 @@ describe('Bot test', () => {
 
         expect(zulipMock.getEmojiCodes).not.toHaveBeenCalled();
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
-        expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
         expect(Logger.prototype.error).toHaveBeenCalledOnce();
         expect(Logger.prototype.error).toHaveBeenCalledWith(
           'Could not list the Zulip emoji, skipping the Zulip side of the sync',
           expect.any(Error),
         );
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 3 uploaded to Mattermost',
+          'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed)',
         );
       });
 
-      it('should skip Mattermost and say so when it is not configured, and still sync Zulip', async () => {
-        const { interaction, reply } = newInteraction();
-        mattermostMock.isInitialised.mockReturnValue(false);
-
-        await syncEmotes(interaction);
-
-        expect(mattermostMock.listEmoji).not.toHaveBeenCalled();
-        expect(mattermostMock.createEmote).not.toHaveBeenCalled();
-        expect(zulipMock.createEmote).toHaveBeenCalledTimes(3);
-        expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 3 uploaded to Zulip, 0 uploaded to Mattermost (skipped: not configured), 1 renamed: nameless:3 → nameless_3',
-        );
-      });
-
-      it('should still report a Mattermost failure when Zulip was skipped', async () => {
-        const { interaction, reply } = newInteraction();
-        zulipMock.listEmoji.mockRejectedValue(new Error('Zulip client not initialised'));
-        mattermostMock.createEmote.mockResolvedValueOnce().mockRejectedValueOnce(new Error('boom'));
-
-        await syncEmotes(interaction);
-
-        expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its emoji could not be listed), 2 uploaded to Mattermost, 1 failed: pepeD',
-        );
-      });
-
-      it('should skip Zulip and say so when the built-in emoji names cannot be read, and still sync Mattermost', async () => {
+      it('should skip Zulip and say so when the built-in emoji names cannot be read', async () => {
         const { interaction, reply } = newInteraction();
         zulipMock.getEmojiCodes.mockRejectedValue(new Error('Could not fetch the Zulip emoji codes: 502'));
 
         await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).not.toHaveBeenCalled();
-        expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
         expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
           'Could not fetch the Zulip built-in emoji names, skipping the Zulip side of the sync',
           expect.any(Error),
         );
         expect(reply.edit).toHaveBeenCalledWith(
-          'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its built-in emoji names could not be read), 3 uploaded to Mattermost',
+          'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: its built-in emoji names could not be read)',
         );
       });
 
@@ -1374,17 +1173,16 @@ describe('Bot test', () => {
         const REFUSED =
           'Zulip refused the credentials of the user account that uploads emoji (Malformed API key), so no more emotes are uploaded to Zulip in this sync; check ZULIP_USER_USERNAME and ZULIP_USER_API_KEY';
 
-        it('should stop uploading to Zulip, log it once without the key, blame no emote, and keep syncing Mattermost', async () => {
+        it('should stop uploading to Zulip, log it once without the key, and blame no emote', async () => {
           const { interaction, reply } = newInteraction();
           zulipMock.createEmote.mockRejectedValue(unauthorized());
 
           await syncEmotes(interaction);
 
           expect(zulipMock.createEmote).toHaveBeenCalledOnce();
-          expect(mattermostMock.createEmote.mock.calls).toEqual(mattermostUploads);
           expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(REFUSED);
           expect(reply.edit).toHaveBeenCalledWith(
-            'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: Zulip refused the credentials of the user account that uploads emoji), 3 uploaded to Mattermost',
+            'Done syncing: 3 emotes, 0 uploaded to Zulip (skipped: Zulip refused the credentials of the user account that uploads emoji)',
           );
         });
 
@@ -1397,7 +1195,7 @@ describe('Bot test', () => {
           expect(zulipMock.createEmote.mock.calls).toEqual(zulipUploads.slice(0, 2));
           expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(REFUSED);
           expect(reply.edit).toHaveBeenCalledWith(
-            'Done syncing: 3 emotes, 1 uploaded to Zulip (skipped: Zulip refused the credentials of the user account that uploads emoji), 3 uploaded to Mattermost',
+            'Done syncing: 3 emotes, 1 uploaded to Zulip (skipped: Zulip refused the credentials of the user account that uploads emoji)',
           );
         });
 
@@ -1416,7 +1214,7 @@ describe('Bot test', () => {
 
           expect(zulipMock.createEmote).toHaveBeenCalledTimes(3);
           expect(reply.edit).toHaveBeenCalledWith(
-            `Done syncing: 3 emotes, 2 uploaded to Zulip, 3 uploaded to Mattermost, 1 failed: catJAM, ${renamed}`,
+            `Done syncing: 3 emotes, 2 uploaded to Zulip, 1 failed: catJAM, ${renamed}`,
           );
         });
       });
@@ -1437,12 +1235,9 @@ describe('Bot test', () => {
         await syncEmotes(interaction);
 
         expect(zulipMock.createEmote).toHaveBeenCalledTimes(300);
-        expect(mattermostMock.createEmote).toHaveBeenCalledTimes(300);
         expect(reply.edit).toHaveBeenCalledOnce();
         const [report] = reply.edit.mock.calls[0] as [string];
-        expect(report).toMatch(
-          /^Done syncing: 300 emotes, 0 uploaded to Zulip, 300 uploaded to Mattermost, 300 failed: emote_number_0, /,
-        );
+        expect(report).toMatch(/^Done syncing: 300 emotes, 0 uploaded to Zulip, 300 failed: emote_number_0, /);
         expect(report).toMatch(/\.\.\.$/);
         expect(report).toHaveLength(2000);
       });
@@ -1478,22 +1273,20 @@ describe('Bot test', () => {
     const report = {
       total: 3,
       zulipUploaded: 1,
-      mattermostUploaded: 2,
       failed: ['pepeD'],
       renamed: [],
       alreadyOnZulip: ['catJAM'],
-      alreadyOnMattermost: ['kekw'],
     };
 
     it('should start with "Done syncing" and say how many were uploaded where when no subject is given, as Discord posts it', () => {
       expect(formatEmoteSyncReport(report)).toBe(
-        'Done syncing: 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, 1 already on Zulip: catJAM, 1 already on Mattermost: kekw',
+        'Done syncing: 3 emotes, 1 uploaded to Zulip, 1 failed: pepeD, 1 already on Zulip: catJAM',
       );
     });
 
     it('should name the subject when one is given, as the Zulip command does, since its target is not where it is run', () => {
       expect(formatEmoteSyncReport(report, 'the emotes of the Immich Discord server (979116623879368755)')).toBe(
-        'Done syncing the emotes of the Immich Discord server (979116623879368755): 3 emotes, 1 uploaded to Zulip, 2 uploaded to Mattermost, 1 failed: pepeD, 1 already on Zulip: catJAM, 1 already on Mattermost: kekw',
+        'Done syncing the emotes of the Immich Discord server (979116623879368755): 3 emotes, 1 uploaded to Zulip, 1 failed: pepeD, 1 already on Zulip: catJAM',
       );
     });
 
@@ -1502,10 +1295,8 @@ describe('Bot test', () => {
         ...report,
         total: 0,
         zulipUploaded: 0,
-        mattermostUploaded: 0,
         failed: [],
         alreadyOnZulip: [],
-        alreadyOnMattermost: [],
       };
 
       expect(formatEmoteSyncReport(empty)).toBe(
@@ -1780,7 +1571,6 @@ describe('Bot test', () => {
       await sut.init();
 
       expect(zulipMock.init).not.toHaveBeenCalled();
-      expect(mattermostMock.init).toHaveBeenCalledOnce();
     });
 
     it('should subscribe the Zulip expanders to the event loop', async () => {
@@ -2776,7 +2566,7 @@ describe('Bot test', () => {
         expect(gitlabMock.getFileContent.mock.calls.map(([, , file]) => file)).toEqual(['b.kt', 'c.kt', 'e.kt']);
       });
 
-      it('should leave the permalinks of Discord and Mattermost uncapped, read five at a time, in order', async () => {
+      it('should leave the permalinks of Discord uncapped, read five at a time, in order', async () => {
         let running = 0;
         let mostRunning = 0;
         githubMock.getRepositoryFileContent.mockImplementation(async (_org, _repo, _ref, path) => {

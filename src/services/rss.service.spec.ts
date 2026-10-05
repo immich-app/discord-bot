@@ -2,7 +2,6 @@ import { Logger } from '@nestjs/common';
 import { EmbedBuilder } from 'discord.js';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { FeedItem, IRSSInterface, PostItem } from 'src/interfaces/rss.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { RSSFeed } from 'src/schema';
@@ -29,23 +28,6 @@ const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   setThreadArchived: vitest.fn(),
   createThread: vitest.fn(),
   updateThread: vitest.fn(),
-});
-
-const newMattermostMock = (): Mocked<IMattermostInterface> => ({
-  isInitialised: vitest.fn().mockReturnValue(true),
-  init: vitest.fn(),
-  registerEventListener: vitest.fn() as any,
-  send: vitest.fn(),
-  reply: vitest.fn(),
-  updatePost: vitest.fn(),
-  createEmote: vitest.fn(),
-  listEmoji: vitest.fn(),
-  streamChannels: vitest.fn(),
-  joinChannel: vitest.fn(),
-  registerCommand: vitest.fn() as any,
-  runCommand: vitest.fn(),
-  openDialog: vitest.fn(),
-  submitDialog: vitest.fn(),
 });
 
 const newZulipMock = (): Mocked<IZulipInterface> => ({
@@ -129,7 +111,7 @@ describe(RSSService.name, () => {
     discordMock = newDiscordMock();
     zulipMock = newZulipMock();
     rssMock = newRSSMock();
-    const notifications = new NotificationService(discordMock, newMattermostMock(), zulipMock);
+    const notifications = new NotificationService(discordMock, zulipMock);
     sut = new RSSService(databaseMock as unknown as IDatabaseRepository, notifications, rssMock);
   });
 

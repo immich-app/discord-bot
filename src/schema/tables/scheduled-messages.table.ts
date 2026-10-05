@@ -24,7 +24,7 @@ export class ScheduledMessageTable {
   name!: string;
 
   @Column({ default: 'discord', primary: true })
-  service!: 'discord' | 'mattermost' | 'zulip';
+  service!: 'discord' | 'zulip';
 
   @Column({ nullable: true })
   topic!: string | null;

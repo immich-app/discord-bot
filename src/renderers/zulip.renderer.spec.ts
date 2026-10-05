@@ -61,7 +61,7 @@ describe('toZulipMessage', () => {
     );
   });
 
-  it('should shorten a release body to 500 characters as insurance, like Mattermost', () => {
+  it('should shorten a release body to 500 characters as insurance', () => {
     expect(toZulipMessage({ kind: 'release', title: 'T', url: 'https://x/r', body: 'y'.repeat(600) })).toBe(
       `**[T](https://x/r)**\n${'y'.repeat(497)}...`,
     );

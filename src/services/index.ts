@@ -1,7 +1,6 @@
 import { ChatService } from 'src/services/chat.service';
 import { DatabaseService } from 'src/services/database.service';
 import { GithubService } from 'src/services/github.service';
-import { MattermostService } from 'src/services/mattermost.service';
 import { MirrorLinkService } from 'src/services/mirror-link.service';
 import { MirrorService } from 'src/services/mirror.service';
 import { NotificationService } from 'src/services/notification.service';
@@ -23,7 +22,6 @@ export const services = [
   RSSService,
   ScheduledMessageService,
   WebhookService,
-  MattermostService,
   MirrorService,
   MirrorLinkService,
   ZulipCommandService,
