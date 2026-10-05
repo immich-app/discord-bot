@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs><linearGradient id="futo" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse"><stop stop-color="#405DB1"/><stop offset="0.5" stop-color="#4F91DC"/><stop offset="1" stop-color="#1BACC6"/></linearGradient><mask id="visor"><rect width="512" height="512" fill="white"/><rect x="-48" y="-48" width="96" height="96" rx="22" transform="translate(256 286) rotate(45)" fill="black"/></mask></defs>
+  <rect width="512" height="512" fill="url(#futo)"/>
+  <g fill="#fff"><rect x="247" y="104" width="18" height="50" rx="9"/><rect x="-17" y="-17" width="34" height="34" rx="8" transform="translate(256 94) rotate(45)"/><rect x="96" y="246" width="34" height="80" rx="14"/><rect x="382" y="246" width="34" height="80" rx="14"/><circle cx="256" cy="286" r="138" mask="url(#visor)"/></g>
+</svg>
