@@ -137,4 +137,8 @@ export interface IDatabaseRepository {
   /** Every group of the stream when none is named; resolves to the groups it turned off. */
   removeZulipExpander(streamId: number, groupName?: string): Promise<string[]>;
   setZulipExpanderDefault(streamId: number, repository: string, createdBy: string): Promise<void>;
+  /** The Discord emote IDs the emote sync uploaded to Zulip or checked there. */
+  getZulipEmoteIds(): Promise<string[]>;
+  /** Records the emote, keeping the row a second call finds. */
+  addZulipEmote(discordEmoteId: string, zulipName: string): Promise<void>;
 }

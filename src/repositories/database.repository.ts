@@ -637,4 +637,17 @@ export class DatabaseRepository implements IDatabaseRepository {
       .onConflict((oc) => oc.column('streamId').doUpdateSet({ repository, createdBy }))
       .execute();
   }
+
+  async getZulipEmoteIds(): Promise<string[]> {
+    const rows = await this.db.selectFrom('zulip_emote').select('discordEmoteId').execute();
+    return rows.map(({ discordEmoteId }) => discordEmoteId);
+  }
+
+  async addZulipEmote(discordEmoteId: string, zulipName: string): Promise<void> {
+    await this.db
+      .insertInto('zulip_emote')
+      .values({ discordEmoteId, zulipName })
+      .onConflict((oc) => oc.column('discordEmoteId').doNothing())
+      .execute();
+  }
 }

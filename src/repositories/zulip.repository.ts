@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+import sharp from 'sharp';
 import type { components, paths } from 'src/generated/zulip';
 import {
   IZulipInterface,
@@ -25,6 +27,7 @@ import { readAtMost } from 'src/mirror/download';
 import {
   createZulipClient,
   multipart,
+  ZulipApiError,
   type ZulipClient,
   type ZulipClientOptions,
   ZulipRateLimit,
@@ -43,6 +46,49 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/gif': 'gif',
   'image/webp': 'webp',
   'image/jpeg': 'jpg',
+};
+
+type EmoteData = Uint8Array<ArrayBuffer>;
+
+/** `squashed` only for a non-square image; `unreadable` when `sharp` could not tell its shape. */
+type EmoteImage = {
+  original: EmoteData;
+  squashed?: EmoteData;
+  contentType: string;
+  shape: 'square' | 'squashed' | 'unreadable';
+};
+
+/**
+ * Zulip crops a custom emoji to a square, which cuts the sides off a wide emote, so a non-square image is squashed
+ * to one first, every frame of an animated one.
+ */
+const squashToSquare = async (data: EmoteData): Promise<Pick<EmoteImage, 'squashed' | 'shape'>> => {
+  try {
+    const image = sharp(data, { animated: true });
+    const { width, height, pageHeight, format } = await image.metadata();
+    const frameHeight = pageHeight ?? height;
+    if (!width || !frameHeight) {
+      return { shape: 'unreadable' };
+    }
+    if (width === frameHeight) {
+      return { shape: 'square' };
+    }
+    const side = Math.max(width, frameHeight);
+    const squashed = new Uint8Array(await image.resize(side, side, { fit: 'fill' }).toFormat(format).toBuffer());
+    return { squashed, shape: 'squashed' };
+  } catch {
+    return { shape: 'unreadable' };
+  }
+};
+
+const readEmote = async (emoteUrl: string): Promise<EmoteImage> => {
+  const image = await fetch(emoteUrl, { signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
+  if (!image.ok) {
+    throw new Error(`Could not fetch emote image ${emoteUrl}: ${image.status}`);
+  }
+  const contentType = image.headers.get('content-type')?.split(';')[0].trim() || 'application/octet-stream';
+  const original = new Uint8Array(await image.arrayBuffer());
+  return { original, contentType, ...(await squashToSquare(original)) };
 };
 
 /** Typed as empty by the generated types, but the server requires `notification_settings_null`, false by default. */
@@ -91,6 +137,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const notInitialised = () => new Error('Zulip client not initialised: call init() first');
 
 export class ZulipRepository implements IZulipInterface {
+  private logger = new Logger(ZulipRepository.name);
   private clients?: Clients;
   private botIdentity?: Omit<ZulipClientOptions, 'timeoutMs'>;
 
@@ -322,10 +369,11 @@ export class ZulipRepository implements IZulipInterface {
 
   async listEmoji(): Promise<ZulipEmoji[]> {
     const { data } = await this.bot.GET('/realm/emoji');
-    return Object.entries(data!.emoji ?? {}).map(([key, { id, name, deactivated }]) => ({
+    return Object.entries(data!.emoji ?? {}).map(([key, { id, name, deactivated, author_id }]) => ({
       id: id ?? key,
       name: name ?? '',
       deactivated: deactivated ?? false,
+      authorId: author_id ?? null,
     }));
   }
 
@@ -411,19 +459,63 @@ export class ZulipRepository implements IZulipInterface {
     await this.bot.DELETE('/events', { body: { queue_id: queueId } });
   }
 
+  /** An image `sharp` cannot read goes up as it is, for Zulip to judge. */
   async createEmote(name: string, emoteUrl: string) {
     const user = this.user;
-    const emojiName = name.toLowerCase();
+    const emote = await readEmote(emoteUrl);
+    await this.uploadEmote(user, name, emoteUrl, emote.contentType, emote.squashed ?? emote.original);
+  }
 
-    const image = await fetch(emoteUrl, { signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
-    if (!image.ok) {
-      throw new Error(`Could not fetch emote image ${emoteUrl}: ${image.status}`);
+  /** A failed upload of the squashed image puts the original back, so the emoji is never left deactivated. */
+  async replaceCroppedEmote(name: string, emoteUrl: string) {
+    const user = this.user;
+    const emote = await readEmote(emoteUrl);
+    if (emote.shape === 'unreadable') {
+      throw new Error(`Could not read the image of emote ${name} to tell whether Zulip cropped it`);
     }
+    if (!emote.squashed) {
+      return 'kept' as const;
+    }
+    await user.DELETE('/realm/emoji/{emoji_name}', { params: { path: { emoji_name: name.toLowerCase() } } });
+    try {
+      await this.uploadEmote(user, name, emoteUrl, emote.contentType, emote.squashed);
+    } catch (error) {
+      let restored = true;
+      try {
+        await this.uploadEmote(user, name, emoteUrl, emote.contentType, emote.original);
+      } catch {
+        restored = false;
+        this.logger.error(
+          `Could not put emote ${name} back on Zulip after its squashed upload failed: it is deactivated`,
+        );
+      }
+      // A refusal of the credentials must reach the sync as such, so that it stops.
+      if (error instanceof ZulipApiError && error.status === 401) {
+        throw error;
+      }
+      throw new Error(
+        restored
+          ? `Could not upload emote ${name} squashed, so the original is back`
+          : `Could not upload emote ${name} squashed, nor put the original back: it is deactivated`,
+        { cause: error },
+      );
+    }
+    return 'replaced' as const;
+  }
 
+  async getEmoteUploaderId() {
+    const { data } = await this.user.GET('/users/me');
+    if (data?.user_id === undefined) {
+      throw new Error('Zulip returned no user ID for the account that uploads emoji');
+    }
+    return data.user_id;
+  }
+
+  private async uploadEmote(user: ZulipClient, name: string, emoteUrl: string, contentType: string, data: EmoteData) {
+    const emojiName = name.toLowerCase();
     // Zulip needs a real filename with an extension and the image's content type on the multipart part.
-    const contentType = image.headers.get('content-type')?.split(';')[0].trim() || 'application/octet-stream';
     const extension = IMAGE_EXTENSIONS[contentType] ?? new URL(emoteUrl).pathname.match(/\.(\w+)$/)?.[1] ?? 'png';
-    const file = new File([await image.arrayBuffer()], `${emojiName}.${extension}`, { type: contentType });
+    const file = new File([data], `${emojiName}.${extension}`, { type: contentType });
 
     await user.POST('/realm/emoji/{emoji_name}', {
       params: { path: { emoji_name: emojiName } },

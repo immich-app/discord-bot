@@ -53,6 +53,7 @@
     "pg-cursor": "^2.14.6",
     "rss-parser": "^3.13.0",
     "semver": "^7.6.3",
+    "sharp": "^0.35.5",
     "undici": "^8.0.0",
     "vite-tsconfig-paths": "^6.0.0",
     "ws": "^8.21.3"

@@ -12,6 +12,7 @@ import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 import { RSSFeedTable } from 'src/schema/tables/rss-feeds.table';
 import { ScheduledMessageTable } from 'src/schema/tables/scheduled-messages.table';
 import { SponsorTable } from 'src/schema/tables/sponsor.table';
+import { ZulipEmoteTable } from 'src/schema/tables/zulip-emote.table';
 import { ZulipExpanderDefaultTable } from 'src/schema/tables/zulip-expander-default.table';
 import { ZulipExpanderGroupTable } from 'src/schema/tables/zulip-expander-group.table';
 import { ZulipExpanderTable } from 'src/schema/tables/zulip-expander.table';
@@ -35,6 +36,7 @@ export class DiscordBotDatabase {
     ZulipExpanderGroupTable,
     ZulipExpanderTable,
     ZulipExpanderDefaultTable,
+    ZulipEmoteTable,
   ];
 }
 
@@ -86,6 +88,9 @@ export type ZulipExpanderGroup = Selectable<ZulipExpanderGroupTable>;
 export type NewZulipExpanderGroup = Insertable<ZulipExpanderGroupTable>;
 export type UpdateZulipExpanderGroup = Updateable<ZulipExpanderGroupTable>;
 export type ZulipExpanderDefault = Selectable<ZulipExpanderDefaultTable>;
+export type ZulipEmote = Selectable<ZulipEmoteTable>;
+export type NewZulipEmote = Insertable<ZulipEmoteTable>;
+export type UpdateZulipEmote = Updateable<ZulipEmoteTable>;
 
 export interface Database {
   payment: PaymentTable;
@@ -103,4 +108,5 @@ export interface Database {
   zulip_expander_group: ZulipExpanderGroupTable;
   zulip_expander: ZulipExpanderTable;
   zulip_expander_default: ZulipExpanderDefaultTable;
+  zulip_emote: ZulipEmoteTable;
 }

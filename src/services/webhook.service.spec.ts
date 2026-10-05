@@ -110,6 +110,8 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   addZulipExpander: vitest.fn(),
   removeZulipExpander: vitest.fn(),
   setZulipExpanderDefault: vitest.fn(),
+  getZulipEmoteIds: vitest.fn().mockResolvedValue([]),
+  addZulipEmote: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -156,6 +158,8 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
   isInitialised: vitest.fn().mockReturnValue(true),
   createEmote: vitest.fn(),
+  replaceCroppedEmote: vitest.fn(),
+  getEmoteUploaderId: vitest.fn(),
   sendMessage: vitest.fn(),
   sendDirectMessage: vitest.fn(),
   getMessage: vitest.fn(),
