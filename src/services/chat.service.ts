@@ -205,9 +205,25 @@ const claimZulipEmojiName = (name: string, claimed: Set<string>) => {
 /** Its logo emoji `zulip` is not in the table, and Zulip lets even a member replace it. */
 export const zulipBuiltInEmoji = ({ unicode }: ZulipEmojiCodes) => [...Object.keys(unicode), 'zulip'];
 
-export const zulipEmojiNames = (emoteNames: string[], builtIn: string[], existing: Set<string>) => {
+/**
+ * An emote a sync recorded keeps the name it was uploaded under, whatever order Discord lists the emotes in now, and
+ * no other emote claims that name; a recorded name Zulip has since made a built-in one is given up while no realm
+ * emoji holds it.
+ */
+export const zulipEmojiNames = (
+  emoteNames: string[],
+  builtIn: string[],
+  existing: Set<string>,
+  recordedNames: Array<string | undefined> = [],
+) => {
   const claimed = new Set(builtIn.filter((name) => !existing.has(name)));
-  return emoteNames.map((name) => claimZulipEmojiName(name, claimed));
+  const kept = recordedNames.map((name) => (name === undefined || claimed.has(name) ? undefined : name));
+  for (const name of kept) {
+    if (name !== undefined) {
+      claimed.add(name);
+    }
+  }
+  return emoteNames.map((name, index) => kept[index] ?? claimZulipEmojiName(name, claimed));
 };
 
 type ZulipSkipReason = 'unlisted' | 'builtins' | 'refused';
@@ -224,7 +240,7 @@ export type EmoteSyncReport = {
   zulipSkipped?: ZulipSkipReason;
   failed: string[];
   renamed: string[];
-  /** Wide emotes Zulip had cropped, uploaded again squashed. */
+  /** Non-square emotes Zulip had cropped, or a sync had stretched, uploaded again padded. */
   replaced: string[];
   alreadyOnZulip: string[];
 };
@@ -242,7 +258,7 @@ export const formatEmoteSyncReport = (
     `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ` (skipped: ${ZULIP_SKIP_REASONS[zulipSkipped]})` : ''}`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
-    replaced.length > 0 && `${replaced.length} squashed and replaced: ${replaced.join(', ')}`,
+    replaced.length > 0 && `${replaced.length} padded and replaced: ${replaced.join(', ')}`,
     alreadyOnZulip.length > 0 && `${alreadyOnZulip.length} already on Zulip: ${alreadyOnZulip.join(', ')}`,
   ];
   return `${done}: ${outcome.filter(Boolean).join(', ')}`;
@@ -1052,7 +1068,9 @@ ${formattedCode}
     const emoji = await this.listZulipEmoji();
     const existing = emoji && new Set(emoji.map(({ name }) => name));
     const authors = new Map(emoji?.map(({ name, authorId }) => [name, authorId]));
-    const checked = new Set(existing ? await this.database.getZulipEmoteIds() : []);
+    const records = new Map(
+      (existing ? await this.database.getZulipEmotes() : []).map((record) => [record.discordEmoteId, record]),
+    );
     let uploaderId: number | null | undefined;
     const getUploaderId = async () => {
       if (uploaderId === undefined) {
@@ -1072,6 +1090,7 @@ ${formattedCode}
             emotes.map((emote) => emote.name ?? emote.identifier),
             builtIn,
             existing,
+            emotes.map((emote) => records.get(emote.id)?.zulipName),
           )
         : [];
 
@@ -1087,9 +1106,11 @@ ${formattedCode}
 
       // One bad emote must not abort the rest of the sync.
       if (existing && !zulipSkipped) {
+        const record = records.get(emote.id);
         const zulipName = zulipNames[index];
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
-        if (existing.has(zulipName) && checked.has(emote.id)) {
+        // A record of a name given up says nothing of the emoji under the new one.
+        if (existing.has(zulipName) && record?.zulipName === zulipName && record.padded) {
           alreadyOnZulip.push(asZulip);
         } else if (existing.has(zulipName)) {
           const uploader = await getUploaderId();
@@ -1102,7 +1123,7 @@ ${formattedCode}
             }
             continue;
           }
-          // Uploaded by a sync before wide emotes were squashed: Zulip cropped it if it is not square.
+          // Uploaded by a sync before emotes were padded: cropped by Zulip, or stretched, if it is not square.
           const zulip = await this.onZulip(name, url, () => this.zulip.replaceCroppedEmote(zulipName, url));
           if (zulip === 'refused') {
             zulipSkipped = 'refused';

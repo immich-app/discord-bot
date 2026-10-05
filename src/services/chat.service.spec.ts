@@ -148,7 +148,7 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   addZulipExpander: vitest.fn(),
   removeZulipExpander: vitest.fn(),
   setZulipExpanderDefault: vitest.fn(),
-  getZulipEmoteIds: vitest.fn().mockResolvedValue([]),
+  getZulipEmotes: vitest.fn().mockResolvedValue([]),
   addZulipEmote: vitest.fn(),
 });
 
@@ -737,6 +737,13 @@ describe('Bot test', () => {
       zulipMock.getEmojiCodes.mockResolvedValue({ unicode: { fire: '🔥', tada: '🎉', wave: '👋' }, names: {} });
     });
 
+    const record = (discordEmoteId: string, zulipName: string, padded: boolean) => ({
+      discordEmoteId,
+      zulipName,
+      padded,
+      createdAt: new Date('2026-10-01'),
+    });
+
     describe('wide emotes Zulip cropped', () => {
       const wide = {
         id: '1',
@@ -799,7 +806,7 @@ describe('Bot test', () => {
         expect(databaseMock.addZulipEmote).toHaveBeenCalledExactlyOnceWith('1', 'peepowidehappy');
         expect(report).toMatchObject({ replaced: ['peepoWideHappy'], alreadyOnZulip: [], failed: [] });
         expect(formatEmoteSyncReport(report)).toBe(
-          'Done syncing: 1 emote, 0 uploaded to Zulip, 1 squashed and replaced: peepoWideHappy',
+          'Done syncing: 1 emote, 0 uploaded to Zulip, 1 padded and replaced: peepoWideHappy',
         );
       });
 
@@ -812,14 +819,69 @@ describe('Bot test', () => {
         expect(report).toMatchObject({ replaced: [], alreadyOnZulip: ['peepoWideHappy'] });
       });
 
-      it('should never look at an emote a sync checked again', async () => {
-        databaseMock.getZulipEmoteIds.mockResolvedValue(['1']);
+      it('should never look at an emote a sync padded again', async () => {
+        databaseMock.getZulipEmotes.mockResolvedValue([record('1', 'peepowidehappy', true)]);
 
         const report = await sut.syncEmotes('guild-1');
 
         expect(zulipMock.replaceCroppedEmote).not.toHaveBeenCalled();
         expect(databaseMock.addZulipEmote).not.toHaveBeenCalled();
         expect(report).toMatchObject({ replaced: [], alreadyOnZulip: ['peepoWideHappy'] });
+      });
+
+      it('should pad again an emote a sync recorded before emotes were padded, and record it', async () => {
+        databaseMock.getZulipEmotes.mockResolvedValue([record('1', 'peepowidehappy', false)]);
+        zulipMock.replaceCroppedEmote.mockResolvedValue('replaced');
+
+        const report = await sut.syncEmotes('guild-1');
+
+        expect(zulipMock.replaceCroppedEmote).toHaveBeenCalledExactlyOnceWith('peepowidehappy', wide.url);
+        expect(databaseMock.addZulipEmote).toHaveBeenCalledExactlyOnceWith('1', 'peepowidehappy');
+        expect(report).toMatchObject({ replaced: ['peepoWideHappy'] });
+      });
+
+      it('should replace each recorded emote under its own name when Discord lists them in another order', async () => {
+        const other = {
+          ...wide,
+          id: '2',
+          identifier: 'PeepoWideHappy:2',
+          name: 'PeepoWideHappy',
+          url: 'https://cdn.discordapp.com/emojis/2.webp',
+        };
+        discordMock.getEmotes.mockResolvedValue([other, wide]);
+        zulipMock.listEmoji.mockResolvedValue([
+          { id: '9', name: 'peepowidehappy', deactivated: false, authorId: UPLOADER },
+          { id: '10', name: 'peepowidehappy2', deactivated: false, authorId: UPLOADER },
+        ]);
+        databaseMock.getZulipEmotes.mockResolvedValue([
+          record('1', 'peepowidehappy', false),
+          record('2', 'peepowidehappy2', false),
+        ]);
+        zulipMock.replaceCroppedEmote.mockResolvedValue('replaced');
+
+        await sut.syncEmotes('guild-1');
+
+        expect(zulipMock.replaceCroppedEmote).toHaveBeenCalledTimes(2);
+        expect(zulipMock.replaceCroppedEmote).toHaveBeenCalledWith('peepowidehappy2', other.url);
+        expect(zulipMock.replaceCroppedEmote).toHaveBeenCalledWith('peepowidehappy', wide.url);
+      });
+
+      it('should upload a new emote under a name of its own rather than one recorded for another emote', async () => {
+        const added = {
+          ...wide,
+          id: '2',
+          identifier: 'PeepoWideHappy:2',
+          name: 'PeepoWideHappy',
+          url: 'https://cdn.discordapp.com/emojis/2.webp',
+        };
+        discordMock.getEmotes.mockResolvedValue([added, wide]);
+        databaseMock.getZulipEmotes.mockResolvedValue([record('1', 'peepowidehappy', true)]);
+
+        await sut.syncEmotes('guild-1');
+
+        expect(zulipMock.replaceCroppedEmote).not.toHaveBeenCalled();
+        expect(zulipMock.createEmote).toHaveBeenCalledExactlyOnceWith('peepowidehappy2', added.url);
+        expect(databaseMock.addZulipEmote).toHaveBeenCalledExactlyOnceWith('2', 'peepowidehappy2');
       });
 
       it('should count a replacement that fails as failed, unrecorded, so the next sync tries again', async () => {
@@ -1098,6 +1160,37 @@ describe('Bot test', () => {
           'fire2',
           'https://cdn.discordapp.com/emojis/1.webp',
         );
+      });
+
+      it('should give up a recorded name Zulip has since made a built-in one, once no realm emoji holds it', async () => {
+        const { interaction } = newInteraction();
+        discordMock.getEmotes.mockResolvedValue([emote('fire', 1)]);
+        databaseMock.getZulipEmotes.mockResolvedValue([record('1', 'fire', true)]);
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.createEmote).toHaveBeenCalledExactlyOnceWith(
+          'fire2',
+          'https://cdn.discordapp.com/emojis/1.webp',
+        );
+        expect(databaseMock.addZulipEmote).toHaveBeenCalledExactlyOnceWith('1', 'fire2');
+      });
+
+      it('should check the emoji under the new name rather than take it for synced when a recorded name is given up', async () => {
+        const { interaction } = newInteraction();
+        discordMock.getEmotes.mockResolvedValue([emote('fire', 1)]);
+        databaseMock.getZulipEmotes.mockResolvedValue([record('1', 'fire', true)]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '5', name: 'fire2', deactivated: false, authorId: 7 }]);
+        zulipMock.getEmoteUploaderId.mockResolvedValue(7);
+        zulipMock.replaceCroppedEmote.mockResolvedValue('kept');
+
+        await syncEmotes(interaction);
+
+        expect(zulipMock.replaceCroppedEmote).toHaveBeenCalledExactlyOnceWith(
+          'fire2',
+          'https://cdn.discordapp.com/emojis/1.webp',
+        );
+        expect(databaseMock.addZulipEmote).toHaveBeenCalledExactlyOnceWith('1', 'fire2');
       });
 
       it('should skip an emote whose name is already on Zulip instead of uploading it again', async () => {

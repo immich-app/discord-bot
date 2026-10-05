@@ -3,6 +3,7 @@ import { DatabaseRepository } from 'src/repositories/database.repository';
 import { Database } from 'src/schema';
 import * as expanders from 'src/schema/migrations/1790263846796-ZulipExpanders';
 import * as groups from 'src/schema/migrations/1790852102345-ZulipExpanderGroups';
+import * as emotePadded from 'src/schema/migrations/1791227811814-ZulipEmotePadded';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -300,17 +301,50 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
   });
 
   describe('zulip emotes', () => {
-    it('should record an emote once, keeping the first row, and list the IDs', async () => {
+    it('should mark the emotes recorded before emotes were padded, so the next sync pads them', async () => {
+      await sut.addZulipEmote('1', 'peepowidehappy');
+      const rolledBack = new Error('rolled back');
+
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await emotePadded.down(trx);
+          await emotePadded.up(trx);
+          await trx.insertInto('zulip_emote').values({ discordEmoteId: '2', zulipName: 'catjam' }).execute();
+          expect(
+            await trx
+              .selectFrom('zulip_emote')
+              .select(['discordEmoteId', 'padded'])
+              .orderBy('discordEmoteId')
+              .execute(),
+          ).toEqual([
+            { discordEmoteId: '1', padded: false },
+            { discordEmoteId: '2', padded: true },
+          ]);
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+    });
+
+    it('should record an emote once, under the name it was last recorded with, and list the records', async () => {
       await sut.addZulipEmote('1', 'peepowidehappy');
       await sut.addZulipEmote('1', 'renamed');
       await sut.addZulipEmote('2', 'catjam');
 
-      expect((await sut.getZulipEmoteIds()).sort()).toEqual(['1', '2']);
-      expect(
-        await db.selectFrom('zulip_emote').select(['discordEmoteId', 'zulipName']).orderBy('discordEmoteId').execute(),
-      ).toEqual([
-        { discordEmoteId: '1', zulipName: 'peepowidehappy' },
-        { discordEmoteId: '2', zulipName: 'catjam' },
+      const records = await sut.getZulipEmotes();
+      expect(records.toSorted((a, b) => a.discordEmoteId.localeCompare(b.discordEmoteId))).toEqual([
+        { discordEmoteId: '1', zulipName: 'renamed', padded: true, createdAt: expect.any(Date) },
+        { discordEmoteId: '2', zulipName: 'catjam', padded: true, createdAt: expect.any(Date) },
+      ]);
+    });
+
+    it('should mark an emote recorded before emotes were padded as padded when it is recorded again', async () => {
+      await sut.addZulipEmote('1', 'peepowidehappy');
+      await db.updateTable('zulip_emote').set({ padded: false }).execute();
+
+      await sut.addZulipEmote('1', 'peepowidehappy');
+
+      expect(await sut.getZulipEmotes()).toEqual([
+        { discordEmoteId: '1', zulipName: 'peepowidehappy', padded: true, createdAt: expect.any(Date) },
       ]);
     });
   });

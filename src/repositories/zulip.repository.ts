@@ -50,19 +50,24 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 
 type EmoteData = Uint8Array<ArrayBuffer>;
 
-/** `squashed` only for a non-square image; `unreadable` when `sharp` could not tell its shape. */
+/** A JPEG has no transparency to pad with, so its padded copy is a PNG. */
+const TRANSPARENT_FORMATS = new Set(['png', 'gif', 'webp']);
+const TRANSPARENT = { r: 0, g: 0, b: 0, alpha: 0 };
+
+/** `padded` only for a non-square image; `unreadable` when `sharp` could not tell its shape. */
 type EmoteImage = {
   original: EmoteData;
-  squashed?: EmoteData;
   contentType: string;
-  shape: 'square' | 'squashed' | 'unreadable';
+  padded?: { data: EmoteData; contentType: string };
+  shape: 'square' | 'padded' | 'unreadable';
 };
 
 /**
- * Zulip crops a custom emoji to a square, which cuts the sides off a wide emote, so a non-square image is squashed
- * to one first, every frame of an animated one.
+ * Zulip crops a custom emoji to a square, which cuts the sides off a wide emote, so a non-square image is padded to
+ * one first, centred on a transparent square of its longer side, its proportions kept, every frame of an animated
+ * one.
  */
-const squashToSquare = async (data: EmoteData): Promise<Pick<EmoteImage, 'squashed' | 'shape'>> => {
+const padToSquare = async (data: EmoteData): Promise<Pick<EmoteImage, 'padded' | 'shape'>> => {
   try {
     const image = sharp(data, { animated: true });
     const { width, height, pageHeight, format } = await image.metadata();
@@ -74,8 +79,12 @@ const squashToSquare = async (data: EmoteData): Promise<Pick<EmoteImage, 'squash
       return { shape: 'square' };
     }
     const side = Math.max(width, frameHeight);
-    const squashed = new Uint8Array(await image.resize(side, side, { fit: 'fill' }).toFormat(format).toBuffer());
-    return { squashed, shape: 'squashed' };
+    const output = TRANSPARENT_FORMATS.has(format) ? format : 'png';
+    const padded = await image
+      .resize(side, side, { fit: 'contain', background: TRANSPARENT })
+      .toFormat(output)
+      .toBuffer();
+    return { padded: { data: new Uint8Array(padded), contentType: `image/${output}` }, shape: 'padded' };
   } catch {
     return { shape: 'unreadable' };
   }
@@ -88,7 +97,7 @@ const readEmote = async (emoteUrl: string): Promise<EmoteImage> => {
   }
   const contentType = image.headers.get('content-type')?.split(';')[0].trim() || 'application/octet-stream';
   const original = new Uint8Array(await image.arrayBuffer());
-  return { original, contentType, ...(await squashToSquare(original)) };
+  return { original, contentType, ...(await padToSquare(original)) };
 };
 
 /** Typed as empty by the generated types, but the server requires `notification_settings_null`, false by default. */
@@ -463,22 +472,23 @@ export class ZulipRepository implements IZulipInterface {
   async createEmote(name: string, emoteUrl: string) {
     const user = this.user;
     const emote = await readEmote(emoteUrl);
-    await this.uploadEmote(user, name, emoteUrl, emote.contentType, emote.squashed ?? emote.original);
+    const { contentType, data } = emote.padded ?? { contentType: emote.contentType, data: emote.original };
+    await this.uploadEmote(user, name, emoteUrl, contentType, data);
   }
 
-  /** A failed upload of the squashed image puts the original back, so the emoji is never left deactivated. */
+  /** A failed upload of the padded image puts the original back, so the emoji is never left deactivated. */
   async replaceCroppedEmote(name: string, emoteUrl: string) {
     const user = this.user;
     const emote = await readEmote(emoteUrl);
     if (emote.shape === 'unreadable') {
       throw new Error(`Could not read the image of emote ${name} to tell whether Zulip cropped it`);
     }
-    if (!emote.squashed) {
+    if (!emote.padded) {
       return 'kept' as const;
     }
     await user.DELETE('/realm/emoji/{emoji_name}', { params: { path: { emoji_name: name.toLowerCase() } } });
     try {
-      await this.uploadEmote(user, name, emoteUrl, emote.contentType, emote.squashed);
+      await this.uploadEmote(user, name, emoteUrl, emote.padded.contentType, emote.padded.data);
     } catch (error) {
       let restored = true;
       try {
@@ -486,7 +496,7 @@ export class ZulipRepository implements IZulipInterface {
       } catch {
         restored = false;
         this.logger.error(
-          `Could not put emote ${name} back on Zulip after its squashed upload failed: it is deactivated`,
+          `Could not put emote ${name} back on Zulip after its padded upload failed: it is deactivated`,
         );
       }
       // A refusal of the credentials must reach the sync as such, so that it stops.
@@ -495,8 +505,8 @@ export class ZulipRepository implements IZulipInterface {
       }
       throw new Error(
         restored
-          ? `Could not upload emote ${name} squashed, so the original is back`
-          : `Could not upload emote ${name} squashed, nor put the original back: it is deactivated`,
+          ? `Could not upload emote ${name} padded, so the original is back`
+          : `Could not upload emote ${name} padded, nor put the original back: it is deactivated`,
         { cause: error },
       );
     }

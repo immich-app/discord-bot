@@ -146,9 +146,9 @@ export interface IZulipInterface {
   sendDirectMessage(userIds: number[], content: string): Promise<{ id: number }>;
   getMessage(id: number): Promise<ZulipMessage>;
   updateMessage(id: number, update: ZulipMessageUpdate): Promise<void>;
-  /** Squashes a non-square image to a square first, since Zulip would crop it. */
+  /** Pads a non-square image to a transparent square first, since Zulip would crop it. */
   createEmote(name: string, emoteUrl: string): Promise<void>;
-  /** Re-uploads the emoji squashed when the emote's image is not square, which Zulip cropped; `kept` when it is. */
+  /** Re-uploads the emoji padded when the emote's image is not square, which Zulip cropped; `kept` when it is. */
   replaceCroppedEmote(name: string, emoteUrl: string): Promise<'kept' | 'replaced'>;
   /** The user ID of the account that uploads emoji, the author of every emoji a sync made. */
   getEmoteUploaderId(): Promise<number>;

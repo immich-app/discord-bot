@@ -1635,7 +1635,7 @@ describe('ZulipRepository', () => {
       });
     });
 
-    it('should squash a wide image to a square, since Zulip crops one', async () => {
+    it('should pad a wide image to a transparent square, keeping its proportions, since Zulip crops one', async () => {
       fetchMock
         .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
         .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
@@ -1645,9 +1645,38 @@ describe('ZulipRepository', () => {
       const { part, meta } = await uploaded(request(1));
       expect(part.name).toBe('peepowidehappy.png');
       expect([meta.format, meta.width, meta.height]).toEqual(['png', 96, 96]);
+      const pixels = await sharp(new Uint8Array(await part.arrayBuffer()))
+        .ensureAlpha()
+        .raw()
+        .toBuffer();
+      const alpha = (x: number, y: number) => pixels[(y * 96 + x) * 4 + 3];
+      expect([alpha(0, 0), alpha(95, 95), alpha(48, 31)]).toEqual([0, 0, 0]);
+      expect([alpha(0, 32), alpha(95, 63), alpha(48, 48)]).toEqual([255, 255, 255]);
     });
 
-    it('should squash every frame of a tall animated GIF, keeping it animated', async () => {
+    it('should pad a JPEG as a PNG, which can be transparent', async () => {
+      const jpeg = new Uint8Array(
+        await sharp({ create: { width: 64, height: 32, channels: 3, background: '#ff0000' } })
+          .jpeg()
+          .toBuffer(),
+      );
+      fetchMock
+        .mockResolvedValueOnce(served(jpeg, 'image/jpeg'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      await sut.createEmote('wideJpeg', 'https://example.com/wide.jpg');
+
+      const { part, meta } = await uploaded(request(1));
+      expect([part.name, part.type, meta.format, meta.width, meta.height]).toEqual([
+        'widejpeg.png',
+        'image/png',
+        'png',
+        64,
+        64,
+      ]);
+    });
+
+    it('should pad every frame of a tall animated GIF, keeping it animated', async () => {
       fetchMock
         .mockResolvedValueOnce(served(await realImage(32, 64, 'gif', 3), 'image/gif'))
         .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
@@ -1683,7 +1712,7 @@ describe('ZulipRepository', () => {
       expect(fetchMock).toHaveBeenCalledOnce();
     });
 
-    it('should deactivate the cropped emoji of a wide image and upload it again squashed, as the user', async () => {
+    it('should deactivate the emoji of a wide image and upload it again padded, as the user', async () => {
       fetchMock
         .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
         .mockResolvedValueOnce(json({ result: 'success', msg: '' }))
@@ -1706,7 +1735,7 @@ describe('ZulipRepository', () => {
       expect([meta.width, meta.height]).toEqual([96, 96]);
     });
 
-    it('should put the original back when the squashed upload fails, and say so', async () => {
+    it('should put the original back when the padded upload fails, and say so', async () => {
       const wide = await realImage(96, 32, 'png');
       fetchMock
         .mockResolvedValueOnce(served(wide, 'image/png'))
@@ -1718,7 +1747,7 @@ describe('ZulipRepository', () => {
 
       await expect(
         sut.replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png'),
-      ).rejects.toThrow('Could not upload emote peepoWideHappy squashed, so the original is back');
+      ).rejects.toThrow('Could not upload emote peepoWideHappy padded, so the original is back');
 
       expect(fetchMock).toHaveBeenCalledTimes(4);
       const { part } = await uploaded(request(3));
@@ -1756,7 +1785,7 @@ describe('ZulipRepository', () => {
         sut.replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png'),
       ).rejects.toThrow('nor put the original back: it is deactivated');
       expect(logged).toHaveBeenCalledWith(
-        'Could not put emote peepoWideHappy back on Zulip after its squashed upload failed: it is deactivated',
+        'Could not put emote peepoWideHappy back on Zulip after its padded upload failed: it is deactivated',
       );
     });
 
