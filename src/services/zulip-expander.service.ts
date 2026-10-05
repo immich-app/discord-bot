@@ -1,14 +1,19 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 
+/** `repositories` holds repositories and patterns, `owner/*` or `gitlab.futo.org/namespace/*`. */
 export type ExpanderGroup = { name: string; repositories: string[]; threshold: number };
 
 /** What GitHub expansion resolves `#123` and `repo#123` against in one stream. */
 export type ExpanderScope = {
-  /** `owner/name`, every repository of the stream's groups, in the order the groups were turned on. */
+  /** `owner/name`, every repository of the stream's groups, patterns expanded, in the order the groups were turned on. */
   repositories: string[];
-  defaultRepository: string;
+  /** None when no group of the stream names a repository of its own and the stream chose none. */
+  defaultRepository?: string;
   /** A bare `#123` below this expands only for a pull request updated in the last two weeks. */
   threshold: (repository: string) => number;
 };
@@ -37,6 +42,24 @@ export const findRepository = (repositories: string[], wanted: string) =>
 const hasRepository = (repositories: string[], repository: string) =>
   repositories.some((candidate) => sameRepository(candidate, repository));
 
+/** An entry that stands for every repository of a GitHub owner, or of a GitLab group and its subgroups. */
+export const isPattern = (entry: string) => entry.endsWith('/*');
+
+const patternOwner = (entry: string) => entry.slice(0, -2);
+
+/** One pass: a pattern can stand for thousands of repositories, and a scope is built for every message. */
+const unique = (repositories: string[]) => {
+  const seen = new Set<string>();
+  return repositories.filter((repository) => {
+    const key = repository.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+};
+
 /**
  * The `zulip_expander_group`, `zulip_expander` and `zulip_expander_default` tables, cached so that no message costs a
  * query; only this service writes them.
@@ -46,11 +69,76 @@ export class ZulipExpanderService {
   private logger = new Logger(ZulipExpanderService.name);
   private cache: Cache = { groups: new Map(), streams: new Map(), defaults: new Map() };
   private writes: Promise<unknown> = Promise.resolve();
+  /** The repositories of each pattern, by the pattern in lower case, as last read. */
+  private patterns = new Map<string, string[]>();
 
-  constructor(@Inject(IDatabaseRepository) private database: IDatabaseRepository) {}
+  constructor(
+    @Inject(IDatabaseRepository) private database: IDatabaseRepository,
+    @Inject(IGithubInterface) private github: IGithubInterface,
+    @Inject(IGitlabInterface) private gitlab: IGitlabInterface,
+  ) {}
 
+  /** The patterns are read in the background, so a slow or failing GitHub does not hold up the start. */
   async init() {
     this.cache = await this.load();
+    void this.refreshPatterns();
+  }
+
+  /** A pattern that cannot be read keeps the repositories it had. */
+  @Cron(Constants.Cron.ExpanderPatterns)
+  async refreshPatterns() {
+    const entries = unique(this.getGroups().flatMap(({ repositories }) => repositories.filter(isPattern)));
+    await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          if (!(await this.readPattern(entry))) {
+            this.logger.warn(`${entry} has no repository I can see, so its expander groups keep what they had`);
+          }
+        } catch (error) {
+          this.logger.warn(`Could not read the repositories of ${entry}`, error);
+        }
+      }),
+    );
+  }
+
+  /**
+   * Reads and caches the repositories of a pattern; resolves to the pattern as GitHub or GitLab spells its owner,
+   * `undefined` when there is no such owner or group. Throws when GitHub or GitLab cannot be read.
+   */
+  async readPattern(entry: string): Promise<{ entry: string; repositories: string[] } | undefined> {
+    const owner = patternOwner(entry);
+    let found: { entry: string; repositories: string[] } | undefined;
+    if (isGitlabRepository(entry)) {
+      const group = await this.gitlab.getGroupProjects(gitlabPath(owner));
+      found = group && {
+        entry: `${GITLAB_PREFIX}${group.path}/*`,
+        repositories: group.projects.map((project) => `${GITLAB_PREFIX}${project}`),
+      };
+    } else {
+      const user = await this.github.getOwnerRepositories(owner);
+      found = user && { entry: `${user.owner}/*`, repositories: user.repositories };
+    }
+    if (found) {
+      this.patterns.set(found.entry.toLowerCase(), found.repositories);
+    }
+    return found;
+  }
+
+  /** `undefined` while it has not been read. */
+  getPatternRepositories(entry: string) {
+    return this.patterns.get(entry.toLowerCase());
+  }
+
+  /** The repositories a group names, its patterns expanded. */
+  getRepositories({ repositories }: ExpanderGroup) {
+    return unique(
+      repositories.flatMap((entry) => (isPattern(entry) ? (this.getPatternRepositories(entry) ?? []) : [entry])),
+    );
+  }
+
+  /** The first repository the group names itself, which a pattern never is. */
+  getGroupDefault({ repositories }: ExpanderGroup) {
+    return repositories.find((entry) => !isPattern(entry));
   }
 
   isEnabled(streamId: number) {
@@ -86,15 +174,12 @@ export class ZulipExpanderService {
       return;
     }
 
-    const repositories: string[] = [];
-    for (const repository of groups.flatMap((group) => group.repositories)) {
-      if (!hasRepository(repositories, repository)) {
-        repositories.push(repository);
-      }
-    }
+    const expanded = groups.map((group) => ({ group, repositories: this.getRepositories(group) }));
+    const repositories = unique(expanded.flatMap((entry) => entry.repositories));
     const chosen = this.cache.defaults.get(streamId);
     const defaultRepository =
-      (chosen && repositories.find((repository) => sameRepository(repository, chosen))) ?? groups[0].repositories[0];
+      (chosen && repositories.find((repository) => sameRepository(repository, chosen))) ??
+      groups.map((group) => this.getGroupDefault(group)).find((repository) => repository !== undefined);
 
     return {
       repositories,
@@ -102,7 +187,9 @@ export class ZulipExpanderService {
       threshold: (repository) =>
         Math.max(
           0,
-          ...groups.filter((group) => hasRepository(group.repositories, repository)).map((group) => group.threshold),
+          ...expanded
+            .filter((entry) => hasRepository(entry.repositories, repository))
+            .map((entry) => entry.group.threshold),
         ),
     };
   }

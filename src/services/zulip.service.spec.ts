@@ -2,6 +2,8 @@ import { Logger } from '@nestjs/common';
 import { DateTime, Settings } from 'luxon';
 import { Constants } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { HolidayDto, IHolidaysInterface } from 'src/interfaces/holidays.interface';
 import {
   IZulipInterface,
@@ -134,7 +136,11 @@ describe('ZulipService', () => {
       getZulipExpanderDefaults: vitest.fn().mockResolvedValue([]),
       addZulipExpander: vitest.fn(),
     };
-    expanders = new ZulipExpanderService(expanderDatabase as unknown as IDatabaseRepository);
+    expanders = new ZulipExpanderService(
+      expanderDatabase as unknown as IDatabaseRepository,
+      {} as IGithubInterface,
+      {} as IGitlabInterface,
+    );
     await expanders.init();
     sut = new ZulipService(holidaysMock, zulipMock, expanders);
   });

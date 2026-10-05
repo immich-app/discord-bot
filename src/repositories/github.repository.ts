@@ -14,6 +14,19 @@ const handleGraphqlError = (error: unknown) => {
   }
 };
 
+/** At 100 repositories a page, an owner with more than this many pages is read only that far. */
+const MAX_OWNER_PAGES = 20;
+
+type OwnerRepositoriesPage = {
+  repositoryOwner: {
+    login: string;
+    repositories: {
+      nodes: { nameWithOwner: string }[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
+  } | null;
+};
+
 const PULL_REQUEST_FIELDS = `
   repository {
     nameWithOwner
@@ -315,6 +328,43 @@ export class GithubRepository implements IGithubInterface {
       handleGraphqlError(error);
       this.logger.log(`Could not fetch pull request #${number}`);
     }
+  }
+
+  async getOwnerRepositories(owner: string) {
+    const repositories: string[] = [];
+    let login: string | undefined;
+    let after: string | null = null;
+    for (let page = 0; page < MAX_OWNER_PAGES; page++) {
+      const { repositoryOwner }: OwnerRepositoriesPage = await this.octokit.graphql<OwnerRepositoriesPage>(
+        `
+      query getOwnerRepositories($owner: String!, $after: String) {
+        repositoryOwner(login: $owner) {
+          login
+          repositories(first: 100, after: $after, orderBy: { field: NAME, direction: ASC }) {
+            nodes {
+              nameWithOwner
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+      `,
+        { owner, after },
+      );
+      if (!repositoryOwner) {
+        return;
+      }
+      login = repositoryOwner.login;
+      repositories.push(...repositoryOwner.repositories.nodes.map(({ nameWithOwner }) => nameWithOwner));
+      if (!repositoryOwner.repositories.pageInfo.hasNextPage) {
+        break;
+      }
+      after = repositoryOwner.repositories.pageInfo.endCursor;
+    }
+    return login === undefined ? undefined : { owner: login, repositories };
   }
 
   async getRepositoryName({ org, repo }: { org: string; repo: string }) {

@@ -3,7 +3,7 @@ import { Constants } from 'src/constants';
 import { neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository, MirrorIdentityOwner } from 'src/interfaces/database.interface';
 import { IDiscordInterface } from 'src/interfaces/discord.interface';
-import { PullRequestBaseEvent } from 'src/interfaces/github.interface';
+import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { IMattermostInterface } from 'src/interfaces/mattermost.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
@@ -93,6 +93,7 @@ const newGitlabMock = () => ({
   getProjectPath: vitest.fn<(path: string) => Promise<string | undefined>>().mockResolvedValue(undefined),
   getItem: vitest.fn(),
   getFileContent: vitest.fn(),
+  getGroupProjects: vitest.fn(),
 });
 
 const newWebhookServiceMock = () => ({
@@ -319,7 +320,7 @@ const HELP = [
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
   '- `expanders <on <group>|off [group]|default <repository>|list>` (any stream): turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream',
-  "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list` (any stream): create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or their URLs) for `expanders on`, its first repository the default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
+  "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list` (any stream): create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date, or their URLs) for `expanders on`, the first one it names itself, not a pattern's, its default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
@@ -465,6 +466,7 @@ describe('ZulipCommandService', () => {
   let chatServiceMock: ReturnType<typeof newChatServiceMock>;
   let githubServiceMock: ReturnType<typeof newGithubServiceMock>;
   let gitlabMock: ReturnType<typeof newGitlabMock>;
+  let githubMock: { getOwnerRepositories: ReturnType<typeof vitest.fn> };
   let webhookServiceMock: ReturnType<typeof newWebhookServiceMock>;
   let database: ReturnType<typeof newFakeDatabase>;
   let discordMock: Mocked<Pick<IDiscordInterface, 'sendMessage'>>;
@@ -484,6 +486,7 @@ describe('ZulipCommandService', () => {
     chatServiceMock = newChatServiceMock();
     githubServiceMock = newGithubServiceMock();
     gitlabMock = newGitlabMock();
+    githubMock = { getOwnerRepositories: vitest.fn() };
     webhookServiceMock = newWebhookServiceMock();
     database = newFakeDatabase();
     discordMock = { sendMessage: vitest.fn() };
@@ -492,7 +495,11 @@ describe('ZulipCommandService', () => {
     const discord = discordMock as unknown as IDiscordInterface;
     const mattermost = {} as IMattermostInterface;
     const db = database as unknown as IDatabaseRepository;
-    zulipExpanders = new ZulipExpanderService(db);
+    zulipExpanders = new ZulipExpanderService(
+      db,
+      githubMock as unknown as IGithubInterface,
+      gitlabMock as unknown as IGitlabInterface,
+    );
     sut = new ZulipCommandService(
       zulipMock,
       gitlabMock as unknown as IGitlabInterface,
@@ -2266,7 +2273,8 @@ describe('ZulipCommandService', () => {
     });
 
     describe('expander-group', () => {
-      const REPOSITORY_FORMS = '`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`';
+      const REPOSITORY_FORMS =
+        '`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date';
       const GROUP_USAGE =
         'Usage: `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list`';
 
@@ -2520,6 +2528,176 @@ describe('ZulipCommandService', () => {
             expect(zulipExpanders.getGroup('fhs')?.threshold).toBe(0);
           },
         );
+      });
+
+      describe('patterns', () => {
+        const IMMICH_APP = Array.from(
+          { length: 33 },
+          (_, index) => `immich-app/repo-${String(index).padStart(2, '0')}`,
+        );
+
+        const ACK = (patterns: string) => `Reading the repositories of ${patterns}, this can take a while…`;
+        const sendAndFinish = async (content: string, overrides: Partial<ZulipReceivedMessage> = {}) => {
+          await send(content, overrides);
+          await flush();
+        };
+
+        beforeEach(() => {
+          githubMock.getOwnerRepositories.mockImplementation((owner: string) =>
+            Promise.resolve(
+              owner.toLowerCase() === 'immich-app' ? { owner: 'immich-app', repositories: IMMICH_APP } : undefined,
+            ),
+          );
+          gitlabMock.getGroupProjects.mockImplementation((path: string) =>
+            Promise.resolve(
+              path.toLowerCase() === 'videostreaming'
+                ? { path: 'videostreaming', projects: ['videostreaming/grayjay'] }
+                : undefined,
+            ),
+          );
+        });
+
+        it('should create a group of patterns, as GitHub and GitLab spell them, and say it has no default', async () => {
+          await sendAndFinish(
+            '@**Immich** expander-group create orgs IMMICH-APP/* https://gitlab.futo.org/videostreaming/*',
+          );
+
+          expect(contents()).toEqual([
+            ACK('`IMMICH-APP/*`, `gitlab.futo.org/videostreaming/*`'),
+            'Created the expander group `orgs` with `immich-app/*` (33 repositories), `gitlab.futo.org/videostreaming/*` (1 repository); with only patterns it has no default for a bare `#1234`, which `expanders default <repository>` picks for a stream. Turn it on in a stream with `expanders on orgs`.',
+          ]);
+          expect(database.groups.find(({ name }) => name === 'orgs')?.repositories).toEqual([
+            'immich-app/*',
+            'gitlab.futo.org/videostreaming/*',
+          ]);
+          expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
+        });
+
+        it('should add a pattern beside the repositories a group names', async () => {
+          await sendAndFinish('@**Immich** expander-group add immich immich-app/*');
+
+          expect(contents()).toEqual([
+            ACK('`immich-app/*`'),
+            'Added `immich-app/*` (33 repositories) to the expander group `immich`.',
+          ]);
+          expect(database.groups.find(({ name }) => name === 'immich')?.repositories).toEqual([
+            'immich-app/immich',
+            'immich-app/*',
+          ]);
+        });
+
+        it('should refuse an owner or group that is not there, or cannot be seen', async () => {
+          await sendAndFinish('@**Immich** expander-group add immich nobody/* gitlab.futo.org/nothing/*');
+
+          expect(contents()).toEqual([
+            ACK('`nobody/*`, `gitlab.futo.org/nothing/*`'),
+            'There is no repository `nobody/*`, `gitlab.futo.org/nothing/*`, or I cannot see it.',
+          ]);
+        });
+
+        it.each(['a/b/*', 'gitlab.futo.org/*', '*'])('should refuse the malformed pattern %s', async (pattern) => {
+          await sendAndFinish(`@**Immich** expander-group add immich ${pattern}`);
+
+          expect(contents().at(-1)).toContain('is not `owner/repo` on GitHub');
+          expect(githubMock.getOwnerRepositories).not.toHaveBeenCalled();
+          expect(gitlabMock.getGroupProjects).not.toHaveBeenCalled();
+        });
+
+        it('should remove a pattern', async () => {
+          await sendAndFinish('@**Immich** expander-group add immich immich-app/*');
+          await sendAndFinish('@**Immich** expander-group remove immich IMMICH-APP/*');
+
+          expect(contents()[2]).toBe('Removed `immich-app/*` from the expander group `immich`.');
+          expect(database.groups.find(({ name }) => name === 'immich')?.repositories).toEqual(['immich-app/immich']);
+        });
+
+        it('should show what a pattern stands for, up to 30 repositories', async () => {
+          zulipMock.getSubscriptions.mockResolvedValue([]);
+          zulipMock.getStream.mockResolvedValue({ streamId: 107, name: 'immich-general', inviteOnly: false });
+          await sendAndFinish('@**Immich** expander-group add immich immich-app/*');
+          await send('@**Immich** expander-group info immich');
+
+          expect(contents()[2].split('\n').slice(0, 3)).toEqual([
+            'Expander group `immich`:',
+            "- Repositories: `immich-app/immich` (the group's default for `#1234`), `immich-app/*` (33 repositories)",
+            `- \`immich-app/*\`: ${IMMICH_APP.slice(0, 30)
+              .map((repository) => `\`${repository}\``)
+              .join(', ')} and 3 more`,
+          ]);
+        });
+
+        it('should say when a pattern has not been read yet', async () => {
+          database.groups.push({
+            name: 'unread',
+            repositories: ['gitlab.futo.org/elsewhere/*'],
+            threshold: 0,
+            createdBy: 'x',
+            createdAt: new Date(0),
+          });
+          gitlabMock.getGroupProjects.mockRejectedValue(new Error('GitLab is down'));
+          await zulipExpanders.init();
+
+          await send('@**Immich** expander-group info unread');
+
+          expect(contents()[0].split('\n')[2]).toBe(
+            '- `gitlab.futo.org/elsewhere/*`: not read yet, so none of its repositories count until the hourly read finds them',
+          );
+        });
+
+        it('should count the repositories a pattern stands for, and a group of patterns has no default', async () => {
+          await sendAndFinish('@**Immich** expander-group create orgs immich-app/*');
+          await send('@**Immich** expander-group list');
+
+          expect(contents()[2].split('\n')).toContain(
+            '- `orgs`: 33 repositories, no default for `#1234`; on in 0 streams',
+          );
+        });
+
+        it('should say a stream of patterns only has no default for a bare #1234', async () => {
+          await sendAndFinish('@**Immich** expander-group create orgs immich-app/*');
+          zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 120 }]);
+          zulipMock.getStream.mockResolvedValue({ streamId: 120, name: 'orgs', inviteOnly: false });
+          await send('@**Immich** expanders on orgs', { streamId: 120 });
+          await send('@**Immich** expanders list', { streamId: 120 });
+
+          expect(contents()[2]).toBe(
+            [
+              'Turned on GitHub expansion of the group `orgs` (`immich-app/*`) in this stream.',
+              'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.',
+            ].join('\n'),
+          );
+          expect(contents()[3]).toContain('- **#orgs** (120): `orgs`; a bare `#1234` goes to no repository');
+        });
+
+        it("should take a pattern's repository as a stream's default", async () => {
+          await sendAndFinish('@**Immich** expander-group create orgs immich-app/*');
+          await send('@**Immich** expanders on orgs', { streamId: 120 });
+          await send('@**Immich** expanders default repo-07', { streamId: 120 });
+
+          expect(contents()[3]).toBe('A bare `#1234` now goes to `immich-app/repo-07` in this stream.');
+        });
+
+        it('should refuse another change of the groups while a pattern is read', async () => {
+          let finish = () => {};
+          githubMock.getOwnerRepositories.mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                finish = () => resolve({ owner: 'immich-app', repositories: IMMICH_APP });
+              }),
+          );
+
+          await send('@**Immich** expander-group add immich immich-app/*');
+          await send('@**Immich** expander-group delete fhs');
+          finish();
+          await flush();
+
+          expect(contents()).toEqual([
+            ACK('`immich-app/*`'),
+            '`expander-group` is already running; wait for it to finish.',
+            'Added `immich-app/*` (33 repositories) to the expander group `immich`.',
+          ]);
+          expect(database.groups.map(({ name }) => name).sort()).toEqual(['fhs', 'immich']);
+        });
       });
 
       describe('list', () => {

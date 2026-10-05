@@ -23,6 +23,7 @@ import {
   findRepository,
   gitlabPath,
   isGitlabRepository,
+  isPattern,
   sameRepository,
 } from 'src/services/zulip-expander.service';
 import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
@@ -55,7 +56,24 @@ const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
 
 const GITLAB_PROJECT_NAME = /^[\w.-]+(\/[\w.-]+)+$/;
 
-const REPOSITORY_FORMS = `\`owner/repo\` on GitHub or \`${Constants.Gitlab.Host}/namespace/project\``;
+const GITHUB_OWNER_NAME = /^[\w.-]+$/;
+
+const GITLAB_GROUP_NAME = /^[\w.-]+(\/[\w.-]+)*$/;
+
+/** `info` names this many repositories of a pattern, and counts the rest. */
+const MAX_LISTED_REPOSITORIES = 30;
+
+const EXPANDER_GROUP = 'expander-group';
+
+const REPOSITORY_FORMS = `\`owner/repo\` on GitHub or \`${Constants.Gitlab.Host}/namespace/project\`, or \`owner/*\` or \`${Constants.Gitlab.Host}/namespace/*\` for every repository of that owner or group, kept up to date`;
+
+const isWellFormed = (entry: string) => {
+  const owner = isPattern(entry) ? entry.slice(0, -2) : entry;
+  if (isGitlabRepository(entry)) {
+    return (isPattern(entry) ? GITLAB_GROUP_NAME : GITLAB_PROJECT_NAME).test(gitlabPath(owner));
+  }
+  return isPattern(entry) ? GITHUB_OWNER_NAME.test(owner) : REPOSITORY_NAME.test(entry);
+};
 
 /** Takes `owner/repo`, a GitLab project with its host, or either's URL. */
 const toRepositoryName = (given: string) =>
@@ -71,6 +89,9 @@ const describeZulipSender = (message: StreamMessage) => `${message.senderFullNam
 const countRepositories = (count: number) => `${count} ${count === 1 ? 'repository' : 'repositories'}`;
 
 const listRepositories = (repositories: string[]) => repositories.map((repository) => code(repository)).join(', ');
+
+const NO_DEFAULT =
+  'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.';
 
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -263,7 +284,7 @@ export class ZulipCommandService {
     'expander-group': {
       usage:
         'expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list',
-      description: `create a group of repositories (${REPOSITORY_FORMS}, or their URLs) for \`expanders on\`, its first repository the default for \`#1234\`; add or remove repositories; with \`threshold\`, have a bare \`#1234\` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; \`info\` shows one group's repositories and streams, \`list\` every group`,
+      description: `create a group of repositories (${REPOSITORY_FORMS}, or their URLs) for \`expanders on\`, the first one it names itself, not a pattern's, its default for \`#1234\`; add or remove repositories; with \`threshold\`, have a bare \`#1234\` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; \`info\` shows one group's repositories and streams, \`list\` every group`,
       positionals: Number.POSITIVE_INFINITY,
       options: [],
       anyStream: true,
@@ -723,8 +744,10 @@ export class ZulipCommandService {
       ? `Turned on GitHub expansion of the group ${code(name)} (${group.repositories.map((repository) => code(repository)).join(', ')}) in this stream.`
       : `Nothing changed: the group ${code(name)} was already on in this stream.`;
     const lines = [reply];
-    if (scope) {
+    if (scope?.defaultRepository) {
       lines.push(`A bare ${code('#1234')} goes to ${code(scope.defaultRepository)} here.`);
+    } else if (scope) {
+      lines.push(NO_DEFAULT);
     }
     if (!subscriptions.some((subscription) => subscription.streamId === streamId)) {
       lines.push(NOT_SUBSCRIBED);
@@ -772,7 +795,9 @@ export class ZulipCommandService {
           .map((group) => code(group))
           .join(', ');
         const scope = this.zulipExpanders.getScope(streamId);
-        const target = scope ? `; ${code('#1234')} goes to ${code(scope.defaultRepository)}` : '';
+        const target = scope?.defaultRepository
+          ? `; ${code('#1234')} goes to ${code(scope.defaultRepository)}`
+          : `; a bare ${code('#1234')} goes to no repository`;
         return `- ${labels[index]}: ${groupNames}${target}`;
       }),
     ].join('\n');
@@ -785,9 +810,11 @@ export class ZulipCommandService {
     }
     return [
       'Expander groups:',
-      ...groups.map(({ name, repositories }) => {
-        const streams = this.zulipExpanders.getStreams(name).length;
-        return `- ${code(name)}: ${countRepositories(repositories.length)}, default ${code(repositories[0])}; on in ${plural(streams, 'stream')}`;
+      ...groups.map((group) => {
+        const streams = this.zulipExpanders.getStreams(group.name).length;
+        const groupDefault = this.zulipExpanders.getGroupDefault(group);
+        const target = groupDefault ? `default ${code(groupDefault)}` : `no default for ${code('#1234')}`;
+        return `- ${code(group.name)}: ${countRepositories(this.zulipExpanders.getRepositories(group).length)}, ${target}; on in ${plural(streams, 'stream')}`;
       }),
       '',
       `${code('expander-group info <group>')} shows one in full.`,
@@ -801,9 +828,25 @@ export class ZulipCommandService {
     }
     const streams = this.zulipExpanders.getStreams(name);
     const labels = await this.describeStreams(streams);
+    const groupDefault = this.zulipExpanders.getGroupDefault(group);
+    const entries = group.repositories.map((entry) =>
+      entry === groupDefault
+        ? `${code(entry)} (the group's default for ${code('#1234')})`
+        : this.describeEntries([entry]),
+    );
+    const patterns = group.repositories.filter(isPattern).map((entry) => {
+      const repositories = this.zulipExpanders.getPatternRepositories(entry);
+      if (repositories === undefined) {
+        return `- ${code(entry)}: not read yet, so none of its repositories count until the hourly read finds them`;
+      }
+      const listed = repositories.slice(0, MAX_LISTED_REPOSITORIES).map((repository) => code(repository));
+      const more = repositories.length - listed.length;
+      return `- ${code(entry)}: ${listed.join(', ') || 'no repository'}${more > 0 ? ` and ${more} more` : ''}`;
+    });
     return [
       `Expander group ${code(name)}:`,
-      `- Repositories: ${group.repositories.map((repository, index) => `${code(repository)}${index === 0 ? ` (the group's default for ${code('#1234')})` : ''}`).join(', ')}`,
+      `- Repositories: ${entries.join(', ')}`,
+      ...patterns,
       group.threshold > 0
         ? `- A bare ${code('#N')} below ${group.threshold} expands only for a pull request updated in the last two weeks.`
         : `- Every bare ${code('#N')} expands.`,
@@ -830,7 +873,8 @@ export class ZulipCommandService {
     });
   }
 
-  private async expanderGroup({ message, args }: CommandContext) {
+  private async expanderGroup(context: CommandContext) {
+    const { message, args } = context;
     const [action, given, ...rest] = args;
     const name = given?.toLowerCase();
     if (action?.toLowerCase() === 'list' && given === undefined) {
@@ -850,14 +894,20 @@ export class ZulipCommandService {
         if (!EXPANDER_GROUP_NAME.test(name)) {
           return `${code(given)} cannot name a group: use up to 32 lowercase letters, digits, ${code('-')} and ${code('_')}, starting with a letter or digit.`;
         }
-        const repositories = await this.findRepositories(rest);
-        if (typeof repositories === 'string') {
-          return repositories;
-        }
-        const created = await this.zulipExpanders.createGroup(name, repositories, describeZulipSender(message));
-        return created
-          ? `Created the expander group ${code(name)} with ${listRepositories(repositories)}; ${code(repositories[0])} is the default for a bare ${code('#1234')}. Turn it on in a stream with ${code(`expanders on ${name}`)}.`
-          : `There is already an expander group ${code(name)}; ${code(`expander-group add ${name} <repository>…`)} adds repositories to it.`;
+        return this.changeExpanderGroups(context, rest, async () => {
+          const repositories = await this.findRepositories(rest);
+          if (typeof repositories === 'string') {
+            return repositories;
+          }
+          const created = await this.zulipExpanders.createGroup(name, repositories, describeZulipSender(message));
+          const groupDefault = repositories.find((entry) => !isPattern(entry));
+          const defaultNote = groupDefault
+            ? `${code(groupDefault)} is the default for a bare ${code('#1234')}`
+            : `with only patterns it has no default for a bare ${code('#1234')}, which ${code('expanders default <repository>')} picks for a stream`;
+          return created
+            ? `Created the expander group ${code(name)} with ${this.describeEntries(repositories)}; ${defaultNote}. Turn it on in a stream with ${code(`expanders on ${name}`)}.`
+            : `There is already an expander group ${code(name)}; ${code(`expander-group add ${name} <repository>…`)} adds repositories to it.`;
+        });
       }
       case 'add': {
         if (rest.length === 0) {
@@ -866,80 +916,101 @@ export class ZulipCommandService {
         if (!this.zulipExpanders.getGroup(name)) {
           return this.noGroup(name);
         }
-        const repositories = await this.findRepositories(rest);
-        if (typeof repositories === 'string') {
-          return repositories;
-        }
-        const added = await this.zulipExpanders.addRepositories(name, repositories);
-        if (added === undefined) {
-          return this.noGroup(name);
-        }
-        return added.length > 0
-          ? `Added ${listRepositories(added)} to the expander group ${code(name)}.`
-          : `Nothing changed: the expander group ${code(name)} already has ${listRepositories(repositories)}.`;
+        return this.changeExpanderGroups(context, rest, async () => {
+          const repositories = await this.findRepositories(rest);
+          if (typeof repositories === 'string') {
+            return repositories;
+          }
+          const added = await this.zulipExpanders.addRepositories(name, repositories);
+          if (added === undefined) {
+            return this.noGroup(name);
+          }
+          return added.length > 0
+            ? `Added ${this.describeEntries(added)} to the expander group ${code(name)}.`
+            : `Nothing changed: the expander group ${code(name)} already has ${listRepositories(repositories)}.`;
+        });
       }
       case 'remove': {
         if (rest.length === 0) {
           break;
         }
-        const repositories = rest.map(toRepositoryName);
-        let removed: string[] | undefined;
-        try {
-          removed = await this.zulipExpanders.removeRepositories(name, repositories);
-        } catch (error) {
-          if (error instanceof ExpanderGroupEmptyError) {
-            return `That would leave the expander group ${code(name)} with no repository; ${code(`expander-group delete ${name}`)} deletes it.`;
+        return this.underLock(EXPANDER_GROUP, async () => {
+          const repositories = rest.map(toRepositoryName);
+          let removed: string[] | undefined;
+          try {
+            removed = await this.zulipExpanders.removeRepositories(name, repositories);
+          } catch (error) {
+            if (error instanceof ExpanderGroupEmptyError) {
+              return `That would leave the expander group ${code(name)} with no repository; ${code(`expander-group delete ${name}`)} deletes it.`;
+            }
+            throw error;
           }
-          throw error;
-        }
-        if (removed === undefined) {
-          return this.noGroup(name);
-        }
-        return removed.length > 0
-          ? `Removed ${listRepositories(removed)} from the expander group ${code(name)}.`
-          : `Nothing changed: the expander group ${code(name)} has none of ${listRepositories(repositories)}.`;
+          if (removed === undefined) {
+            return this.noGroup(name);
+          }
+          return removed.length > 0
+            ? `Removed ${listRepositories(removed)} from the expander group ${code(name)}.`
+            : `Nothing changed: the expander group ${code(name)} has none of ${listRepositories(repositories)}.`;
+        });
       }
       case 'threshold': {
         const threshold = Number(rest[0]);
         if (rest.length !== 1 || !/^\d+$/.test(rest[0]) || threshold > MAX_THRESHOLD) {
           break;
         }
-        if (!(await this.zulipExpanders.setThreshold(name, threshold))) {
-          return this.noGroup(name);
-        }
-        return threshold === 0
-          ? `In the expander group ${code(name)}, every bare ${code('#N')} now expands.`
-          : `In the expander group ${code(name)}, a bare ${code('#N')} below ${threshold} now expands only for a pull request updated in the last two weeks.`;
+        return this.underLock(EXPANDER_GROUP, async () => {
+          if (!(await this.zulipExpanders.setThreshold(name, threshold))) {
+            return this.noGroup(name);
+          }
+          return threshold === 0
+            ? `In the expander group ${code(name)}, every bare ${code('#N')} now expands.`
+            : `In the expander group ${code(name)}, a bare ${code('#N')} below ${threshold} now expands only for a pull request updated in the last two weeks.`;
+        });
       }
       case 'delete': {
         if (rest.length > 0) {
           break;
         }
-        const streams = this.zulipExpanders.getStreams(name);
-        if (!(await this.zulipExpanders.deleteGroup(name))) {
-          return this.noGroup(name);
-        }
-        return streams.length === 0
-          ? `Deleted the expander group ${code(name)}.`
-          : `Deleted the expander group ${code(name)} and turned it off in ${plural(streams.length, 'stream')}.`;
+        return this.underLock(EXPANDER_GROUP, async () => {
+          const streams = this.zulipExpanders.getStreams(name);
+          if (!(await this.zulipExpanders.deleteGroup(name))) {
+            return this.noGroup(name);
+          }
+          return streams.length === 0
+            ? `Deleted the expander group ${code(name)}.`
+            : `Deleted the expander group ${code(name)} and turned it off in ${plural(streams.length, 'stream')}.`;
+        });
       }
     }
     return this.usage('expander-group');
   }
 
+  /**
+   * Reading a pattern pages through every repository of its owner, which can outlast the loop's wait, so a change that
+   * adds one runs in the background; every change of the groups takes the same lock, so none runs while one is.
+   */
+  private changeExpanderGroups(context: CommandContext, given: string[], change: () => Promise<string>) {
+    const patterns = given.map(toRepositoryName).filter(isPattern);
+    return patterns.length === 0
+      ? this.underLock(EXPANDER_GROUP, change)
+      : this.inBackground(EXPANDER_GROUP, context, {
+          ack: `Reading the repositories of ${listRepositories(patterns)}, this can take a while…`,
+          work: change,
+        });
+  }
+
   /** The names as GitHub and GitLab spell them, or the reply naming the ones they do not know. */
   private async findRepositories(given: string[]): Promise<string[] | string> {
     const wanted = given.map(toRepositoryName);
-    const malformed = wanted.filter((repository) =>
-      isGitlabRepository(repository)
-        ? !GITLAB_PROJECT_NAME.test(gitlabPath(repository))
-        : !REPOSITORY_NAME.test(repository),
-    );
+    const malformed = wanted.filter((repository) => !isWellFormed(repository));
     if (malformed.length > 0) {
       return `${listRepositories(malformed)} ${malformed.length === 1 ? 'is' : 'are'} not ${REPOSITORY_FORMS}.`;
     }
     const found = await Promise.all(
       wanted.map(async (repository) => {
+        if (isPattern(repository)) {
+          return (await this.zulipExpanders.readPattern(repository))?.entry;
+        }
         if (!isGitlabRepository(repository)) {
           return this.githubService.getRepositoryName(repository);
         }
@@ -958,6 +1029,16 @@ export class ZulipCommandService {
       }
     }
     return repositories;
+  }
+
+  /** A pattern with how many repositories it stands for. */
+  private describeEntries(entries: string[]) {
+    return entries
+      .map((entry) => {
+        const repositories = isPattern(entry) ? this.zulipExpanders.getPatternRepositories(entry) : undefined;
+        return repositories === undefined ? code(entry) : `${code(entry)} (${countRepositories(repositories.length)})`;
+      })
+      .join(', ');
   }
 
   private noGroup(name: string) {

@@ -737,9 +737,14 @@ ${messageParts.join('\n')}`,
         ? `${owner}/${name}`
         : (findRepository(scope.repositories, `${owner}/${name}`) ?? `${owner}/${name}`);
     } else if (name) {
-      repository =
+      const { defaultRepository } = scope;
+      const found =
         findRepository(scope.repositories, name) ??
-        `${scope.defaultRepository.slice(0, scope.defaultRepository.lastIndexOf('/'))}/${name}`;
+        (defaultRepository && `${defaultRepository.slice(0, defaultRepository.lastIndexOf('/'))}/${name}`);
+      if (!found) {
+        return;
+      }
+      repository = found;
     } else {
       const twoWeeksAgo = DateTime.now().minus({ week: 2 }).toJSDate();
       const recent = pullRequests
@@ -751,7 +756,7 @@ ${messageParts.join('\n')}`,
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
       if (recent) {
         repository = fullName(recent);
-      } else if (id < scope.threshold(scope.defaultRepository)) {
+      } else if (!scope.defaultRepository || id < scope.threshold(scope.defaultRepository)) {
         return;
       } else {
         repository = scope.defaultRepository;
