@@ -1067,22 +1067,9 @@ ${formattedCode}
     }
     const emoji = await this.listZulipEmoji();
     const existing = emoji && new Set(emoji.map(({ name }) => name));
-    const authors = new Map(emoji?.map(({ name, authorId }) => [name, authorId]));
     const records = new Map(
       (existing ? await this.database.getZulipEmotes() : []).map((record) => [record.discordEmoteId, record]),
     );
-    let uploaderId: number | null | undefined;
-    const getUploaderId = async () => {
-      if (uploaderId === undefined) {
-        try {
-          uploaderId = await this.zulip.getEmoteUploaderId();
-        } catch (error) {
-          this.logger.error('Could not read the Zulip account that uploads emoji, so no emoji is replaced', error);
-          uploaderId = null;
-        }
-      }
-      return uploaderId;
-    };
     const builtIn = existing ? await this.listZulipBuiltInEmoji() : undefined;
     const zulipNames =
       existing && builtIn
@@ -1113,17 +1100,7 @@ ${formattedCode}
         if (existing.has(zulipName) && record?.zulipName === zulipName && record.padded) {
           alreadyOnZulip.push(asZulip);
         } else if (existing.has(zulipName)) {
-          const uploader = await getUploaderId();
-          const author = authors.get(zulipName);
-          if (uploader === null || author === null || author === undefined || author !== uploader) {
-            alreadyOnZulip.push(asZulip);
-            // Someone else's emoji of that name is never replaced; with either author unknown it is looked at next time.
-            if (uploader !== null && author !== null && author !== undefined) {
-              await this.database.addZulipEmote(emote.id, zulipName);
-            }
-            continue;
-          }
-          // Uploaded by a sync before emotes were padded: cropped by Zulip, or stretched, if it is not square.
+          // The emoji of that name is the emote's, whoever uploaded it: cropped by Zulip, or stretched, if not square.
           const zulip = await this.onZulip(name, url, () => this.zulip.replaceCroppedEmote(zulipName, url));
           if (zulip === 'refused') {
             zulipSkipped = 'refused';

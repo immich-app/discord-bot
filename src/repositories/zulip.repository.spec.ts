@@ -354,8 +354,8 @@ describe('ZulipRepository', () => {
       );
 
       await expect(sut.listEmoji()).resolves.toEqual([
-        { id: '1', name: 'green_tick', deactivated: false, authorId: 5 },
-        { id: '2', name: 'old', deactivated: true, authorId: 5 },
+        { id: '1', name: 'green_tick', deactivated: false },
+        { id: '2', name: 'old', deactivated: true },
       ]);
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -1796,14 +1796,6 @@ describe('ZulipRepository', () => {
         'Could not read the image of emote broken',
       );
       expect(fetchMock).toHaveBeenCalledOnce();
-    });
-
-    it('should read the user ID of the account that uploads emoji', async () => {
-      fetchMock.mockResolvedValueOnce(json({ result: 'success', msg: '', user_id: 7, full_name: 'Emoji uploader' }));
-
-      expect(await sut.getEmoteUploaderId()).toBe(7);
-      expect(request(0).url).toBe('https://zulip.example.com/api/v1/users/me');
-      expect(request(0).headers.get('authorization')).toBe(basic(config.user));
     });
 
     it('should not upload again when Zulip refuses the deactivation', async () => {

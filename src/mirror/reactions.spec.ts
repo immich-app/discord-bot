@@ -29,11 +29,11 @@ describe('toEmoteMaps', () => {
       [emote('1', 'catJAM'), emote('2', 'CatJam'), emote('3', 'fire'), emote('4', 'wave'), emote('5', 'party', true)],
       ['fire', 'wave'],
       [
-        { id: '10', name: 'catjam', deactivated: false, authorId: null },
-        { id: '11', name: 'catjam2', deactivated: false, authorId: null },
-        { id: '12', name: 'fire2', deactivated: false, authorId: null },
-        { id: '13', name: 'wave2', deactivated: true, authorId: null },
-        { id: '14', name: 'party', deactivated: false, authorId: null },
+        { id: '10', name: 'catjam', deactivated: false },
+        { id: '11', name: 'catjam2', deactivated: false },
+        { id: '12', name: 'fire2', deactivated: false },
+        { id: '13', name: 'wave2', deactivated: true },
+        { id: '14', name: 'party', deactivated: false },
       ],
     );
 
@@ -52,22 +52,14 @@ describe('toEmoteMaps', () => {
   });
 
   it('should give an emote the built-in name an administrator overrode', () => {
-    const maps = toEmoteMaps(
-      [emote('3', 'fire')],
-      ['fire'],
-      [{ id: '12', name: 'fire', deactivated: false, authorId: null }],
-    );
+    const maps = toEmoteMaps([emote('3', 'fire')], ['fire'], [{ id: '12', name: 'fire', deactivated: false }]);
 
     expect(maps.zulipByEmoteId.get('3')).toEqual({ name: 'fire', realmId: '12' });
   });
 });
 
 describe('toZulipReactionEmoji', () => {
-  const emotes = toEmoteMaps(
-    [emote('3', 'fire')],
-    ['fire'],
-    [{ id: '12', name: 'fire2', deactivated: false, authorId: null }],
-  );
+  const emotes = toEmoteMaps([emote('3', 'fire')], ['fire'], [{ id: '12', name: 'fire2', deactivated: false }]);
   const unicode = (name: string) => toZulipReactionEmoji({ id: null, name, animated: false }, NAMES, emotes);
 
   it.each([
@@ -98,11 +90,7 @@ describe('toZulipReactionEmoji', () => {
 });
 
 describe('toDiscordReactionEmoji', () => {
-  const emotes = toEmoteMaps(
-    [emote('3', 'fire', true)],
-    ['fire'],
-    [{ id: '12', name: 'fire2', deactivated: false, authorId: null }],
-  );
+  const emotes = toEmoteMaps([emote('3', 'fire', true)], ['fire'], [{ id: '12', name: 'fire2', deactivated: false }]);
 
   it('should spell a Unicode emoji from its code points', () => {
     expect(

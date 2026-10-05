@@ -51,7 +51,6 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   updateMessage: vitest.fn(),
   createEmote: vitest.fn(),
   replaceCroppedEmote: vitest.fn(),
-  getEmoteUploaderId: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
