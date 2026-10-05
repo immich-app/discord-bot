@@ -77,12 +77,18 @@ export class ScheduledMessageService {
     this.registerJob(message);
   }
 
-  async updateScheduledMessage(name: string, service: Service, changes: UpdateScheduledMessage) {
+  /** With a `channelId`, a message posted in another channel counts as not found, before the cron is checked. */
+  async updateScheduledMessage(
+    name: string,
+    service: Service,
+    changes: UpdateScheduledMessage,
+    { channelId }: { channelId?: string } = {},
+  ) {
+    if (!(await this.getScheduledMessage(name, service, { channelId }))) {
+      return;
+    }
     if (changes.cronExpression !== undefined) {
       validateCronExpression(changes.cronExpression);
-    }
-    if (!(await this.database.getScheduledMessage(name, service))) {
-      return;
     }
     const updated = await this.database.updateScheduledMessage({ name, ...changes });
     if (updated) {
@@ -154,8 +160,9 @@ export class ScheduledMessageService {
     return message ? `Removed scheduled message ${inlineCode(message.name)}` : 'Scheduled message not found';
   }
 
-  async deleteScheduledMessage(name: string, service: Service) {
-    const message = await this.database.getScheduledMessage(name, service);
+  /** With a `channelId`, a message posted in another channel counts as not found. */
+  async deleteScheduledMessage(name: string, service: Service, { channelId }: { channelId?: string } = {}) {
+    const message = await this.getScheduledMessage(name, service, { channelId });
     if (!message) {
       return;
     }
@@ -185,8 +192,14 @@ export class ScheduledMessageService {
       .slice(0, 25);
   }
 
-  async listScheduledMessages(service: Service) {
-    return this.database.getScheduledMessages(service);
+  async listScheduledMessages(service: Service, { channelId }: { channelId?: string } = {}) {
+    const messages = await this.database.getScheduledMessages(service);
+    return channelId === undefined ? messages : messages.filter((message) => message.channelId === channelId);
+  }
+
+  private async getScheduledMessage(name: string, service: Service, { channelId }: { channelId?: string }) {
+    const message = await this.database.getScheduledMessage(name, service);
+    return message && (channelId === undefined || message.channelId === channelId) ? message : undefined;
   }
 }
 

@@ -268,6 +268,17 @@ describe('ScheduledMessageService', () => {
         expect(result).toBe(messages);
       },
     );
+
+    it('should keep only the rows of the channel given', async () => {
+      databaseMock.getScheduledMessages.mockResolvedValue([
+        makeScheduledMessage({ name: 'a', channelId: '107' }),
+        makeScheduledMessage({ name: 'b', channelId: '120' }),
+      ]);
+
+      const result = await sut.listScheduledMessages('zulip', { channelId: '120' });
+
+      expect(result.map(({ name }) => name)).toEqual(['b']);
+    });
   });
 
   describe('the cron tick', () => {
@@ -558,16 +569,33 @@ describe('ScheduledMessageService', () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
     });
 
-    it('should not update a row of another platform, nor an invalid cron expression', async () => {
+    it('should not update a row of another platform, whatever the cron expression', async () => {
       databaseMock.getScheduledMessage.mockResolvedValue(undefined);
 
       await expect(sut.updateScheduledMessage('standup', 'zulip', { message: 'Edited' })).resolves.toBeUndefined();
+      await expect(
+        sut.updateScheduledMessage('standup', 'zulip', { cronExpression: 'not a cron' }),
+      ).resolves.toBeUndefined();
+
+      expect(databaseMock.updateScheduledMessage).not.toHaveBeenCalled();
+    });
+
+    it('should refuse an invalid cron expression for a row it found', async () => {
+      databaseMock.getScheduledMessage.mockResolvedValue(zulipRow());
+
       await expect(sut.updateScheduledMessage('standup', 'zulip', { cronExpression: 'not a cron' })).rejects.toThrow(
         'Invalid cron expression not a cron',
       );
 
-      expect(databaseMock.getScheduledMessage).toHaveBeenCalledExactlyOnceWith('standup', 'zulip');
       expect(databaseMock.updateScheduledMessage).not.toHaveBeenCalled();
+    });
+
+    it('should say a row of another channel is not found before checking the cron expression', async () => {
+      databaseMock.getScheduledMessage.mockResolvedValue(zulipRow({ channelId: '120' }));
+
+      await expect(
+        sut.updateScheduledMessage('standup', 'zulip', { cronExpression: 'not a cron' }, { channelId: '107' }),
+      ).resolves.toBeUndefined();
     });
 
     it('should stop a deleted zulip row and resolve to it', async () => {
@@ -582,6 +610,36 @@ describe('ScheduledMessageService', () => {
       expect(databaseMock.getScheduledMessage).toHaveBeenCalledExactlyOnceWith('standup', 'zulip');
       expect(databaseMock.removeScheduledMessage).toHaveBeenCalledExactlyOnceWith('z-1');
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should neither update nor delete a row of another channel, which keeps posting', async () => {
+      const row = zulipRow({ channelId: '120' });
+      databaseMock.getScheduledMessages.mockResolvedValue([row]);
+      databaseMock.getScheduledMessage.mockResolvedValue(row);
+
+      await sut.init();
+      await expect(
+        sut.updateScheduledMessage('standup', 'zulip', { message: 'Hijacked' }, { channelId: '107' }),
+      ).resolves.toBeUndefined();
+      await expect(sut.deleteScheduledMessage('standup', 'zulip', { channelId: '107' })).resolves.toBeUndefined();
+      await nextMinute();
+
+      expect(databaseMock.updateScheduledMessage).not.toHaveBeenCalled();
+      expect(databaseMock.removeScheduledMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should update and delete a row of the channel given', async () => {
+      const row = zulipRow({ channelId: '120' });
+      databaseMock.getScheduledMessage.mockResolvedValue(row);
+      databaseMock.updateScheduledMessage.mockResolvedValue({ ...row, message: 'Edited' });
+
+      await expect(
+        sut.updateScheduledMessage('standup', 'zulip', { message: 'Edited' }, { channelId: '120' }),
+      ).resolves.toMatchObject({ message: 'Edited' });
+      await expect(sut.deleteScheduledMessage('standup', 'zulip', { channelId: '120' })).resolves.toBe(row);
+
+      expect(databaseMock.removeScheduledMessage).toHaveBeenCalledExactlyOnceWith('z-1');
     });
 
     it('should resolve to nothing when there is no row by that name to delete', async () => {

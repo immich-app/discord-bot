@@ -302,15 +302,15 @@ const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const SERVER = 'the Immich Discord server (979116623879368755)';
 
 const HELP = [
-  'Mention me at the start of a message in a team stream, then one of:',
-  '- `help` (any stream): this list',
-  `- \`emote-sync\`: upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has`,
-  '- `backfill-pull-requests <number|all>`: create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
-  '- `fourthwall update <id|all>`: fetch that Fourthwall order again and update its row in the database, or with `all` every order',
+  'Mention me at the start of a message, then one of:',
+  '- `help`: this list',
+  `- \`emote-sync\` (team streams): upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has`,
+  '- `backfill-pull-requests <number|all>` (team streams): create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
+  '- `fourthwall update <id|all>` (team streams): fetch that Fourthwall order again and update its row in the database, or with `all` every order',
   '- `schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]`: post the message in this stream on that cron schedule, in the topic given or this one; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
-  '- `schedule-list`: list every scheduled message on Zulip, with its schedule, stream, topic and the start of its text',
-  '- `schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]`: change the schedule, text or topic of a scheduled message on Zulip, from its next post on; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
-  '- `schedule-remove <name>`: delete a scheduled message on Zulip, which stops it',
+  '- `schedule-list`: list the scheduled messages of this stream, with their schedule, topic and the start of their text',
+  '- `schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]`: change the schedule, text or topic of a scheduled message of this stream, from its next post on; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
+  '- `schedule-remove <name>`: delete a scheduled message of this stream, which stops it',
   '- `rss-subscribe <url> [topic=<topic>]`: post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
   '- `rss-unsubscribe <url>`: stop posting that RSS feed in this stream',
   '- `rss-list`: list the RSS feeds this stream is subscribed to, with their topics',
@@ -318,22 +318,22 @@ const HELP = [
   '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on <group>|off [group]|default <repository>|list>` (any stream): turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream',
-  "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list` (any stream): create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date, or their URLs) for `expanders on`, the first one it names itself, not a pattern's, its default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
+  '- `expanders <on <group>|off [group]|default <repository>|list>`: turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream',
+  "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list`: create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date, or their URLs) for `expanders on`, the first one it names itself, not a pattern's, its default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
   '',
   'Arguments are positional or `key=value`; quote a value with spaces (`text="two words"`). Every reply is posted here, in the topic.',
-  'The commands marked (administrators) are taken in any stream, from organization administrators and owners only, and the ones marked (any stream) in any stream from anyone. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
+  'The commands marked (administrators) are taken from organization administrators and owners only, and the ones marked (team streams) in the Immich team streams only. Scheduled messages, RSS feeds and `expanders` act on this stream alone, while expander groups are shared by every stream. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
 ].join('\n');
 
 const HELP_ELSEWHERE = HELP.split('\n')
   .map((line, index) =>
     index === 0
-      ? 'Mention me at the start of a message, then one of the commands taken in this stream (the others are taken in the team streams only, where `help` lists every one):'
+      ? 'Mention me at the start of a message, then one of these (the commands the Immich team streams alone take are left out; `help` there lists every one):'
       : line,
   )
-  .filter((line) => !line.startsWith('- ') || /\((administrators|any stream)\)/.test(line))
+  .filter((line) => !line.includes('(team streams):'))
   .join('\n');
 
 describe('tokenize', () => {
@@ -532,12 +532,31 @@ describe('ZulipCommandService', () => {
       expect(Constants.Zulip.Commands).toEqual([107, 108, 109, 110, 111, 112, 113]);
     });
 
-    it('should ignore a team command in a stream that is not allowlisted, without a reply', async () => {
+    it('should refuse a team command outside the team streams, saying so', async () => {
       await send('@**Immich** emote-sync', { streamId: Constants.Zulip.Streams.Immich });
+      await send('@**Immich** backfill-pull-requests 1234', { streamId: 999 });
+      await send('@**Immich** fourthwall update all', { streamId: 999 });
+
+      expect(replies().map(({ content }) => content)).toEqual([
+        '`emote-sync` is taken in the Immich team streams only.',
+        '`backfill-pull-requests` is taken in the Immich team streams only.',
+        '`fourthwall` is taken in the Immich team streams only.',
+      ]);
+      expect(chatServiceMock.syncEmotes).not.toHaveBeenCalled();
+      expect(chatServiceMock.updateFourthwallOrders).not.toHaveBeenCalled();
+    });
+
+    it('should take every other command in any stream, and answer an unknown one', async () => {
       await send('@**Immich** similar text="hello"', { streamId: 999 });
+      await send('@**Immich** rss-list', { streamId: 999 });
       await send('@**Immich** nonsense', { streamId: 999 });
 
-      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      expect(chatServiceMock.handleFindSimilarIssuesOrDiscussions).toHaveBeenCalledOnce();
+      expect(replies().map(({ stream, content }) => [stream, content])).toEqual([
+        [999, 'Nothing similar to `hello` was found.'],
+        [999, 'This stream is not subscribed to any RSS feed.'],
+        [999, 'Unknown command `nonsense`. Mention me with `help` for the list.'],
+      ]);
     });
 
     it('should answer help and a bare mention in any stream, with the commands taken there', async () => {
@@ -1401,11 +1420,11 @@ describe('ZulipCommandService', () => {
       expect(contents()).toEqual([
         'Scheduled message `standup` created with cron `* * * * *`, posting in topic `deploy` of this stream.',
         '@*mobile* Standup in **5 minutes**',
-        'Scheduled messages on Zulip:\n- `standup`: `* * * * *` in stream 107 (ImmichGeneral), topic `deploy`: `@\u200B*mobile* Standup in **5 minutes**`',
-        'Updated scheduled message `standup`: it posts with cron `* * * * *` in topic `daily` of stream 107 (ImmichGeneral).',
+        'Scheduled messages of this stream:\n- `standup`: `* * * * *` in topic `deploy`: `@\u200B*mobile* Standup in **5 minutes**`',
+        'Updated scheduled message `standup`: it posts with cron `* * * * *` in topic `daily` of this stream.',
         'Standup now',
         'Removed scheduled message `standup`.',
-        'There are no scheduled messages on Zulip.',
+        'There are no scheduled messages in this stream.',
       ]);
       expect(posts('daily')).toEqual([[107, 'Standup now']]);
       expect(database.scheduled).toEqual([]);
@@ -1473,21 +1492,51 @@ describe('ZulipCommandService', () => {
       expect(database.scheduled).toEqual([]);
     });
 
-    it('should answer a name already taken, on any platform, with the error', async () => {
+    it('should say a name already taken in this stream is here, and how to change it', async () => {
+      await send(`@**Immich** schedule-add standup cron="${everyMinute}" message=Hi`);
+      await send(`@**Immich** schedule-add standup cron="${everyMinute}" message=Again`);
+
+      expect(contents()[1]).toBe(
+        'There is already a scheduled message named `standup` in this stream; `schedule-edit standup` changes it.',
+      );
+      expect(database.scheduled).toMatchObject([{ message: 'Hi' }]);
+    });
+
+    it('should answer an invalid cron for a message of another stream with not found', async () => {
+      await database.createScheduledMessage({
+        name: 'customers',
+        cronExpression: '0 9 * * 1',
+        message: 'Weekly check-in',
+        channelId: '120',
+        createdBy: '12',
+        service: 'zulip',
+      });
+
+      await send('@**Immich** schedule-edit customers cron="not a cron"');
+
+      expect(contents()).toEqual([
+        'There is no scheduled message `customers` in this stream; `schedule-list` lists them.',
+      ]);
+    });
+
+    it.each([
+      ['on Discord', { channelId: '991930592843272342', service: 'discord' as const }],
+      ['in another stream', { channelId: '120', service: 'zulip' as const }],
+    ])('should say a name already taken %s is shared, storing nothing', async (_, taken) => {
       await database.createScheduledMessage({
         name: 'standup',
         cronExpression: '0 9 * * 1',
-        message: 'Discord standup',
-        channelId: '991930592843272342',
+        message: 'Elsewhere',
         createdBy: 'user-1',
-        service: 'discord',
+        ...taken,
       });
 
       await send(`@**Immich** schedule-add standup cron="${everyMinute}" message=Hi`);
 
       expect(contents()).toEqual([
-        '`schedule-add` failed: `duplicate key value violates unique constraint "scheduled_message_name_uq"`',
+        'There is already a scheduled message named `standup`, in another stream or on Discord: every stream and Discord share the names, so pick another.',
       ]);
+      expect(database.scheduled).toMatchObject([{ message: 'Elsewhere' }]);
     });
 
     it('should neither list, edit nor remove a scheduled message of another platform', async () => {
@@ -1504,9 +1553,41 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** schedule-edit standup message=Hijacked');
       await send('@**Immich** schedule-remove standup');
 
-      const notFound = 'There is no scheduled message `standup` on Zulip; `schedule-list` lists them.';
-      expect(contents()).toEqual(['There are no scheduled messages on Zulip.', notFound, notFound]);
+      const notFound = 'There is no scheduled message `standup` in this stream; `schedule-list` lists them.';
+      expect(contents()).toEqual(['There are no scheduled messages in this stream.', notFound, notFound]);
       expect(database.scheduled).toMatchObject([{ name: 'standup', message: 'Discord standup', service: 'discord' }]);
+    });
+
+    it('should neither list, edit nor remove a scheduled message of another stream, but take them in its own', async () => {
+      await database.createScheduledMessage({
+        name: 'customers',
+        cronExpression: '0 9 * * 1',
+        message: 'Weekly check-in',
+        channelId: '120',
+        topic: 'check-ins',
+        createdBy: '12',
+        service: 'zulip',
+      });
+
+      await send('@**Immich** schedule-list');
+      await send('@**Immich** schedule-edit customers message=Hijacked');
+      await send('@**Immich** schedule-remove customers');
+      expect(database.scheduled).toMatchObject([{ name: 'customers', message: 'Weekly check-in' }]);
+
+      await send('@**Immich** schedule-list', { streamId: 120 });
+      await send('@**Immich** schedule-edit customers message="Monthly check-in"', { streamId: 120 });
+      await send('@**Immich** schedule-remove customers', { streamId: 120 });
+
+      const notFound = 'There is no scheduled message `customers` in this stream; `schedule-list` lists them.';
+      expect(contents()).toEqual([
+        'There are no scheduled messages in this stream.',
+        notFound,
+        notFound,
+        'Scheduled messages of this stream:\n- `customers`: `0 9 * * 1` in topic `check-ins`: `Weekly check-in`',
+        'Updated scheduled message `customers`: it posts with cron `0 9 * * 1` in topic `check-ins` of this stream.',
+        'Removed scheduled message `customers`.',
+      ]);
+      expect(database.scheduled).toEqual([]);
     });
 
     it('should list a message on one line, shortened, mentioning nobody', async () => {
@@ -1515,7 +1596,7 @@ describe('ZulipCommandService', () => {
         name: 'long',
         cronExpression: '0 9 * * 1',
         message,
-        channelId: '999',
+        channelId: '107',
         topic: null,
         createdBy: '12',
         service: 'zulip',
@@ -1524,7 +1605,7 @@ describe('ZulipCommandService', () => {
       await send('@**Immich** schedule-list');
 
       expect(contents()).toEqual([
-        `Scheduled messages on Zulip:\n- \`long\`: \`0 9 * * 1\` in stream 999, the general chat topic: \`@\u200B**all** line one line two ${'x'.repeat(48)}...\``,
+        `Scheduled messages of this stream:\n- \`long\`: \`0 9 * * 1\` in the general chat topic: \`@\u200B**all** line one line two ${'x'.repeat(48)}...\``,
       ]);
     });
   });
@@ -1666,7 +1747,7 @@ describe('ZulipCommandService', () => {
       mirrorLinksMock.unlink.mockResolvedValue(unlinked);
     });
 
-    it('should take the mirror commands in any stream, where the team commands stay ignored', async () => {
+    it('should take the mirror commands in any stream', async () => {
       await send('@**Immich** mirror-link', { streamId: 120, topic: 'setup' });
       await send('@**Immich** mirror-list', { streamId: Constants.Zulip.Streams.Immich });
       await send('@**Immich** help', { streamId: 120 });
@@ -1678,8 +1759,8 @@ describe('ZulipCommandService', () => {
         mainTopic: undefined,
         actor: { platform: 'zulip', id: '12', name: 'Alice' },
       });
-      expect(mirrorLinksMock.unlinkIdentity).not.toHaveBeenCalled();
-      expect(replies()).toEqual([
+      expect(mirrorLinksMock.unlinkIdentity).toHaveBeenCalledExactlyOnceWith({ zulipUserId: 12 }, 'zulip');
+      expect(replies().slice(0, 3)).toEqual([
         { stream: 120, topic: 'setup', content: REQUESTED },
         { stream: 54, topic: 'deploy', content: 'No channel is mirrored.' },
         { stream: 120, topic: 'deploy', content: HELP_ELSEWHERE },

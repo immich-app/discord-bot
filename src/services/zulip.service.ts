@@ -56,7 +56,7 @@ const backoffMs = (failures: number) => Math.min(INITIAL_BACKOFF_MS * 2 ** (fail
 /** Message events carry no `is_bot` flag, but Zulip creates every bot as `{short_name}-bot@{realm host}`. */
 export const isBotSender = (message: ZulipReceivedMessage) => /-bot@[^@]+$/i.test(message.senderEmail);
 
-export const describeZulipStream = (streamId: number) => {
+const describeZulipStream = (streamId: number) => {
   const named = [...Object.entries(Constants.Zulip.TeamStreams), ...Object.entries(Constants.Zulip.Streams)];
   const name = named.find(([, id]) => id === streamId)?.[0];
   return name ? `${streamId} (${name})` : `${streamId}`;
