@@ -1647,6 +1647,83 @@ describe('Bot test', () => {
       await zulipExpanders.init();
     });
 
+    describe('emoji images', () => {
+      const IMAGE = 'https://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg';
+
+      it.each([
+        ':we-are-checking:',
+        'hold on :we-are-checking:',
+        ':WE-ARE-CHECKING: :we-are-checking::we-are-checking:',
+      ])('should answer %j with the image, once, in any stream', async (content) => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: IMAGE,
+        });
+      });
+
+      it.each([
+        '`:we-are-checking:`',
+        '```\n:we-are-checking:\n```',
+        '```\n:we-are-checking:',
+        '~~~ python\nprint(1)\n:we-are-checking:',
+        '    :we-are-checking:',
+        'look:\n\n    code\n    :we-are-checking:',
+        '\t:we-are-checking:',
+        'we-are-checking',
+        ':we-are-checking',
+        ':smile:',
+      ])('should not answer %j', async (content) => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content }));
+
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        '- a list item\n    :we-are-checking:',
+        '```quote\n:we-are-checking:\n```',
+        'text\n    :we-are-checking:',
+      ])('should answer %j, which Zulip renders as text', async (content) => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content: IMAGE }));
+      });
+
+      it('should still post the image when a reference in the same message fails, and report the failure', async () => {
+        githubMock.getIssueOrPrMessage.mockRejectedValue(new Error('GitHub is down'));
+
+        await expect(
+          sut.onZulipMessage(zulipMessage({ streamId: 120, content: 'fixes #4242 :we-are-checking:' })),
+        ).rejects.toThrow('GitHub is down');
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 120,
+          topic: 'thumbnails',
+          content: IMAGE,
+        });
+      });
+
+      it('should not answer a direct message', async () => {
+        await sut.onZulipMessage(zulipMessage({ type: 'private', streamId: undefined, content: ':we-are-checking:' }));
+
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should post the image after the expansions of the same message, in one reply', async () => {
+        await sut.onZulipMessage(
+          zulipMessage({ streamId: 121, content: 'https://x.com/immich/status/1 :we-are-checking:' }),
+        );
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: `https://nitter.net/immich/status/1\n${IMAGE}`,
+        });
+      });
+    });
+
     it('should mirror x.com links but ask GitHub nothing in a stream without GitHub expansion', async () => {
       await sut.onZulipMessage(zulipMessage({ streamId: 121, content: 'https://x.com/immich/status/1 fixes #4242' }));
 

@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo } from 'src/constants';
-import { neutraliseZulipMentions, plural, shorten } from 'src/format';
+import { neutraliseZulipMentions, plural, scanZulipFences, shorten, splitOutsideCode } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -122,6 +122,39 @@ const mapConcurrently = async <T, R>(items: T[], limit: number, map: (item: T) =
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, work));
   return results;
+};
+
+/**
+ * What Zulip renders as text: no fenced code (an unclosed fence runs to the end of the message), no indented code
+ * block (four spaces or a tab, after a blank line or another such line), no code span.
+ */
+const zulipTextOutsideCode = (content: string) => {
+  const lines = content.split(/\r\n?|\n/);
+  const { lineFences } = scanZulipFences(lines);
+  const kept: string[] = [];
+  let indentedCode = false;
+  for (const [index, line] of lines.entries()) {
+    let fenced = false;
+    for (let fence = lineFences[index]; fence && !fenced; fence = fence.parent) {
+      fenced = fence.code;
+    }
+    const blankBefore = index === 0 || lines[index - 1].trim() === '';
+    indentedCode = !fenced && /^( {4}|\t)/.test(line) && (blankBefore || indentedCode);
+    if (!fenced && !indentedCode) {
+      kept.push(line);
+    }
+  }
+  return splitOutsideCode(kept.join('\n'))
+    .filter(({ code }) => !code)
+    .map(({ text }) => text)
+    .join('\n');
+};
+
+/** The images `Constants.Zulip.EmojiImages` names for the emoji a message uses outside code, each once. */
+const emojiImages = (content: string) => {
+  const text = zulipTextOutsideCode(content);
+  const images = [...text.matchAll(/:([\w+-]+):/g)].map(([, name]) => Constants.Zulip.EmojiImages[name.toLowerCase()]);
+  return [...new Set(images.filter((image) => image !== undefined))];
 };
 
 /** How many leading path segments of a GitLab permalink are tried as its ref. */
@@ -241,6 +274,19 @@ export class ChatService {
       return;
     }
 
+    // One failing lookup must not cost the reply the rest; the failure still reaches the event loop's log.
+    const [expansions] = await Promise.allSettled([this.zulipExpansions(streamId, content)]);
+    const parts = [...(expansions.status === 'fulfilled' ? expansions.value : []), ...emojiImages(content)];
+
+    if (parts.length !== 0) {
+      await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });
+    }
+    if (expansions.status === 'rejected') {
+      throw expansions.reason;
+    }
+  }
+
+  private async zulipExpansions(streamId: number, content: string) {
     const parts: string[] = [];
     const scope = this.zulipExpanders.getScope(streamId);
     if (scope) {
@@ -264,10 +310,7 @@ export class ChatService {
       );
     }
     parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
-
-    if (parts.length !== 0) {
-      await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });
-    }
+    return parts;
   }
 
   @Cron(Constants.Cron.ImmichBirthday)
