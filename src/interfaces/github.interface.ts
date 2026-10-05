@@ -77,7 +77,8 @@ export interface IGithubInterface {
     repo: GithubRepo | string,
     checkSuiteNodeId: string,
   ): Promise<string>;
-  getLatestReleaseTag(org: GithubOrg | string, repo: GithubRepo | string): Promise<string>;
+  /** The commit the latest release is tagged on, `undefined` for a repository without a release. */
+  getLatestReleaseTag(org: GithubOrg | string, repo: GithubRepo | string): Promise<string | undefined>;
   isCollaborator(dto: { org: string; repo: string; userLogin: string }): Promise<boolean>;
   getPullRequests(
     { org, repo }: { org: string; repo: string },
