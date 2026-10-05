@@ -50,6 +50,8 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   getMessage: vitest.fn(),
   updateMessage: vitest.fn(),
   createEmote: vitest.fn(),
+  replaceCroppedEmote: vitest.fn(),
+  getEmoteUploaderId: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
@@ -749,6 +751,7 @@ describe('ZulipCommandService', () => {
       zulipUploaded: 3,
       failed: [],
       renamed: ['nameless:3 → nameless_3'],
+      replaced: [],
       alreadyOnZulip: [],
     };
     const DONE = `Done syncing the emotes of ${SERVER}: 3 emotes, 3 uploaded to Zulip, 1 renamed: nameless:3 → nameless_3`;
@@ -781,6 +784,7 @@ describe('ZulipCommandService', () => {
         zulipSkipped: 'unlisted',
         failed: ['pepeD'],
         renamed: [],
+        replaced: [],
         alreadyOnZulip: ['catJAM', 'CatJam → catjam2'],
       });
 

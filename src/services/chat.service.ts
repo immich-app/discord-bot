@@ -224,11 +224,13 @@ export type EmoteSyncReport = {
   zulipSkipped?: ZulipSkipReason;
   failed: string[];
   renamed: string[];
+  /** Wide emotes Zulip had cropped, uploaded again squashed. */
+  replaced: string[];
   alreadyOnZulip: string[];
 };
 
 export const formatEmoteSyncReport = (
-  { total, zulipUploaded, zulipSkipped, failed, renamed, alreadyOnZulip }: EmoteSyncReport,
+  { total, zulipUploaded, zulipSkipped, failed, renamed, replaced, alreadyOnZulip }: EmoteSyncReport,
   subject?: string,
 ) => {
   const done = subject ? `Done syncing ${subject}` : 'Done syncing';
@@ -240,6 +242,7 @@ export const formatEmoteSyncReport = (
     `${zulipUploaded} uploaded to Zulip${zulipSkipped ? ` (skipped: ${ZULIP_SKIP_REASONS[zulipSkipped]})` : ''}`,
     failed.length > 0 && `${failed.length} failed: ${failed.join(', ')}`,
     renamed.length > 0 && `${renamed.length} renamed: ${renamed.join(', ')}`,
+    replaced.length > 0 && `${replaced.length} squashed and replaced: ${replaced.join(', ')}`,
     alreadyOnZulip.length > 0 && `${alreadyOnZulip.length} already on Zulip: ${alreadyOnZulip.join(', ')}`,
   ];
   return `${done}: ${outcome.filter(Boolean).join(', ')}`;
@@ -1046,7 +1049,22 @@ ${formattedCode}
         `Cannot read the emotes of Discord server ${guildId}: the bot is not logged in to Discord, or not a member of that server`,
       );
     }
-    const existing = await this.listZulipEmoji();
+    const emoji = await this.listZulipEmoji();
+    const existing = emoji && new Set(emoji.map(({ name }) => name));
+    const authors = new Map(emoji?.map(({ name, authorId }) => [name, authorId]));
+    const checked = new Set(existing ? await this.database.getZulipEmoteIds() : []);
+    let uploaderId: number | null | undefined;
+    const getUploaderId = async () => {
+      if (uploaderId === undefined) {
+        try {
+          uploaderId = await this.zulip.getEmoteUploaderId();
+        } catch (error) {
+          this.logger.error('Could not read the Zulip account that uploads emoji, so no emoji is replaced', error);
+          uploaderId = null;
+        }
+      }
+      return uploaderId;
+    };
     const builtIn = existing ? await this.listZulipBuiltInEmoji() : undefined;
     const zulipNames =
       existing && builtIn
@@ -1061,6 +1079,7 @@ ${formattedCode}
     let zulipUploaded = 0;
     const failed: string[] = [];
     const renamed: string[] = [];
+    const replaced: string[] = [];
     const alreadyOnZulip: string[] = [];
     for (const [index, emote] of emotes.entries()) {
       const name = emote.name ?? emote.identifier;
@@ -1070,19 +1089,42 @@ ${formattedCode}
       if (existing && !zulipSkipped) {
         const zulipName = zulipNames[index];
         const asZulip = zulipName === name.toLowerCase() ? name : `${name} → ${zulipName}`;
-        if (existing.has(zulipName)) {
+        if (existing.has(zulipName) && checked.has(emote.id)) {
           alreadyOnZulip.push(asZulip);
+        } else if (existing.has(zulipName)) {
+          const uploader = await getUploaderId();
+          const author = authors.get(zulipName);
+          if (uploader === null || author === null || author === undefined || author !== uploader) {
+            alreadyOnZulip.push(asZulip);
+            // Someone else's emoji of that name is never replaced; with either author unknown it is looked at next time.
+            if (uploader !== null && author !== null && author !== undefined) {
+              await this.database.addZulipEmote(emote.id, zulipName);
+            }
+            continue;
+          }
+          // Uploaded by a sync before wide emotes were squashed: Zulip cropped it if it is not square.
+          const zulip = await this.onZulip(name, url, () => this.zulip.replaceCroppedEmote(zulipName, url));
+          if (zulip === 'refused') {
+            zulipSkipped = 'refused';
+          } else if (zulip === 'failed') {
+            failed.push(name);
+          } else {
+            (zulip === 'replaced' ? replaced : alreadyOnZulip).push(asZulip);
+            await this.database.addZulipEmote(emote.id, zulipName);
+          }
         } else {
-          const zulip = await this.uploadToZulip(name, zulipName, url);
+          const zulip = await this.onZulip(name, url, () => this.zulip.createEmote(zulipName, url));
           if (zulip === 'refused') {
             zulipSkipped = 'refused';
           } else {
             if (asZulip !== name) {
               renamed.push(asZulip);
             }
-            zulipUploaded += zulip === 'uploaded' ? 1 : 0;
             if (zulip === 'failed') {
               failed.push(name);
+            } else {
+              zulipUploaded++;
+              await this.database.addZulipEmote(emote.id, zulipName);
             }
           }
         }
@@ -1095,6 +1137,7 @@ ${formattedCode}
       zulipSkipped,
       failed,
       renamed,
+      replaced,
       alreadyOnZulip,
     };
   }
@@ -1103,7 +1146,7 @@ ${formattedCode}
     try {
       const emoji = await this.zulip.listEmoji();
       // A deactivated emoji frees its name: Zulip lets a new upload take it.
-      return new Set(emoji.filter(({ deactivated }) => !deactivated).map(({ name }) => name));
+      return emoji.filter(({ deactivated }) => !deactivated);
     } catch (error) {
       this.logger.error('Could not list the Zulip emoji, skipping the Zulip side of the sync', error);
       return undefined;
@@ -1124,14 +1167,10 @@ ${formattedCode}
   }
 
   /** A refused key refuses every upload, so it is reported once, by Zulip's reason (never the key), rather than per emote. */
-  private async uploadToZulip(
-    name: string,
-    zulipName: string,
-    url: string,
-  ): Promise<'uploaded' | 'refused' | 'failed'> {
+  /** A 401 refuses the rest of the sync's Zulip side; any other failure is the one emote's. */
+  private async onZulip<T>(name: string, url: string, work: () => Promise<T>): Promise<T | 'refused' | 'failed'> {
     try {
-      await this.zulip.createEmote(zulipName, url);
-      return 'uploaded';
+      return await work();
     } catch (error) {
       if (error instanceof ZulipApiError && error.status === 401) {
         this.logger.error(

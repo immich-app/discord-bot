@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+import sharp from 'sharp';
 import { ZulipConfig, ZulipUploadRefused } from 'src/interfaces/zulip.interface';
 import { ZulipApiError, ZulipRateLimit, createZulipClient } from 'src/repositories/zulip.client';
 import { ZulipRepository, longpollTimeoutMs } from 'src/repositories/zulip.repository';
@@ -22,6 +24,32 @@ const json = (body: unknown, init: ResponseInit = {}) =>
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 const image = (type = 'image/png') => new Response(PNG, { status: 200, headers: { 'content-type': type } });
+
+/** A real image; with `frames`, an animated GIF of that many differently coloured frames, which the encoder keeps. */
+const realImage = async (
+  width: number,
+  height: number,
+  format: 'png' | 'gif',
+  frames = 1,
+): Promise<Uint8Array<ArrayBuffer>> => {
+  const pages = await Promise.all(
+    Array.from({ length: frames }, (_, index) =>
+      sharp({ create: { width, height, channels: 4, background: { r: 80 * index, g: 255 - 80 * index, b: 0 } } })
+        .png()
+        .toBuffer(),
+    ),
+  );
+  const image = frames > 1 ? sharp(pages, { join: { animated: true } }).gif({ delay: 100 }) : sharp(pages[0]);
+  return new Uint8Array(await (format === 'gif' ? image.gif() : image.png()).toBuffer());
+};
+
+const served = (data: Uint8Array<ArrayBuffer>, type: string) =>
+  new Response(data, { status: 200, headers: { 'content-type': type } });
+
+const uploaded = async (request: Request) => {
+  const part = (await request.formData()).get('filename') as File;
+  return { part, meta: await sharp(new Uint8Array(await part.arrayBuffer()), { animated: true }).metadata() };
+};
 
 const live = () => new AbortController().signal;
 
@@ -326,8 +354,8 @@ describe('ZulipRepository', () => {
       );
 
       await expect(sut.listEmoji()).resolves.toEqual([
-        { id: '1', name: 'green_tick', deactivated: false },
-        { id: '2', name: 'old', deactivated: true },
+        { id: '1', name: 'green_tick', deactivated: false, authorId: 5 },
+        { id: '2', name: 'old', deactivated: true, authorId: 5 },
       ]);
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -1605,6 +1633,164 @@ describe('ZulipRepository', () => {
         code: 'BAD_REQUEST',
         msg: 'This endpoint does not accept bot requests',
       });
+    });
+
+    it('should squash a wide image to a square, since Zulip crops one', async () => {
+      fetchMock
+        .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      await sut.createEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png');
+
+      const { part, meta } = await uploaded(request(1));
+      expect(part.name).toBe('peepowidehappy.png');
+      expect([meta.format, meta.width, meta.height]).toEqual(['png', 96, 96]);
+    });
+
+    it('should squash every frame of a tall animated GIF, keeping it animated', async () => {
+      fetchMock
+        .mockResolvedValueOnce(served(await realImage(32, 64, 'gif', 3), 'image/gif'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      await sut.createEmote('tall', 'https://cdn.discordapp.com/emojis/2.gif');
+
+      const { meta } = await uploaded(request(1));
+      expect([meta.format, meta.width, meta.pageHeight, meta.pages]).toEqual(['gif', 64, 64, 3]);
+    });
+
+    it('should upload a square image as it is', async () => {
+      const square = await realImage(64, 64, 'png');
+      fetchMock
+        .mockResolvedValueOnce(served(square, 'image/png'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      await sut.createEmote('square', 'https://cdn.discordapp.com/emojis/3.png');
+
+      const { part } = await uploaded(request(1));
+      expect(new Uint8Array(await part.arrayBuffer())).toEqual(square);
+    });
+  });
+
+  describe('replaceCroppedEmote', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should keep the emoji of a square image, changing nothing on Zulip', async () => {
+      fetchMock.mockResolvedValueOnce(served(await realImage(64, 64, 'png'), 'image/png'));
+
+      expect(await sut.replaceCroppedEmote('square', 'https://cdn.discordapp.com/emojis/3.png')).toBe('kept');
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('should deactivate the cropped emoji of a wide image and upload it again squashed, as the user', async () => {
+      fetchMock
+        .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      expect(await sut.replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png')).toBe(
+        'replaced',
+      );
+
+      expect([request(1).method, request(1).url]).toEqual([
+        'DELETE',
+        'https://zulip.example.com/api/v1/realm/emoji/peepowidehappy',
+      ]);
+      expect(request(1).headers.get('authorization')).toBe(basic(config.user));
+      expect([request(2).method, request(2).url]).toEqual([
+        'POST',
+        'https://zulip.example.com/api/v1/realm/emoji/peepowidehappy',
+      ]);
+      const { meta } = await uploaded(request(2));
+      expect([meta.width, meta.height]).toEqual([96, 96]);
+    });
+
+    it('should put the original back when the squashed upload fails, and say so', async () => {
+      const wide = await realImage(96, 32, 'png');
+      fetchMock
+        .mockResolvedValueOnce(served(wide, 'image/png'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }))
+        .mockResolvedValueOnce(
+          json({ result: 'error', msg: 'Uploaded file is larger than allowed', code: 'BAD_REQUEST' }, { status: 400 }),
+        )
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      await expect(
+        sut.replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png'),
+      ).rejects.toThrow('Could not upload emote peepoWideHappy squashed, so the original is back');
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      const { part } = await uploaded(request(3));
+      expect(new Uint8Array(await part.arrayBuffer())).toEqual(wide);
+    });
+
+    it('should pass a refusal of the credentials through as it is, after putting the original back', async () => {
+      fetchMock
+        .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }))
+        .mockResolvedValueOnce(json({ result: 'error', msg: 'Invalid API key', code: 'UNAUTHORIZED' }, { status: 401 }))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }));
+
+      const error = await sut
+        .replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png')
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ZulipApiError);
+      expect((error as ZulipApiError).status).toBe(401);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+
+    it('should say the emoji is left deactivated when the original cannot be put back either', async () => {
+      const refused = () =>
+        json({ result: 'error', msg: 'Uploaded file is larger than allowed', code: 'BAD_REQUEST' }, { status: 400 });
+      fetchMock
+        .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
+        .mockResolvedValueOnce(json({ result: 'success', msg: '' }))
+        .mockResolvedValueOnce(refused())
+        .mockResolvedValueOnce(refused());
+
+      const logged = vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+
+      await expect(
+        sut.replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png'),
+      ).rejects.toThrow('nor put the original back: it is deactivated');
+      expect(logged).toHaveBeenCalledWith(
+        'Could not put emote peepoWideHappy back on Zulip after its squashed upload failed: it is deactivated',
+      );
+    });
+
+    it('should refuse to judge an image it cannot read, changing nothing on Zulip', async () => {
+      fetchMock.mockResolvedValueOnce(image('image/png'));
+
+      await expect(sut.replaceCroppedEmote('broken', 'https://cdn.discordapp.com/emojis/4.png')).rejects.toThrow(
+        'Could not read the image of emote broken',
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('should read the user ID of the account that uploads emoji', async () => {
+      fetchMock.mockResolvedValueOnce(json({ result: 'success', msg: '', user_id: 7, full_name: 'Emoji uploader' }));
+
+      expect(await sut.getEmoteUploaderId()).toBe(7);
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/users/me');
+      expect(request(0).headers.get('authorization')).toBe(basic(config.user));
+    });
+
+    it('should not upload again when Zulip refuses the deactivation', async () => {
+      fetchMock
+        .mockResolvedValueOnce(served(await realImage(96, 32, 'png'), 'image/png'))
+        .mockResolvedValueOnce(
+          json(
+            { result: 'error', msg: 'Must be an organization administrator or emoji author', code: 'BAD_REQUEST' },
+            { status: 400 },
+          ),
+        );
+
+      await expect(
+        sut.replaceCroppedEmote('peepoWideHappy', 'https://cdn.discordapp.com/emojis/1.png'),
+      ).rejects.toThrow('Must be an organization administrator or emoji author');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 });

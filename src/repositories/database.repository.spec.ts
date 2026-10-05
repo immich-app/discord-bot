@@ -12,7 +12,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity and zulip_expander* rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, zulip_expander* and zulip_emote rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -20,6 +20,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
   beforeEach(async () => {
     await db.deleteFrom('mirror_link').execute();
     await db.deleteFrom('mirror_identity').execute();
+    await db.deleteFrom('zulip_emote').execute();
     await db.deleteFrom('zulip_expander_default').execute();
     await db.deleteFrom('zulip_expander').execute();
     await db.deleteFrom('zulip_expander_group').execute();
@@ -296,5 +297,21 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
 
     expect(await sut.getMirrorConversationByDiscord(CHANNEL, null)).toEqual(conversation);
     await sql`DELETE FROM "mirror_conversation" WHERE "id" = ${conversation.id}`.execute(db);
+  });
+
+  describe('zulip emotes', () => {
+    it('should record an emote once, keeping the first row, and list the IDs', async () => {
+      await sut.addZulipEmote('1', 'peepowidehappy');
+      await sut.addZulipEmote('1', 'renamed');
+      await sut.addZulipEmote('2', 'catjam');
+
+      expect((await sut.getZulipEmoteIds()).sort()).toEqual(['1', '2']);
+      expect(
+        await db.selectFrom('zulip_emote').select(['discordEmoteId', 'zulipName']).orderBy('discordEmoteId').execute(),
+      ).toEqual([
+        { discordEmoteId: '1', zulipName: 'peepowidehappy' },
+        { discordEmoteId: '2', zulipName: 'catjam' },
+      ]);
+    });
   });
 });
