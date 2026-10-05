@@ -237,6 +237,10 @@ export const Constants = {
     /** Zulip has no per-channel bot permissions, so this list is the only authorisation for commands. */
     Commands: Object.values(zulipTeamStreams),
     TeamStreams: zulipTeamStreams,
+    /** A message using one of these emoji, by name, in a stream the bot can see is answered with the image. */
+    EmojiImages: {
+      'we-are-checking': 'https://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg',
+    } as Record<string, string>,
   },
   Mirror: {
     MaxFileBytes: 10 * 1024 * 1024,
