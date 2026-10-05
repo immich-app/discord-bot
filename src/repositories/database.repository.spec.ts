@@ -4,6 +4,7 @@ import { Database } from 'src/schema';
 import * as expanders from 'src/schema/migrations/1790263846796-ZulipExpanders';
 import * as groups from 'src/schema/migrations/1790852102345-ZulipExpanderGroups';
 import * as emotePadded from 'src/schema/migrations/1791227811814-ZulipEmotePadded';
+import * as recheckEmotes from 'src/schema/migrations/1791240072190-RecheckZulipEmotes';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -319,6 +320,28 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
           ).toEqual([
             { discordEmoteId: '1', padded: false },
             { discordEmoteId: '2', padded: true },
+          ]);
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+    });
+
+    it('should mark every recorded emote unpadded, and keep it so on rollback, so the next sync looks at each again', async () => {
+      await sut.addZulipEmote('1', 'widepeepohappy');
+      await sut.addZulipEmote('2', 'catjam');
+      const rolledBack = new Error('rolled back');
+
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await recheckEmotes.up(trx);
+          expect(await trx.selectFrom('zulip_emote').select('padded').execute()).toEqual([
+            { padded: false },
+            { padded: false },
+          ]);
+          await recheckEmotes.down(trx);
+          expect(await trx.selectFrom('zulip_emote').select('padded').execute()).toEqual([
+            { padded: false },
+            { padded: false },
           ]);
           throw rolledBack;
         }),

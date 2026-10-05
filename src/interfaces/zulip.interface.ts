@@ -34,7 +34,7 @@ export type ZulipMessageUpdate = {
   sendNotificationToNewThread?: boolean;
 };
 
-export type ZulipEmoji = { id: string; name: string; deactivated: boolean; authorId: number | null };
+export type ZulipEmoji = { id: string; name: string; deactivated: boolean };
 
 /** `unicode` is a built-in emoji name to its Unicode string, `names` a code point sequence (`1f44d`) to its name. */
 export type ZulipEmojiCodes = { unicode: Record<string, string>; names: Record<string, string> };
@@ -150,8 +150,6 @@ export interface IZulipInterface {
   createEmote(name: string, emoteUrl: string): Promise<void>;
   /** Re-uploads the emoji padded when the emote's image is not square, which Zulip cropped; `kept` when it is. */
   replaceCroppedEmote(name: string, emoteUrl: string): Promise<'kept' | 'replaced'>;
-  /** The user ID of the account that uploads emoji, the author of every emoji a sync made. */
-  getEmoteUploaderId(): Promise<number>;
   listEmoji(): Promise<ZulipEmoji[]>;
   getSubscriptions(): Promise<ZulipSubscription[]>;
   getOwnUser(): Promise<ZulipUser>;

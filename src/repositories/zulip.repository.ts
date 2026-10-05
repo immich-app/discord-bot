@@ -378,11 +378,10 @@ export class ZulipRepository implements IZulipInterface {
 
   async listEmoji(): Promise<ZulipEmoji[]> {
     const { data } = await this.bot.GET('/realm/emoji');
-    return Object.entries(data!.emoji ?? {}).map(([key, { id, name, deactivated, author_id }]) => ({
+    return Object.entries(data!.emoji ?? {}).map(([key, { id, name, deactivated }]) => ({
       id: id ?? key,
       name: name ?? '',
       deactivated: deactivated ?? false,
-      authorId: author_id ?? null,
     }));
   }
 
@@ -511,14 +510,6 @@ export class ZulipRepository implements IZulipInterface {
       );
     }
     return 'replaced' as const;
-  }
-
-  async getEmoteUploaderId() {
-    const { data } = await this.user.GET('/users/me');
-    if (data?.user_id === undefined) {
-      throw new Error('Zulip returned no user ID for the account that uploads emoji');
-    }
-    return data.user_id;
   }
 
   private async uploadEmote(user: ZulipClient, name: string, emoteUrl: string, contentType: string, data: EmoteData) {

@@ -336,7 +336,6 @@ const newZulipMock = (): Mocked<IZulipInterface> => {
     updateMessage: vitest.fn().mockResolvedValue(undefined),
     createEmote: vitest.fn(),
     replaceCroppedEmote: vitest.fn(),
-    getEmoteUploaderId: vitest.fn(),
     getSubscriptions: vitest.fn(),
     getOwnUser: vitest.fn(),
     getUser: vitest.fn(),
@@ -1448,9 +1447,9 @@ describe(MirrorService.name, () => {
         },
       ]);
       zulip.listEmoji.mockResolvedValue([
-        { id: '1', name: 'partyparrot', deactivated: false, authorId: null },
-        { id: '2', name: 'dance', deactivated: false, authorId: null },
-        { id: '3', name: 'fire2', deactivated: false, authorId: null },
+        { id: '1', name: 'partyparrot', deactivated: false },
+        { id: '2', name: 'dance', deactivated: false },
+        { id: '3', name: 'fire2', deactivated: false },
       ]);
 
       await fromZulip(
@@ -3042,7 +3041,7 @@ describe(MirrorService.name, () => {
           animated: false,
         },
       ]);
-      zulip.listEmoji.mockResolvedValue([{ id: '3', name: 'fire2', deactivated: false, authorId: null }]);
+      zulip.listEmoji.mockResolvedValue([{ id: '3', name: 'fire2', deactivated: false }]);
     });
 
     it('should write a Discord emote in a message as the realm emoji the emote sync made of it', async () => {
@@ -3215,8 +3214,8 @@ describe(MirrorService.name, () => {
 
         await reactOnZulip(70);
         zulip.listEmoji.mockResolvedValue([
-          { id: '3', name: 'fire2', deactivated: false, authorId: null },
-          { id: '4', name: 'unsynced', deactivated: false, authorId: null },
+          { id: '3', name: 'fire2', deactivated: false },
+          { id: '4', name: 'unsynced', deactivated: false },
         ]);
         await reactOnZulip(70);
         expect(discord.addMirrorReaction).not.toHaveBeenCalled();

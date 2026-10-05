@@ -165,7 +165,6 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   isInitialised: vitest.fn(),
   createEmote: vitest.fn(),
   replaceCroppedEmote: vitest.fn(),
-  getEmoteUploaderId: vitest.fn(),
   sendMessage: vitest.fn(),
   sendDirectMessage: vitest.fn(),
   getMessage: vitest.fn(),
@@ -753,50 +752,12 @@ describe('Bot test', () => {
         animated: false,
       };
 
-      const UPLOADER = 7;
-
       beforeEach(() => {
         discordMock.getEmotes.mockResolvedValue([wide]);
-        zulipMock.listEmoji.mockResolvedValue([
-          { id: '9', name: 'peepowidehappy', deactivated: false, authorId: UPLOADER },
-        ]);
-        zulipMock.getEmoteUploaderId.mockResolvedValue(UPLOADER);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '9', name: 'peepowidehappy', deactivated: false }]);
       });
 
-      it('should leave an emoji of that name someone else uploaded alone, and record the emote', async () => {
-        zulipMock.listEmoji.mockResolvedValue([{ id: '9', name: 'peepowidehappy', deactivated: false, authorId: 42 }]);
-
-        const report = await sut.syncEmotes('guild-1');
-
-        expect(zulipMock.replaceCroppedEmote).not.toHaveBeenCalled();
-        expect(databaseMock.addZulipEmote).toHaveBeenCalledExactlyOnceWith('1', 'peepowidehappy');
-        expect(report).toMatchObject({ replaced: [], alreadyOnZulip: ['peepoWideHappy'] });
-      });
-
-      it('should leave an emoji whose author Zulip does not name unrecorded, to look at again', async () => {
-        zulipMock.listEmoji.mockResolvedValue([
-          { id: '9', name: 'peepowidehappy', deactivated: false, authorId: null },
-        ]);
-
-        const report = await sut.syncEmotes('guild-1');
-
-        expect(zulipMock.replaceCroppedEmote).not.toHaveBeenCalled();
-        expect(databaseMock.addZulipEmote).not.toHaveBeenCalled();
-        expect(report).toMatchObject({ replaced: [], alreadyOnZulip: ['peepoWideHappy'] });
-      });
-
-      it('should replace nothing, and record nothing, when the uploading account cannot be read', async () => {
-        vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
-        zulipMock.getEmoteUploaderId.mockRejectedValue(new Error('Zulip is down'));
-
-        const report = await sut.syncEmotes('guild-1');
-
-        expect(zulipMock.replaceCroppedEmote).not.toHaveBeenCalled();
-        expect(databaseMock.addZulipEmote).not.toHaveBeenCalled();
-        expect(report).toMatchObject({ replaced: [], alreadyOnZulip: ['peepoWideHappy'] });
-      });
-
-      it('should replace an emote Zulip has but no sync checked, record it, and say so', async () => {
+      it('should replace an emote Zulip has but no sync checked, whoever uploaded it, record it, and say so', async () => {
         zulipMock.replaceCroppedEmote.mockResolvedValue('replaced');
 
         const report = await sut.syncEmotes('guild-1');
@@ -850,8 +811,8 @@ describe('Bot test', () => {
         };
         discordMock.getEmotes.mockResolvedValue([other, wide]);
         zulipMock.listEmoji.mockResolvedValue([
-          { id: '9', name: 'peepowidehappy', deactivated: false, authorId: UPLOADER },
-          { id: '10', name: 'peepowidehappy2', deactivated: false, authorId: UPLOADER },
+          { id: '9', name: 'peepowidehappy', deactivated: false },
+          { id: '10', name: 'peepowidehappy2', deactivated: false },
         ]);
         databaseMock.getZulipEmotes.mockResolvedValue([
           record('1', 'peepowidehappy', false),
@@ -1135,7 +1096,7 @@ describe('Bot test', () => {
 
       it('should count a realm emoji that already overrides a built-in name as that emote, uploading no suffixed copy', async () => {
         const { interaction, reply } = newInteraction();
-        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'fire', deactivated: false, authorId: null }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'fire', deactivated: false }]);
         discordMock.getEmotes.mockResolvedValue([emote('fire', 1), emote('Fire', 2), emote('tada', 3)]);
 
         await syncEmotes(interaction);
@@ -1151,7 +1112,7 @@ describe('Bot test', () => {
 
       it('should suffix an emote named like a built-in whose override is deactivated', async () => {
         const { interaction } = newInteraction();
-        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'fire', deactivated: true, authorId: null }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'fire', deactivated: true }]);
         discordMock.getEmotes.mockResolvedValue([emote('fire', 1)]);
 
         await syncEmotes(interaction);
@@ -1180,8 +1141,7 @@ describe('Bot test', () => {
         const { interaction } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('fire', 1)]);
         databaseMock.getZulipEmotes.mockResolvedValue([record('1', 'fire', true)]);
-        zulipMock.listEmoji.mockResolvedValue([{ id: '5', name: 'fire2', deactivated: false, authorId: 7 }]);
-        zulipMock.getEmoteUploaderId.mockResolvedValue(7);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '5', name: 'fire2', deactivated: false }]);
         zulipMock.replaceCroppedEmote.mockResolvedValue('kept');
 
         await syncEmotes(interaction);
@@ -1196,7 +1156,7 @@ describe('Bot test', () => {
       it('should skip an emote whose name is already on Zulip instead of uploading it again', async () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1), emote('pepeD', 2)]);
-        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'catjam', deactivated: false, authorId: null }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'catjam', deactivated: false }]);
 
         await syncEmotes(interaction);
 
@@ -1210,7 +1170,7 @@ describe('Bot test', () => {
       it('should treat a deactivated Zulip emoji as absent', async () => {
         const { interaction, reply } = newInteraction();
         discordMock.getEmotes.mockResolvedValue([emote('catJAM', 1)]);
-        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'catjam', deactivated: true, authorId: null }]);
+        zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'catjam', deactivated: true }]);
 
         await syncEmotes(interaction);
 
@@ -1242,7 +1202,6 @@ describe('Bot test', () => {
             id: String(index),
             name,
             deactivated: false,
-            authorId: null,
           })),
         );
         const { interaction, reply } = newInteraction();
