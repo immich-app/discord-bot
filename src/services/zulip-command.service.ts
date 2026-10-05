@@ -26,7 +26,7 @@ import {
   isPattern,
   sameRepository,
 } from 'src/services/zulip-expander.service';
-import { ZulipService, describeZulipStream, isBotSender } from 'src/services/zulip.service';
+import { ZulipService, isBotSender } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
 const SIMILAR_LOOKBACK = 10;
@@ -107,8 +107,11 @@ const describeError = (error: unknown) =>
 /** Zulip's empty topic is the one it shows as "general chat". */
 const describeTopic = (topic: string | null) => (topic ? `topic ${code(topic)}` : 'the general chat topic');
 
+/** Scheduled message names are unique across every stream and platform. */
+const SCHEDULED_MESSAGE_NAME_UNIQUE = 'scheduled_message_name_uq';
+
 const notScheduled = (name: string) =>
-  `There is no scheduled message ${code(name)} on Zulip; ${code('schedule-list')} lists them.`;
+  `There is no scheduled message ${code(name)} in this stream; ${code('schedule-list')} lists them.`;
 
 const isBoolean = (value: string | undefined) => value === undefined || /^(true|false)$/i.test(value);
 
@@ -136,10 +139,10 @@ type Command = {
   description: string;
   positionals: number;
   options: string[];
-  /** Taken in any stream, from organization administrators and owners only; what they alone can do, for the refusal. */
+  /** Taken from organization administrators and owners only; what they alone can do, for the refusal. */
   administrators?: string;
-  /** Taken in any stream, from anyone. */
-  anyStream?: boolean;
+  /** Taken in the team streams only: it acts on more than the stream it is given in. */
+  teamStreams?: boolean;
   run: (context: CommandContext) => Promise<string | undefined>;
 };
 
@@ -157,7 +160,6 @@ export class ZulipCommandService {
       description: 'this list',
       positionals: 0,
       options: [],
-      anyStream: true,
       run: ({ message }) => Promise.resolve(this.help(message.streamId)),
     },
     'emote-sync': {
@@ -165,6 +167,7 @@ export class ZulipCommandService {
       description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip, skipping a name Zulip already has`,
       positionals: 0,
       options: [],
+      teamStreams: true,
       run: (context) =>
         this.inBackground('emote-sync', context, {
           ack: `Syncing the emotes of ${EMOTE_SYNC_SERVER} to Zulip, this can take a few minutes…`,
@@ -180,6 +183,7 @@ export class ZulipCommandService {
         'create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
       positionals: 1,
       options: ['number'],
+      teamStreams: true,
       run: (context) => this.backfillPullRequests(context),
     },
     fourthwall: {
@@ -187,6 +191,7 @@ export class ZulipCommandService {
       description: 'fetch that Fourthwall order again and update its row in the database, or with `all` every order',
       positionals: 2,
       options: ['id'],
+      teamStreams: true,
       run: (context) => this.fourthwall(context),
     },
     'schedule-add': {
@@ -198,21 +203,21 @@ export class ZulipCommandService {
     },
     'schedule-list': {
       usage: 'schedule-list',
-      description: 'list every scheduled message on Zulip, with its schedule, stream, topic and the start of its text',
+      description: 'list the scheduled messages of this stream, with their schedule, topic and the start of their text',
       positionals: 0,
       options: [],
-      run: () => this.scheduleList(),
+      run: (context) => this.scheduleList(context),
     },
     'schedule-edit': {
       usage: 'schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]',
-      description: `change the schedule, text or topic of a scheduled message on Zulip, from its next post on; ${SUPPRESS_EMBEDS_IGNORED}`,
+      description: `change the schedule, text or topic of a scheduled message of this stream, from its next post on; ${SUPPRESS_EMBEDS_IGNORED}`,
       positionals: 1,
       options: ['name', 'cron', 'message', 'topic', 'suppress-embeds'],
       run: (context) => this.scheduleEdit(context),
     },
     'schedule-remove': {
       usage: 'schedule-remove <name>',
-      description: 'delete a scheduled message on Zulip, which stops it',
+      description: 'delete a scheduled message of this stream, which stops it',
       positionals: 1,
       options: ['name'],
       run: (context) => this.scheduleRemove(context),
@@ -278,7 +283,6 @@ export class ZulipCommandService {
       description: `turn GitHub expansion (${GITHUB_EXPANSION}) on or off in this stream for a group of repositories (\`off\` alone turns off every group), choose which of its repositories \`#1234\` goes to here, or \`list\` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream`,
       positionals: 2,
       options: [],
-      anyStream: true,
       run: (context) => this.expanders(context),
     },
     'expander-group': {
@@ -287,7 +291,6 @@ export class ZulipCommandService {
       description: `create a group of repositories (${REPOSITORY_FORMS}, or their URLs) for \`expanders on\`, the first one it names itself, not a pattern's, its default for \`#1234\`; add or remove repositories; with \`threshold\`, have a bare \`#1234\` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; \`info\` shows one group's repositories and streams, \`list\` every group`,
       positionals: Number.POSITIVE_INFINITY,
       options: [],
-      anyStream: true,
       run: (context) => this.expanderGroup(context),
     },
     'discord-unlink': {
@@ -351,12 +354,11 @@ export class ZulipCommandService {
       return;
     }
     // A mention alone is `help`.
-    const command = parsed.status === 'ok' ? this.commands[parsed.command.name || 'help'] : undefined;
-    const anyStream = command?.administrators || command?.anyStream;
-    if (!anyStream && !Constants.Zulip.Commands.includes(streamId)) {
-      return;
-    }
-    const reply = await this.answer({ ...message, streamId }, parsed);
+    const name = parsed.status === 'ok' ? parsed.command.name || 'help' : undefined;
+    const reply =
+      name && this.commands[name]?.teamStreams && !Constants.Zulip.Commands.includes(streamId)
+        ? `${code(name)} is taken in the Immich team streams only.`
+        : await this.answer({ ...message, streamId }, parsed);
     if (reply === undefined) {
       return;
     }
@@ -487,20 +489,20 @@ export class ZulipCommandService {
   private help(streamId: number) {
     const teamStream = Constants.Zulip.Commands.includes(streamId);
     const lines = Object.values(this.commands)
-      .filter(({ administrators, anyStream }) => teamStream || administrators || anyStream)
+      .filter(({ teamStreams }) => teamStream || !teamStreams)
       .map(
-        ({ usage, description, administrators, anyStream }) =>
-          `- ${code(usage)}${administrators ? ' (administrators)' : anyStream ? ' (any stream)' : ''}: ${description}`,
+        ({ usage, description, administrators, teamStreams }) =>
+          `- ${code(usage)}${administrators ? ' (administrators)' : teamStreams ? ' (team streams)' : ''}: ${description}`,
       );
     return [
       teamStream
-        ? 'Mention me at the start of a message in a team stream, then one of:'
-        : `Mention me at the start of a message, then one of the commands taken in this stream (the others are taken in the team streams only, where ${code('help')} lists every one):`,
+        ? 'Mention me at the start of a message, then one of:'
+        : `Mention me at the start of a message, then one of these (the commands the Immich team streams alone take are left out; ${code('help')} there lists every one):`,
       ...lines,
       // The blank line ends the list: without it, Markdown reads the next line as the last item's continuation.
       '',
       `Arguments are positional or ${code('key=value')}; quote a value with spaces (${code('text="two words"')}). Every reply is posted here, in the topic.`,
-      `The commands marked (administrators) are taken in any stream, from organization administrators and owners only, and the ones marked (any stream) in any stream from anyone. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
+      `The commands marked (administrators) are taken from organization administrators and owners only, and the ones marked (team streams) in the Immich team streams only. Scheduled messages, RSS feeds and \`expanders\` act on this stream alone, while expander groups are shared by every stream. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
     ].join('\n');
   }
 
@@ -617,49 +619,64 @@ export class ZulipCommandService {
     if (!name || !cron || !text || !isBoolean(options['suppress-embeds'])) {
       return this.usage('schedule-add');
     }
-    await this.scheduledMessageService.createScheduledMessage({
-      name,
-      cronExpression: cron,
-      message: text,
-      channelId: String(message.streamId),
-      topic,
-      createdBy: String(message.senderId),
-      service: 'zulip',
-    });
+    try {
+      await this.scheduledMessageService.createScheduledMessage({
+        name,
+        cronExpression: cron,
+        message: text,
+        channelId: String(message.streamId),
+        topic,
+        createdBy: String(message.senderId),
+        service: 'zulip',
+      });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes(SCHEDULED_MESSAGE_NAME_UNIQUE)) {
+        throw error;
+      }
+      const here = await this.scheduledMessageService.listScheduledMessages('zulip', {
+        channelId: String(message.streamId),
+      });
+      return here.some((scheduled) => scheduled.name === name)
+        ? `There is already a scheduled message named ${code(name)} in this stream; ${code(`schedule-edit ${name}`)} changes it.`
+        : `There is already a scheduled message named ${code(name)}, in another stream or on Discord: every stream and Discord share the names, so pick another.`;
+    }
     return `Scheduled message ${code(name)} created with cron ${code(cron)}, posting in ${describeTopic(topic)} of this stream.${ignoredSuppressEmbeds(options)}`;
   }
 
-  private async scheduleList() {
-    const messages = await this.scheduledMessageService.listScheduledMessages('zulip');
+  private async scheduleList({ message }: CommandContext) {
+    const messages = await this.scheduledMessageService.listScheduledMessages('zulip', {
+      channelId: String(message.streamId),
+    });
     if (messages.length === 0) {
-      return 'There are no scheduled messages on Zulip.';
+      return 'There are no scheduled messages in this stream.';
     }
     return [
-      'Scheduled messages on Zulip:',
+      'Scheduled messages of this stream:',
       ...messages.map(
-        ({ name, cronExpression, channelId, topic, message }) =>
-          `- ${code(name)}: ${code(cronExpression)} in stream ${describeZulipStream(Number(channelId))}, ${describeTopic(topic)}: ${code(shorten(message.replaceAll(/\s+/g, ' ').trim(), SCHEDULE_ECHO_LENGTH))}`,
+        ({ name, cronExpression, topic, message: text }) =>
+          `- ${code(name)}: ${code(cronExpression)} in ${describeTopic(topic)}: ${code(shorten(text.replaceAll(/\s+/g, ' ').trim(), SCHEDULE_ECHO_LENGTH))}`,
       ),
     ].join('\n');
   }
 
   private async scheduleEdit(context: CommandContext) {
-    const { options } = context;
+    const { message, options } = context;
     const name = this.oneArgument(context, 'name');
     const { cron, message: text, topic } = options;
     const changed = cron !== undefined || text !== undefined || topic !== undefined;
     if (!name || !changed || cron === '' || text === '' || !isBoolean(options['suppress-embeds'])) {
       return this.usage('schedule-edit');
     }
-    const updated = await this.scheduledMessageService.updateScheduledMessage(name, 'zulip', {
-      cronExpression: cron,
-      message: text,
-      topic,
-    });
+    const updated = await this.scheduledMessageService.updateScheduledMessage(
+      name,
+      'zulip',
+      { cronExpression: cron, message: text, topic },
+      { channelId: String(message.streamId) },
+    );
     if (!updated) {
       return notScheduled(name);
     }
-    return `Updated scheduled message ${code(name)}: it posts with cron ${code(updated.cronExpression)} in ${describeTopic(updated.topic)} of stream ${describeZulipStream(Number(updated.channelId))}.${ignoredSuppressEmbeds(options)}`;
+    return `Updated scheduled message ${code(name)}: it posts with cron ${code(updated.cronExpression)} in ${describeTopic(updated.topic)} of this stream.${ignoredSuppressEmbeds(options)}`;
   }
 
   private async scheduleRemove(context: CommandContext) {
@@ -667,7 +684,9 @@ export class ZulipCommandService {
     if (!name) {
       return this.usage('schedule-remove');
     }
-    const removed = await this.scheduledMessageService.deleteScheduledMessage(name, 'zulip');
+    const removed = await this.scheduledMessageService.deleteScheduledMessage(name, 'zulip', {
+      channelId: String(context.message.streamId),
+    });
     return removed ? `Removed scheduled message ${code(name)}.` : notScheduled(name);
   }
 
