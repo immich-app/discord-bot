@@ -1794,7 +1794,7 @@ describe(WebhookService.name, () => {
 
       await sut.onGithub(workflowRunEvent('failure'), 'github-slug');
 
-      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(sent()).toEqual({ discord: [], zulip: [] });
       expect(error).not.toHaveBeenCalled();
     });
 
