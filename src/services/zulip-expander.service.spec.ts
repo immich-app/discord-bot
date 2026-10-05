@@ -1,5 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
+import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
 import {
   ExpanderGroupEmptyError,
@@ -116,6 +118,8 @@ describe(ZulipExpanderService.name, () => {
   let tables: Tables;
   let database: ReturnType<typeof fakeDatabase>;
   let sut: ZulipExpanderService;
+  let github: { getOwnerRepositories: ReturnType<typeof vitest.fn> };
+  let gitlab: { getGroupProjects: ReturnType<typeof vitest.fn> };
 
   beforeEach(async () => {
     tables = {
@@ -128,12 +132,21 @@ describe(ZulipExpanderService.name, () => {
       defaults: [],
     };
     database = fakeDatabase(tables);
-    sut = new ZulipExpanderService(database as unknown as IDatabaseRepository);
+    github = { getOwnerRepositories: vitest.fn() };
+    gitlab = { getGroupProjects: vitest.fn() };
+    sut = newSut();
     await sut.init();
   });
 
+  const newSut = () =>
+    new ZulipExpanderService(
+      database as unknown as IDatabaseRepository,
+      github as unknown as IGithubInterface,
+      gitlab as unknown as IGitlabInterface,
+    );
+
   it('should know nothing before init', () => {
-    const fresh = new ZulipExpanderService(database as unknown as IDatabaseRepository);
+    const fresh = newSut();
 
     expect(fresh.list()).toEqual([]);
     expect(fresh.getGroups()).toEqual([]);
@@ -343,5 +356,109 @@ describe(ZulipExpanderService.name, () => {
       'Could not read the Zulip expanders back, so the change is cached as the write reported it',
       expect.any(Error),
     );
+  });
+
+  describe('patterns', () => {
+    const IMMICH_APP = ['immich-app/immich', 'immich-app/static-pages', 'immich-app/devtools'];
+
+    const withPatterns = async () => {
+      tables.groups.push(
+        group('everything', ['immich-app/*', 'gitlab.futo.org/videostreaming/*', 'futo-org/fhs-core'], 20),
+        group('only', ['immich-app/*']),
+      );
+      tables.streams.push(stream(130, 'everything'), stream(140, 'only'));
+      github.getOwnerRepositories.mockResolvedValue({ owner: 'immich-app', repositories: IMMICH_APP });
+      gitlab.getGroupProjects.mockResolvedValue({
+        path: 'videostreaming',
+        projects: ['videostreaming/grayjay', 'videostreaming/plugins/kick'],
+      });
+      sut = newSut();
+      await sut.init();
+      await vitest.waitFor(() => expect(sut.getPatternRepositories('gitlab.futo.org/videostreaming/*')).toBeDefined());
+    };
+
+    it('should read every pattern at init, in the background', async () => {
+      await withPatterns();
+
+      expect(github.getOwnerRepositories).toHaveBeenCalledExactlyOnceWith('immich-app');
+      expect(gitlab.getGroupProjects).toHaveBeenCalledExactlyOnceWith('videostreaming');
+      expect(sut.getPatternRepositories('IMMICH-APP/*')).toEqual(IMMICH_APP);
+    });
+
+    it('should not read a group that names repositories only', async () => {
+      await sut.refreshPatterns();
+
+      expect(github.getOwnerRepositories).not.toHaveBeenCalled();
+      expect(gitlab.getGroupProjects).not.toHaveBeenCalled();
+    });
+
+    it('should expand a group, without duplicates, its default the first repository it names itself', async () => {
+      await withPatterns();
+      const everything = sut.getGroup('everything')!;
+
+      expect(sut.getRepositories(everything)).toEqual([
+        ...IMMICH_APP,
+        'gitlab.futo.org/videostreaming/grayjay',
+        'gitlab.futo.org/videostreaming/plugins/kick',
+        'futo-org/fhs-core',
+      ]);
+      expect(sut.getGroupDefault(everything)).toBe('futo-org/fhs-core');
+      expect(sut.getScope(130)).toMatchObject({ defaultRepository: 'futo-org/fhs-core' });
+      expect(sut.getScope(130)?.threshold('immich-app/devtools')).toBe(20);
+    });
+
+    it('should give a stream of patterns only no default, unless it chose one', async () => {
+      await withPatterns();
+
+      expect(sut.getScope(140)).toMatchObject({ repositories: IMMICH_APP, defaultRepository: undefined });
+
+      await sut.setDefault(140, 'Immich-App/Immich', 'Alice');
+      expect(sut.getScope(140)?.defaultRepository).toBe('immich-app/immich');
+    });
+
+    it('should read a pattern as GitHub or GitLab spells it, or not at all when there is no such owner', async () => {
+      github.getOwnerRepositories.mockResolvedValueOnce({ owner: 'immich-app', repositories: IMMICH_APP });
+      gitlab.getGroupProjects.mockResolvedValueOnce({
+        path: 'VideoStreaming/Plugins',
+        projects: ['VideoStreaming/Plugins/kick'],
+      });
+
+      expect(await sut.readPattern('IMMICH-APP/*')).toEqual({ entry: 'immich-app/*', repositories: IMMICH_APP });
+      expect(await sut.readPattern('gitlab.futo.org/videostreaming/plugins/*')).toEqual({
+        entry: 'gitlab.futo.org/VideoStreaming/Plugins/*',
+        repositories: ['gitlab.futo.org/VideoStreaming/Plugins/kick'],
+      });
+      expect(gitlab.getGroupProjects).toHaveBeenCalledWith('videostreaming/plugins');
+      expect(await sut.readPattern('nobody/*')).toBeUndefined();
+      expect(sut.getPatternRepositories('nobody/*')).toBeUndefined();
+    });
+
+    it('should keep what a pattern had when it cannot be read again, and say why', async () => {
+      await withPatterns();
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      github.getOwnerRepositories.mockRejectedValueOnce(new Error('rate limited'));
+      gitlab.getGroupProjects.mockResolvedValueOnce(undefined);
+
+      await sut.refreshPatterns();
+
+      expect(sut.getPatternRepositories('immich-app/*')).toEqual(IMMICH_APP);
+      expect(sut.getPatternRepositories('gitlab.futo.org/videostreaming/*')).toHaveLength(2);
+      expect(warn).toHaveBeenCalledWith('Could not read the repositories of immich-app/*', expect.any(Error));
+      expect(warn).toHaveBeenCalledWith(
+        'gitlab.futo.org/videostreaming/* has no repository I can see, so its expander groups keep what they had',
+      );
+    });
+
+    it('should pick up a repository the owner added since', async () => {
+      await withPatterns();
+      github.getOwnerRepositories.mockResolvedValueOnce({
+        owner: 'immich-app',
+        repositories: [...IMMICH_APP, 'immich-app/new-thing'],
+      });
+
+      await sut.refreshPatterns();
+
+      expect(sut.getScope(140)?.repositories).toContain('immich-app/new-thing');
+    });
   });
 });

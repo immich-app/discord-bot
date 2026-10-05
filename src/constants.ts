@@ -246,6 +246,7 @@ export const Constants = {
     WeeklyReport: '0 12 * * 4',
     MonthlyReport: '0 12 19 * *',
     HolidayInfo: '0 22 * * *',
+    ExpanderPatterns: '23 * * * *',
   },
   Outline: {
     Collections: outlineCollections,

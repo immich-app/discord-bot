@@ -8,6 +8,11 @@ const TIMEOUT_MS = 10_000;
 /** A file is read for at most a 20-line snippet, so a larger one is not worth holding in memory. */
 const MAX_FILE_BYTES = 1_000_000;
 
+const GROUP_PAGE_SIZE = 100;
+
+/** A group with more than this many pages of projects is read only that far. */
+const MAX_GROUP_PAGES = 20;
+
 /** GitLab answers 404 for what a token cannot see, and 401 or 403 for what needs one. */
 const NOT_VISIBLE = new Set([401, 403, 404]);
 
@@ -52,6 +57,27 @@ export class GitlabRepository implements IGitlabInterface {
   async getProjectPath(path: string) {
     const project = await this.request<{ path_with_namespace: string }>(`/projects/${encodeURIComponent(path)}`);
     return project?.path_with_namespace;
+  }
+
+  async getGroupProjects(path: string) {
+    const group = await this.request<{ id: number; full_path: string }>(`/groups/${encodeURIComponent(path)}`);
+    if (!group) {
+      return;
+    }
+    const projects: string[] = [];
+    for (let page = 1; page <= MAX_GROUP_PAGES; page++) {
+      const batch = await this.request<{ path_with_namespace: string }[]>(
+        `/groups/${group.id}/projects?include_subgroups=true&simple=true&order_by=path&sort=asc&per_page=${GROUP_PAGE_SIZE}&page=${page}`,
+      );
+      if (!batch) {
+        throw new Error(`GitLab did not show page ${page} of the projects of group ${group.full_path}`);
+      }
+      projects.push(...batch.map(({ path_with_namespace }) => path_with_namespace));
+      if (batch.length < GROUP_PAGE_SIZE) {
+        break;
+      }
+    }
+    return { path: group.full_path, projects };
   }
 
   async getItem(path: string, kind: GitlabItemKind, iid: number): Promise<GitlabItem | undefined> {

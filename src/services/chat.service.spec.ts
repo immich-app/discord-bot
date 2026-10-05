@@ -60,6 +60,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   getPullRequests: vitest.fn(),
   getPullRequest: vitest.fn(),
   getRepositoryName: vitest.fn(),
+  getOwnerRepositories: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -207,6 +208,7 @@ const newGitlabMockRepository = (): Mocked<IGitlabInterface> => ({
   getProjectPath: vitest.fn(),
   getItem: vitest.fn().mockResolvedValue(undefined),
   getFileContent: vitest.fn().mockResolvedValue(undefined),
+  getGroupProjects: vitest.fn(),
 });
 
 const newLoopDedupeMockRepository = (): Mocked<ILoopDedupeInterface> => ({
@@ -240,7 +242,7 @@ describe('Bot test', () => {
     mattermostMock = newMattermostMockRepository();
     zulipMock = newZulipMockRepository();
     zulipServiceMock = newZulipServiceMock();
-    zulipExpanders = new ZulipExpanderService(databaseMock);
+    zulipExpanders = new ZulipExpanderService(databaseMock, githubMock, gitlabMock);
     // 7TV and BTTV lookups go through the global fetch.
     fetchMock = vitest.fn();
     vitest.stubGlobal('fetch', fetchMock);
@@ -2383,6 +2385,54 @@ describe('Bot test', () => {
 
       expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-core', 7, true);
       expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+    });
+
+    describe('patterns', () => {
+      const ORGS = expanderGroup('orgs', ['immich-app/*']);
+
+      beforeEach(async () => {
+        githubMock.getOwnerRepositories.mockResolvedValue({
+          owner: 'immich-app',
+          repositories: ['immich-app/immich', 'immich-app/static-pages'],
+        });
+        await setUp({ groups: [ORGS], streamGroups: ['orgs'] });
+        await zulipExpanders.refreshPatterns();
+      });
+
+      it('should resolve name#N to a repository a pattern stands for', async () => {
+        await send('static-pages#12');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'static-pages',
+          12,
+          undefined,
+          true,
+        );
+      });
+
+      it('should leave a name#N no repository has, and a bare #N with no recent pull request, without a default', async () => {
+        await send('elsewhere#12 #4321');
+
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+      });
+
+      it('should still send a bare #N to a recent pull request of a repository a pattern stands for', async () => {
+        databaseMock.getPullRequestsByNumber.mockResolvedValue([
+          pullRequest('immich-app', 'static-pages', 4321, weeksAgo(0)),
+        ]);
+
+        await send('#4321');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'static-pages',
+          4321,
+          undefined,
+          true,
+        );
+      });
     });
 
     describe('GitLab', () => {
