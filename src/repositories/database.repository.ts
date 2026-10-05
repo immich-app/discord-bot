@@ -40,6 +40,7 @@ import {
   UpdateRSSFeed,
   UpdateScheduledMessage,
   UpdateZulipExpanderGroup,
+  ZulipEmote,
   ZulipExpander,
   ZulipExpanderDefault,
   ZulipExpanderGroup,
@@ -638,16 +639,15 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
-  async getZulipEmoteIds(): Promise<string[]> {
-    const rows = await this.db.selectFrom('zulip_emote').select('discordEmoteId').execute();
-    return rows.map(({ discordEmoteId }) => discordEmoteId);
+  getZulipEmotes(): Promise<ZulipEmote[]> {
+    return this.db.selectFrom('zulip_emote').selectAll().execute();
   }
 
   async addZulipEmote(discordEmoteId: string, zulipName: string): Promise<void> {
     await this.db
       .insertInto('zulip_emote')
       .values({ discordEmoteId, zulipName })
-      .onConflict((oc) => oc.column('discordEmoteId').doNothing())
+      .onConflict((oc) => oc.column('discordEmoteId').doUpdateSet({ zulipName, padded: true }))
       .execute();
   }
 }
