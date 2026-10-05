@@ -227,13 +227,7 @@ export class GithubRepository implements IGithubInterface {
 
   async getLatestReleaseTag(org: string, repo: string) {
     const { repository } = await this.octokit.graphql<{
-      repository: {
-        latestRelease: {
-          tagCommit: {
-            oid: string;
-          };
-        };
-      };
+      repository: { latestRelease: { tagCommit: { oid: string } | null } | null };
     }>(
       `
       query getLatestRelease($org: String!, $repo: String!) {
@@ -248,7 +242,11 @@ export class GithubRepository implements IGithubInterface {
       `,
       { org, repo },
     );
-    return repository.latestRelease.tagCommit.oid;
+    const { latestRelease } = repository;
+    if (latestRelease && !latestRelease.tagCommit) {
+      this.logger.warn(`The latest release of ${org}/${repo} is tagged on no commit`);
+    }
+    return latestRelease?.tagCommit?.oid;
   }
 
   async isCollaborator({ org, repo, userLogin }: { org: string; repo: string; userLogin: string }) {

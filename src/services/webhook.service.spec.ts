@@ -3077,6 +3077,17 @@ describe(WebhookService.name, () => {
       expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
     });
 
+    it('should ignore a failure in a repository without a release, without logging an error', async () => {
+      const error = vitest.spyOn(Logger.prototype, 'error');
+      githubMock.getCheckSuiteTriggerCommit.mockResolvedValue('abc123');
+      githubMock.getLatestReleaseTag.mockResolvedValue(undefined);
+
+      await sut.onGithub(workflowRunEvent('failure'), 'github-slug');
+
+      expect(sent()).toEqual({ discord: [], mattermost: [], zulip: [] });
+      expect(error).not.toHaveBeenCalled();
+    });
+
     it('should ignore successful workflow runs', async () => {
       await sut.onGithub(workflowRunEvent('success'), 'github-slug');
 
