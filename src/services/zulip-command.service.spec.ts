@@ -319,7 +319,7 @@ const HELP = [
   '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
   '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
   '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on <group>|off [group]|default <repository>|list>`: turn GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) on or off in this stream for a group of repositories (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream',
+  '- `expanders <on <group>|off [group]|default <repository>|list>`: turn a group of repositories on or off in this stream for a bare `#1234` and `name#1234` to look among (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams with groups; GitHub and gitlab.futo.org issue, pull request, merge request and discussion links, file permalinks and `owner/name#1234` expand in every subscribed stream, with or without a group, and x.com links are mirrored on nitter.net',
   "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list`: create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date, or their URLs) for `expanders on`, the first one it names itself, not a pattern's, its default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
   '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
   '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
@@ -2051,8 +2051,7 @@ describe('ZulipCommandService', () => {
     const NOT_SUBSCRIBED =
       '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
     const NOT_SUBSCRIBED_MARK = ' (⚠ I am not subscribed, so nothing reaches me there)';
-    const HEADER =
-      'GitHub expansion (issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code) is on in:';
+    const HEADER = 'Groups are on in:';
     const USAGE = 'Usage: `expanders <on <group>|off [group]|default <repository>|list>`';
     const NO_GROUP = (name: string) => `There is no expander group \`${name}\`; the groups are \`fhs\`, \`immich\`.`;
     const GITHUB: Record<string, string> = {
@@ -2113,7 +2112,7 @@ describe('ZulipCommandService', () => {
             stream: 120,
             topic: 'setup',
             content:
-              'Turned on GitHub expansion of the group `immich` (`immich-app/immich`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+              'Turned on the group `immich` (`immich-app/immich`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
           },
         ]);
         expect(database.expanders).toEqual([
@@ -2127,7 +2126,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders on FHS');
 
         expect(contents()).toEqual([
-          'Turned on GitHub expansion of the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
         ]);
         expect(stored()).toEqual(['107:fhs', '107:immich']);
         expect(zulipExpanders.getStreamGroups(107)).toEqual(['immich', 'fhs']);
@@ -2167,9 +2166,9 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders off', { streamId: 130 });
 
         expect(contents()).toEqual([
-          `Turned on GitHub expansion of the group \`immich\` (\`immich-app/immich\`) in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
+          `Turned on the group \`immich\` (\`immich-app/immich\`) in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
           `Nothing changed: the group \`immich\` was already on in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
-          'Turned off GitHub expansion in this stream (group `immich`).',
+          'Turned off every group in this stream (`immich`): links still expand here, a bare `#1234` no longer does.',
         ]);
         expect(zulipMock.getSubscriptions).toHaveBeenCalledTimes(2);
       });
@@ -2201,8 +2200,8 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders off');
 
         expect(contents().slice(1)).toEqual([
-          'Turned off GitHub expansion in this stream (groups `immich`, `fhs`).',
-          'Nothing changed: GitHub expansion was already off in this stream.',
+          'Turned off every group in this stream (`immich`, `fhs`): links still expand here, a bare `#1234` no longer does.',
+          'Nothing changed: no group was on in this stream.',
         ]);
         expect(stored()).toEqual([]);
         expect(zulipExpanders.isEnabled(107)).toBe(false);
@@ -2214,8 +2213,8 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders off fhs');
 
         expect(contents().slice(1)).toEqual([
-          'Turned off GitHub expansion of the group `immich` in this stream.',
-          'Turned off GitHub expansion in this stream (group `fhs`).',
+          'Turned off the group `immich` in this stream.',
+          'Turned off every group in this stream (`fhs`): links still expand here, a bare `#1234` no longer does.',
         ]);
         expect(stored()).toEqual([]);
       });
@@ -2246,12 +2245,10 @@ describe('ZulipCommandService', () => {
     });
 
     describe('default', () => {
-      it('should refuse a stream GitHub expansion is off in', async () => {
+      it('should refuse a stream with no group on', async () => {
         await send('@**Immich** expanders default immich-app/immich', { streamId: 120 });
 
-        expect(contents()).toEqual([
-          'GitHub expansion is off in this stream; turn it on with `expanders on <group>` first.',
-        ]);
+        expect(contents()).toEqual(['No group is on in this stream; turn one on with `expanders on <group>` first.']);
         expect(database.defaults).toEqual([]);
       });
 
@@ -2315,11 +2312,11 @@ describe('ZulipCommandService', () => {
     });
 
     describe('list', () => {
-      it('should say when GitHub expansion is on in no stream, and point to the groups', async () => {
+      it('should say when no group is on in any stream, and point to the groups', async () => {
         await send('@**Immich** expanders off');
         await send('@**Immich** expanders list');
 
-        expect(contents()[1]).toBe('GitHub expansion is on in no stream; `expander-group list` lists the groups.');
+        expect(contents()[1]).toBe('No group is on in any stream; `expander-group list` lists the groups.');
         expect(zulipMock.getStream).not.toHaveBeenCalled();
       });
 
@@ -2789,7 +2786,7 @@ describe('ZulipCommandService', () => {
 
           expect(contents()[2]).toBe(
             [
-              'Turned on GitHub expansion of the group `orgs` (`immich-app/*`) in this stream.',
+              'Turned on the group `orgs` (`immich-app/*`) in this stream.',
               'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.',
             ].join('\n'),
           );

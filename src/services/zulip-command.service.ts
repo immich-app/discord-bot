@@ -44,9 +44,6 @@ const ZULIP_ADMINISTRATOR_ROLE = 200;
 
 const MIRROR = 'change or list the Discord-Zulip mirror';
 
-const GITHUB_EXPANSION =
-  'issue, pull request, merge request and discussion links on GitHub and gitlab.futo.org and `#1234` to their titles, file permalinks to code';
-
 const EXPANDER_GROUP_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 /** `threshold` is a Postgres integer. */
@@ -280,7 +277,7 @@ export class ZulipCommandService {
     },
     expanders: {
       usage: 'expanders <on <group>|off [group]|default <repository>|list>',
-      description: `turn GitHub expansion (${GITHUB_EXPANSION}) on or off in this stream for a group of repositories (\`off\` alone turns off every group), choose which of its repositories \`#1234\` goes to here, or \`list\` the streams it is on in and their groups; x.com links are mirrored on nitter.net in every stream`,
+      description: `turn a group of repositories on or off in this stream for a bare \`#1234\` and \`name#1234\` to look among (\`off\` alone turns off every group), choose which of its repositories \`#1234\` goes to here, or \`list\` the streams with groups; GitHub and gitlab.futo.org issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and x.com links are mirrored on nitter.net`,
       positionals: 2,
       options: [],
       run: (context) => this.expanders(context),
@@ -763,7 +760,7 @@ export class ZulipCommandService {
     const added = await this.zulipExpanders.enable(streamId, name, describeZulipSender(message));
     const scope = this.zulipExpanders.getScope(streamId);
     const reply = added
-      ? `Turned on GitHub expansion of the group ${code(name)} (${group.repositories.map((repository) => code(repository)).join(', ')}) in this stream.`
+      ? `Turned on the group ${code(name)} (${group.repositories.map((repository) => code(repository)).join(', ')}) in this stream.`
       : `Nothing changed: the group ${code(name)} was already on in this stream.`;
     const lines = [reply];
     if (scope?.defaultRepository) {
@@ -781,19 +778,19 @@ export class ZulipCommandService {
     const removed = await this.zulipExpanders.disable(streamId, name);
     if (removed.length === 0) {
       return name === undefined
-        ? 'Nothing changed: GitHub expansion was already off in this stream.'
+        ? 'Nothing changed: no group was on in this stream.'
         : `Nothing changed: the group ${code(name)} was not on in this stream.`;
     }
     const groups = removed.map((group) => code(group)).join(', ');
     return this.zulipExpanders.isEnabled(streamId)
-      ? `Turned off GitHub expansion of the group ${groups} in this stream.`
-      : `Turned off GitHub expansion in this stream (${removed.length === 1 ? 'group' : 'groups'} ${groups}).`;
+      ? `Turned off the group ${groups} in this stream.`
+      : `Turned off every group in this stream (${groups}): links still expand here, a bare ${code('#1234')} no longer does.`;
   }
 
   private async expandersDefault(message: StreamMessage, given: string) {
     const scope = this.zulipExpanders.getScope(message.streamId);
     if (!scope) {
-      return `GitHub expansion is off in this stream; turn it on with ${code('expanders on <group>')} first.`;
+      return `No group is on in this stream; turn one on with ${code('expanders on <group>')} first.`;
     }
     const repository = findRepository(scope.repositories, toRepositoryName(given));
     if (!repository) {
@@ -806,11 +803,11 @@ export class ZulipCommandService {
   private async expanderList() {
     const streams = this.zulipExpanders.list();
     if (streams.length === 0) {
-      return `GitHub expansion is on in no stream; ${code('expander-group list')} lists the groups.`;
+      return `No group is on in any stream; ${code('expander-group list')} lists the groups.`;
     }
     const labels = await this.describeStreams(streams);
     return [
-      `GitHub expansion (${GITHUB_EXPANSION}) is on in:`,
+      'Groups are on in:',
       ...streams.map((streamId, index) => {
         const groupNames = this.zulipExpanders
           .getStreamGroups(streamId)
