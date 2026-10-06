@@ -246,6 +246,13 @@ export class WebhookService {
       throw new UnauthorizedException();
     }
 
+    // Every destination and record below is Immich's, so another organization's events wait for destinations of their own.
+    const repository = 'repository' in event.payload ? event.payload.repository : undefined;
+    if (repository?.owner?.login !== GithubOrg.ImmichApp) {
+      this.logger.debug(`Ignoring GitHub ${event.name} event from ${repository?.full_name ?? 'no repository'}`);
+      return;
+    }
+
     switch (event.name) {
       case 'pull_request':
       case 'pull_request_review':
@@ -613,12 +620,10 @@ export class WebhookService {
         ),
       });
 
-      if (repository.owner.login === GithubOrg.ImmichApp) {
-        if (!repository.private) {
-          await this.notifications.notify('community.pull-requests', notification);
-        }
-        await this.notifications.notify('team.pull-requests', notification);
+      if (!repository.private) {
+        await this.notifications.notify('community.pull-requests', notification);
       }
+      await this.notifications.notify('team.pull-requests', notification);
     }
   }
 
@@ -682,11 +687,6 @@ export class WebhookService {
       url: release.html_url,
       body: description,
     };
-
-    // FHS releases stay out of the Immich destinations.
-    if (repository.owner.login === GithubOrg.FUTO && repository.name === GithubRepo.FHSCore) {
-      return;
-    }
 
     const messages: Promise<unknown>[] = [
       ...(repository.private ? [] : [this.notifications.notify('community.releases', notification)]),
