@@ -202,6 +202,11 @@ export const Constants = {
   Icons: icons,
   /** The one GitLab instance expanders and groups know; a project is named `<host>/<namespace>/<project>`. */
   Gitlab: { Host: 'gitlab.futo.org' },
+  /**
+   * The accounts whose GitHub App installation the bot reads with, lowercased. The app must be public for them to
+   * install it, which lets any account install it, so an installation anywhere else is ignored.
+   */
+  Github: { InstallationOwners: new Set(['immich-app', 'futo-org']) },
   Discord: {
     Roles: discordRoles,
     Channels: discordChannels,

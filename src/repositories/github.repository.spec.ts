@@ -82,8 +82,6 @@ describe(GithubRepository.name, () => {
       Promise.resolve([
         { id: CONFIGURED, account: { login: 'immich-app' } },
         { id: futo, account: { login: 'futo-org' } },
-        { id: 3, account: { slug: 'an-enterprise' } },
-        { id: 4, account: null },
       ]);
 
     afterEach(() => {
@@ -100,6 +98,54 @@ describe(GithubRepository.name, () => {
         repo: 'fhs-core',
       });
       expect(configured.graphql).not.toHaveBeenCalled();
+    });
+
+    it('should ignore an installation on an account outside the allowed owners, and say so once', async () => {
+      vitest.useFakeTimers();
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const { app, configured } = install(
+        Promise.resolve([
+          { id: CONFIGURED, account: { login: 'immich-app' } },
+          { id: 6, account: { login: 'Someone-Else' } },
+          { id: 7, account: { slug: 'an-enterprise' } },
+          { id: 8, account: null },
+        ]),
+      );
+      await sut.getStarCount('someone-else', 'private-thing');
+      vitest.advanceTimersByTime(10 * 60 * 1000);
+      await sut.getStarCount('someone-else', 'private-thing');
+
+      expect(app.octokit.paginate).toHaveBeenCalledTimes(2);
+      expect(configured.graphql).toHaveBeenCalledTimes(2);
+      expect(app.getInstallationOctokit).not.toHaveBeenCalled();
+      expect(warn.mock.calls).toEqual([
+        [
+          "Ignoring the GitHub App's installation 6 on Someone-Else, which is not one of Constants.Github.InstallationOwners",
+        ],
+        [
+          "Ignoring the GitHub App's installation 7 on an-enterprise, which is not one of Constants.Github.InstallationOwners",
+        ],
+        [
+          "Ignoring the GitHub App's installation 8 on an unknown account, which is not one of Constants.Github.InstallationOwners",
+        ],
+      ]);
+    });
+
+    it('should warn again about an ignored installation that went away and came back', async () => {
+      vitest.useFakeTimers();
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const ignored = { id: 6, account: { login: 'someone-else' } };
+      const { app } = install(Promise.resolve([ignored]));
+      await sut.getStarCount('someone-else', 'repo');
+
+      for (const installations of [[], [ignored]]) {
+        app.octokit.paginate.mockReturnValue(Promise.resolve(installations));
+        vitest.advanceTimersByTime(10 * 60 * 1000);
+        await sut.getStarCount('someone-else', 'repo');
+      }
+
+      expect(app.octokit.paginate).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalledTimes(2);
     });
 
     it("should list an organization's repositories, private ones included, with its installation", async () => {
