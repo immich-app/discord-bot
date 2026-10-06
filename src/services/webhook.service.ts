@@ -56,9 +56,19 @@ const getActionName = (action: string, pullRequest: { merged: boolean | null }) 
   return action.replaceAll('_', ' ');
 };
 
-type PullRequestEvent = EmitterWebhookEvent<
-  'pull_request' | 'pull_request_review' | 'pull_request_review_comment' | 'pull_request_review_thread'
->['payload'];
+const PULL_REQUEST_EVENTS = [
+  'pull_request',
+  'pull_request_review',
+  'pull_request_review_comment',
+  'pull_request_review_thread',
+] as const;
+
+type PullRequestEventName = (typeof PULL_REQUEST_EVENTS)[number];
+
+type PullRequestEvent = EmitterWebhookEvent<PullRequestEventName>['payload'];
+
+const isPullRequestEvent = (event: EmitterWebhookEvent): event is EmitterWebhookEvent<PullRequestEventName> =>
+  (PULL_REQUEST_EVENTS as readonly string[]).includes(event.name);
 
 type PullRequestEditedEvent = EmitterWebhookEvent<'pull_request.edited'>['payload'];
 
@@ -240,16 +250,27 @@ export class WebhookService {
     private notifications: NotificationService,
   ) {}
 
+  /** Every GitHub event, from the GitHub App's webhook, for each organization the app is installed on. */
   async onGithub(event: EmitterWebhookEvent, slug: string) {
     const { slugs } = getConfig();
     if (!slugs.githubWebhook || slug !== slugs.githubWebhook) {
       throw new UnauthorizedException();
     }
 
-    // Every destination and record below is Immich's, so another organization's events wait for destinations of their own.
     const repository = 'repository' in event.payload ? event.payload.repository : undefined;
-    if (repository?.owner?.login !== GithubOrg.ImmichApp) {
+    const owner = repository?.owner?.login?.toLowerCase();
+    if (owner === undefined || !Constants.Github.InstallationOwners.has(owner)) {
       this.logger.debug(`Ignoring GitHub ${event.name} event from ${repository?.full_name ?? 'no repository'}`);
+      return;
+    }
+
+    if (isPullRequestEvent(event)) {
+      await this.upsertPullRequest(event.payload);
+    }
+
+    // Every destination below is Immich's, so another organization's events are recorded, never posted, until it has
+    // destinations of its own.
+    if (owner !== GithubOrg.ImmichApp) {
       return;
     }
 
@@ -259,7 +280,6 @@ export class WebhookService {
       case 'pull_request_review_comment':
       case 'pull_request_review_thread': {
         const { payload } = event;
-        await this.upsertPullRequest(payload);
         await this.handlePullRequestNotification(payload);
 
         if (!payload.repository.private) {

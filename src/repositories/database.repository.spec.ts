@@ -14,7 +14,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, zulip_expander* and zulip_emote rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, zulip_expander* and zulip_emote rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -22,6 +22,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
   beforeEach(async () => {
     await db.deleteFrom('mirror_link').execute();
     await db.deleteFrom('mirror_identity').execute();
+    await db.deleteFrom('pull_request').execute();
     await db.deleteFrom('zulip_emote').execute();
     await db.deleteFrom('zulip_expander_default').execute();
     await db.deleteFrom('zulip_expander').execute();
@@ -299,6 +300,20 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
 
     expect(await sut.getMirrorConversationByDiscord(CHANNEL, null)).toEqual(conversation);
     await sql`DELETE FROM "mirror_conversation" WHERE "id" = ${conversation.id}`.execute(db);
+  });
+
+  describe('pull requests', () => {
+    it('should find the pull request of a number updated last in the organization alone', async () => {
+      const pullRequest = (nodeId: string, organization: string, repository: string, updatedAt: string) =>
+        sut.upsertPullRequest({ nodeId, organization, repository, number: 4242, updatedAt: new Date(updatedAt) });
+      await pullRequest('PR_immich_older', 'immich-app', 'immich', '2026-10-01');
+      await pullRequest('PR_immich_newer', 'immich-app', 'static-pages', '2026-10-03');
+      await pullRequest('PR_futo', 'futo-org', 'grayjay', '2026-10-05');
+
+      expect(await sut.getLatestPullRequestByNumber(4242, 'immich-app')).toMatchObject({ nodeId: 'PR_immich_newer' });
+      expect(await sut.getLatestPullRequestByNumber(4242, 'futo-org')).toMatchObject({ nodeId: 'PR_futo' });
+      expect(await sut.getLatestPullRequestByNumber(4242, 'someone-else')).toBeUndefined();
+    });
   });
 
   describe('zulip emotes', () => {

@@ -80,7 +80,8 @@ export interface IDatabaseRepository {
   updatePullRequest(entity: Updateable<PullRequestTable> & { nodeId: string }): Promise<void>;
   upsertPullRequest({ nodeId, ...entity }: NewPullRequest): Promise<void>;
   getPullRequestsByNumber(number: number): Promise<PullRequest[]>;
-  getLatestPullRequestByNumber(number: number): Promise<PullRequest | undefined>;
+  /** The pull request of that number in the organization updated last. */
+  getLatestPullRequestByNumber(number: number, organization: string): Promise<PullRequest | undefined>;
   getMirrorConversation(id: string): Promise<MirrorConversation | undefined>;
   getMirrorConversationByDiscord(
     discordChannelId: string,

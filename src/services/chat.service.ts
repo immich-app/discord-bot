@@ -601,7 +601,7 @@ export class ChatService {
         continue;
       }
 
-      const latestPr = await this.database.getLatestPullRequestByNumber(id);
+      const latestPr = await this.database.getLatestPullRequestByNumber(id, GithubOrg.ImmichApp);
       const isQuickRef = !org && !orgPage && !repo && !repoPage;
 
       if (isQuickRef && (!latestPr || latestPr.updatedAt < DateTime.now().minus({ week: 2 }).toJSDate()) && id < 1000) {

@@ -297,11 +297,12 @@ export class DatabaseRepository implements IDatabaseRepository {
     return this.db.selectFrom('pull_request').selectAll().where('number', '=', number).execute();
   }
 
-  async getLatestPullRequestByNumber(number: number) {
+  async getLatestPullRequestByNumber(number: number, organization: string) {
     return this.db
       .selectFrom('pull_request')
       .selectAll()
       .where('number', '=', number)
+      .where('organization', '=', organization)
       .orderBy('updatedAt', 'desc')
       .executeTakeFirst();
   }
