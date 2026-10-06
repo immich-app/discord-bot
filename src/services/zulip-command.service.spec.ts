@@ -71,7 +71,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
 });
 
 const newZulipServiceMock = () => ({
-  onMessage: vitest.fn<(handler: ZulipMessageHandler) => void>(),
+  onMessage: vitest.fn<(handler: ZulipMessageHandler, options?: { withBots?: boolean }) => void>(),
   ownUser: BOT as ZulipUser | undefined,
 });
 
@@ -518,13 +518,62 @@ describe('ZulipCommandService', () => {
   });
 
   describe('init', () => {
-    it('should subscribe one handler to the event loop, which answers commands', async () => {
+    it("should subscribe one handler to the event loop, other bots' messages included, which answers commands", async () => {
       await sut.init();
 
-      expect(zulipServiceMock.onMessage).toHaveBeenCalledOnce();
+      expect(zulipServiceMock.onMessage).toHaveBeenCalledExactlyOnceWith(expect.any(Function), { withBots: true });
       const [handler] = zulipServiceMock.onMessage.mock.calls[0];
       await handler(message());
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('bots', () => {
+    const fromBot = { senderId: 30, senderEmail: 'claude-bot@example.com', senderFullName: 'Claude' };
+
+    it("should answer another bot's command", async () => {
+      await send('@**Immich** rss-list', { ...fromBot, streamId: 999 });
+
+      expect(replies()).toEqual([
+        { stream: 999, topic: 'deploy', content: 'This stream is not subscribed to any RSS feed.' },
+      ]);
+    });
+
+    it.each(['see #4242', 'Unknown command `nonsense`. Mention me with `help` for the list.', '@**Claude** help'])(
+      'should say nothing to a bot message that is not a command: %j',
+      async (content) => {
+        await send(content, fromBot);
+
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it("should ignore another bot's direct message", async () => {
+      await send('link ABCD2345', { ...fromBot, type: 'private', streamId: undefined, topic: '' });
+
+      expect(mirrorLinksMock.redeemIdentityCode).not.toHaveBeenCalled();
+      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it("should check a bot's role as any sender's for the administrators' commands", async () => {
+      zulipMock.getUser.mockResolvedValue({ userId: 30, fullName: 'Claude', role: 400 });
+
+      await send('@**Immich** mirror-list', { ...fromBot, streamId: 120 });
+
+      expect(zulipMock.getUser).toHaveBeenCalledExactlyOnceWith(30);
+      expect(mirrorLinksMock.list).not.toHaveBeenCalled();
+      expect(replies().map(({ content }) => content)).toEqual([
+        'Only Zulip organization administrators and owners can change or list the Discord-Zulip mirror.',
+      ]);
+    });
+
+    it('should refuse a team command from a bot outside the team streams', async () => {
+      await send('@**Immich** emote-sync', { ...fromBot, streamId: 999 });
+
+      expect(chatServiceMock.syncEmotes).not.toHaveBeenCalled();
+      expect(replies().map(({ content }) => content)).toEqual([
+        '`emote-sync` is taken in the Immich team streams only.',
+      ]);
     });
   });
 
