@@ -886,6 +886,44 @@ describe(WebhookService.name, () => {
     });
   });
 
+  describe('onGithub', () => {
+    const futoRepo = { full_name: 'futo-org/grayjay', name: 'grayjay', owner: { login: 'futo-org' }, private: false };
+    const workflowRun = {
+      conclusion: 'failure',
+      check_suite_node_id: 'CS_node_1',
+      display_title: 'Release v1.0.0',
+      html_url: 'https://github.com/futo-org/grayjay/actions/runs/1',
+    };
+
+    it.each([
+      { name: 'pull_request', payload: { action: 'opened', pull_request: makePullRequest() } },
+      { name: 'issues', payload: { action: 'opened', issue } },
+      { name: 'discussion', payload: { action: 'created', discussion } },
+      { name: 'release', payload: { action: 'published', release: makeRelease() } },
+      { name: 'workflow_run', payload: { action: 'completed', workflow_run: workflowRun } },
+    ] as const)("should record and post nothing for another organization's $name event", async ({ name, payload }) => {
+      await sut.onGithub(githubEvent(name, { ...payload, sender, repository: futoRepo }), 'github-slug');
+
+      expect(databaseMock.upsertPullRequest).not.toHaveBeenCalled();
+      expect(githubMock.getCheckSuiteTriggerCommit).not.toHaveBeenCalled();
+      expect(sent()).toEqual({ discord: [], zulip: [] });
+    });
+
+    it('should record a pull request of immich-app', async () => {
+      await sut.onGithub(
+        githubEvent('pull_request', {
+          action: 'edited',
+          sender,
+          repository: immichRepo,
+          pull_request: makePullRequest(),
+        }),
+        'github-slug',
+      );
+
+      expect(databaseMock.upsertPullRequest).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('handlePullRequestNotification', () => {
     const pullRequestEvent = (action: string, pull_request: Record<string, unknown>, repository = immichRepo) =>
       githubEvent('pull_request', { action, sender, repository, pull_request });

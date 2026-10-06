@@ -24,12 +24,10 @@ export enum DiscordField {
 export enum GithubRepo {
   Immich = 'immich',
   StaticPages = 'static-pages',
-  FHSCore = 'fhs-core',
 }
 
 export enum GithubOrg {
   ImmichApp = 'immich-app',
-  FUTO = 'futo-org',
 }
 
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
