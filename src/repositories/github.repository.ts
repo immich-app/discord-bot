@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { GraphqlResponseError } from '@octokit/graphql';
 import { App, Octokit } from 'octokit';
+import { Constants } from 'src/constants';
 import { IGithubInterface, PullRequest, PullRequestState } from 'src/interfaces/github.interface';
 import { makeIssueOrPRMessage, makeLink } from 'src/util';
 
@@ -53,6 +54,7 @@ export class GithubRepository implements IGithubInterface {
   /** The app's installation IDs by lowercased owner login. */
   private installations?: { ids: Promise<Map<string, number>>; readAt: number };
   private lastListed?: Map<string, number>;
+  private ignoredInstallations = new Set<number>();
   private installationOctokits = new Map<number, Promise<Octokit>>();
 
   async init(appId: string, privateKey: string, installationId: string) {
@@ -94,12 +96,27 @@ export class GithubRepository implements IGithubInterface {
   private readInstallations() {
     const ids = this.app!.octokit.paginate('GET /app/installations', { per_page: 100 }).then(
       (installations) => {
-        this.lastListed = new Map(
-          installations.flatMap(({ id, account }) =>
-            account && 'login' in account ? [[account.login.toLowerCase(), id] as const] : [],
-          ),
-        );
-        return this.lastListed;
+        const listed = new Map<string, number>();
+        const ignored = new Set<number>();
+        for (const { id, account } of installations) {
+          // A user or organization has a login, an enterprise a slug alone, whatever the generated types say.
+          const { login, slug } = (account ?? {}) as { login?: string; slug?: string };
+          const owner = login?.toLowerCase();
+          if (owner !== undefined && Constants.Github.InstallationOwners.has(owner)) {
+            listed.set(owner, id);
+            continue;
+          }
+
+          ignored.add(id);
+          if (!this.ignoredInstallations.has(id)) {
+            this.logger.warn(
+              `Ignoring the GitHub App's installation ${id} on ${login ?? slug ?? 'an unknown account'}, which is not one of Constants.Github.InstallationOwners`,
+            );
+          }
+        }
+        this.ignoredInstallations = ignored;
+        this.lastListed = listed;
+        return listed;
       },
       (error: unknown) => {
         const fallback = this.lastListed ? 'the last list stays' : 'the configured one reads every owner';
