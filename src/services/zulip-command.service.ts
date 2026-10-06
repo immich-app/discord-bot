@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Constants } from 'src/constants';
+import { Constants, ZulipHelpSection } from 'src/constants';
 import {
   ZULIP_MAX_MESSAGE_LENGTH,
   neutraliseZulipLabel,
@@ -93,14 +93,6 @@ const listRepositories = (repositories: string[]) => repositories.map((repositor
 const NO_DEFAULT =
   'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.';
 
-const DIRECT_MESSAGE_HELP = [
-  'In a direct message with me, mentioning me in a group one:',
-  '- `expanders <on <group>|off [group]|default <repository>|list>`: turn a group of repositories on or off in this conversation for a bare `#1234` and `name#1234` to look among, or choose which of them `#1234` goes to; links expand here without one, unless a guest is in the conversation',
-  '- `link <code>`: link your Zulip account with the Discord account that `/zulip-link` gave you the code on',
-  '- `unlink`: unlink your Zulip account from your Discord account',
-  '`expander-group list`, in a stream, lists the groups.',
-].join('\n');
-
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
 
@@ -108,6 +100,59 @@ const EMOTE_SYNC_SERVER = `the ${Constants.Discord.EmoteSyncServer.name} Discord
 
 /** Whitespace is collapsed because a newline in typed text would let it add Markdown structure in the bot's own voice. */
 const code = (text: string) => `\`${neutraliseZulipMentions(text.replaceAll('`', '').replaceAll(/\s+/g, ' '))}\``;
+
+const helpLine = (names: string[], summary: string) => `- ${names.map((name) => code(name)).join(', ')}: ${summary}`;
+
+const helpSection = (heading: string, lines: string[]) => [`**${heading}**`, ...lines].join('\n');
+
+const spoiler = (heading: string, lines: string[]) => [`\`\`\`spoiler ${heading}`, ...lines, '```'].join('\n');
+
+const toHelpLines = (entries: { name: string; summary: string }[]) => {
+  const groups: { names: string[]; summary: string }[] = [];
+  for (const { name, summary } of entries) {
+    const last = groups.at(-1);
+    if (last?.summary === summary) {
+      last.names.push(name);
+      continue;
+    }
+    groups.push({ names: [name], summary });
+  }
+  return groups.map(({ names, summary }) => helpLine(names, summary));
+};
+
+const SCHEDULE_SUMMARY = 'post messages in this stream on a cron schedule';
+
+const RSS_SUMMARY = 'post RSS feeds in this stream';
+
+const MIRROR_LINK_SUMMARY = 'mirror this stream with a Discord channel, both ways, or stop';
+
+const LEFT_OUT_TEAM = 'the commands taken in the Immich team streams only';
+
+const LEFT_OUT_ADMINISTRATORS = 'the commands for organization administrators and owners';
+
+const HELP_FINE_PRINT = spoiler('How it works', [
+  '- Mention me at the very start of a message; a mention anywhere else is not a command.',
+  '- Arguments are positional or `key=value`; quote a value with spaces: `text="two words"`.',
+  '- Every reply is posted here, in this topic, for everyone in the stream to see.',
+  '- Scheduled messages, RSS feeds and `expanders` act on this stream alone; expander groups are shared by every stream.',
+  '- The team tools are taken in the Immich team streams only, the `mirror-*` commands from organization administrators and owners only.',
+]);
+
+const DIRECT_MESSAGE_HELP = [
+  '**In a direct message**, send me one of these; in a group conversation, mention me first.',
+  helpSection(ZulipHelpSection.Links, [
+    helpLine(['expanders'], 'choose the groups of repositories a bare `#1234` looks in, in this conversation'),
+  ]),
+  helpSection(ZulipHelpSection.Mirror, [
+    helpLine(['link <code>'], 'link your Zulip account with the Discord account `/zulip-link` gave you the code on'),
+    helpLine(['unlink'], 'unlink your Zulip account from your Discord account'),
+  ]),
+  spoiler('How it works', [
+    '- `expanders on <group>`, `expanders off [group]`, `expanders default <repository>` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+    '- Links expand here without a group, unless a guest is in the conversation.',
+    '- Everyone in the conversation sees what `expanders` changes; anything else is answered to you alone.',
+  ]),
+].join('\n\n');
 
 const describeError = (error: unknown) =>
   code(shorten(error instanceof Error ? error.message : String(error), ERROR_LENGTH));
@@ -148,6 +193,11 @@ type ExpanderTarget = { place: ExpanderPlace; kind: 'stream' | 'conversation' };
 type Command = {
   usage: string;
   description: string;
+  /** Each form of the command and what it does, one line each in `help <command>`. */
+  subcommands?: Record<string, string>;
+  example?: string;
+  /** Where `help` lists it; consecutive commands of a section with the same summary share a line. */
+  listing: { section: ZulipHelpSection; summary: string } | null;
   positionals: number;
   options: string[];
   /** Taken from organization administrators and owners only; what they alone can do, for the refusal. */
@@ -167,15 +217,21 @@ export class ZulipCommandService {
 
   private commands: Record<string, Command> = {
     help: {
-      usage: 'help',
-      description: 'this list',
-      positionals: 0,
+      usage: 'help [command]',
+      description: 'List the commands taken here, or explain the one named.',
+      example: 'help schedule-add',
+      listing: null,
+      positionals: 1,
       options: [],
-      run: ({ message }) => Promise.resolve(this.help(message.streamId)),
+      run: (context) => this.help(context),
     },
     'emote-sync': {
       usage: 'emote-sync',
-      description: `upload every emote of ${EMOTE_SYNC_SERVER} to Zulip, skipping a name Zulip already has`,
+      description: `Upload every emote of ${EMOTE_SYNC_SERVER} to Zulip, skipping a name Zulip already has.`,
+      listing: {
+        section: ZulipHelpSection.Team,
+        summary: `upload the emotes of the ${Constants.Discord.EmoteSyncServer.name} Discord server to Zulip`,
+      },
       positionals: 0,
       options: [],
       teamStreams: true,
@@ -191,7 +247,12 @@ export class ZulipCommandService {
     'backfill-pull-requests': {
       usage: 'backfill-pull-requests <number|all>',
       description:
-        'create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
+        'Create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched.',
+      example: 'backfill-pull-requests 1234',
+      listing: {
+        section: ZulipHelpSection.Team,
+        summary: 'create the Discord thread and the Zulip topic a pull request lacks',
+      },
       positionals: 1,
       options: ['number'],
       teamStreams: true,
@@ -199,7 +260,9 @@ export class ZulipCommandService {
     },
     fourthwall: {
       usage: 'fourthwall update <id|all>',
-      description: 'fetch that Fourthwall order again and update its row in the database, or with `all` every order',
+      description: 'Fetch that Fourthwall order again and update its row in the database, or with `all` every order.',
+      example: 'fourthwall update ORD-1',
+      listing: { section: ZulipHelpSection.Team, summary: 'fetch a Fourthwall order again, or every order' },
       positionals: 2,
       options: ['id'],
       teamStreams: true,
@@ -207,28 +270,35 @@ export class ZulipCommandService {
     },
     'schedule-add': {
       usage: 'schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]',
-      description: `post the message in this stream on that cron schedule, in the topic given or this one; ${SUPPRESS_EMBEDS_IGNORED}`,
+      description: `Post the message in this stream on that cron schedule, in the topic given or this one; ${SUPPRESS_EMBEDS_IGNORED}.`,
+      example: 'schedule-add standup cron="0 9 * * 1-5" message="Standup in five minutes" topic=standup',
+      listing: { section: ZulipHelpSection.Schedule, summary: SCHEDULE_SUMMARY },
       positionals: 1,
       options: ['name', 'cron', 'message', 'topic', 'suppress-embeds'],
       run: (context) => this.scheduleAdd(context),
     },
     'schedule-list': {
       usage: 'schedule-list',
-      description: 'list the scheduled messages of this stream, with their schedule, topic and the start of their text',
+      description:
+        'List the scheduled messages of this stream, with their schedule, topic and the start of their text.',
+      listing: { section: ZulipHelpSection.Schedule, summary: SCHEDULE_SUMMARY },
       positionals: 0,
       options: [],
       run: (context) => this.scheduleList(context),
     },
     'schedule-edit': {
       usage: 'schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]',
-      description: `change the schedule, text or topic of a scheduled message of this stream, from its next post on; ${SUPPRESS_EMBEDS_IGNORED}`,
+      description: `Change the schedule, text or topic of a scheduled message of this stream, from its next post on; ${SUPPRESS_EMBEDS_IGNORED}.`,
+      example: 'schedule-edit standup cron="30 9 * * 1-5"',
+      listing: { section: ZulipHelpSection.Schedule, summary: SCHEDULE_SUMMARY },
       positionals: 1,
       options: ['name', 'cron', 'message', 'topic', 'suppress-embeds'],
       run: (context) => this.scheduleEdit(context),
     },
     'schedule-remove': {
       usage: 'schedule-remove <name>',
-      description: 'delete a scheduled message of this stream, which stops it',
+      description: 'Delete a scheduled message of this stream, which stops it.',
+      listing: { section: ZulipHelpSection.Schedule, summary: SCHEDULE_SUMMARY },
       positionals: 1,
       options: ['name'],
       run: (context) => this.scheduleRemove(context),
@@ -236,21 +306,25 @@ export class ZulipCommandService {
     'rss-subscribe': {
       usage: 'rss-subscribe <url> [topic=<topic>]',
       description:
-        'post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
+        'Post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one.',
+      example: 'rss-subscribe https://example.com/feed.xml topic=news',
+      listing: { section: ZulipHelpSection.Rss, summary: RSS_SUMMARY },
       positionals: 1,
       options: ['url', 'topic'],
       run: (context) => this.rssSubscribe(context),
     },
     'rss-unsubscribe': {
       usage: 'rss-unsubscribe <url>',
-      description: 'stop posting that RSS feed in this stream',
+      description: 'Stop posting that RSS feed in this stream.',
+      listing: { section: ZulipHelpSection.Rss, summary: RSS_SUMMARY },
       positionals: 1,
       options: ['url'],
       run: (context) => this.rssUnsubscribe(context),
     },
     'rss-list': {
       usage: 'rss-list',
-      description: 'list the RSS feeds this stream is subscribed to, with their topics',
+      description: 'List the RSS feeds this stream is subscribed to, with their topics.',
+      listing: { section: ZulipHelpSection.Rss, summary: RSS_SUMMARY },
       positionals: 0,
       options: [],
       run: ({ message }) => this.rssList(message),
@@ -258,7 +332,9 @@ export class ZulipCommandService {
     'mirror-link': {
       usage: 'mirror-link [topic=<main topic>]',
       description:
-        "start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
+        "Start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages.",
+      example: 'mirror-link topic="dev chat"',
+      listing: { section: ZulipHelpSection.Mirror, summary: MIRROR_LINK_SUMMARY },
       positionals: 0,
       options: ['topic'],
       administrators: MIRROR,
@@ -266,7 +342,8 @@ export class ZulipCommandService {
     },
     'mirror-unlink': {
       usage: 'mirror-unlink',
-      description: 'stop mirroring this stream with its Discord channel, and announce it on both sides',
+      description: 'Stop mirroring this stream with its Discord channel, and announce it on both sides.',
+      listing: { section: ZulipHelpSection.Mirror, summary: MIRROR_LINK_SUMMARY },
       positionals: 0,
       options: [],
       administrators: MIRROR,
@@ -275,7 +352,11 @@ export class ZulipCommandService {
     'mirror-backfill': {
       usage: 'mirror-backfill',
       description:
-        'copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
+        'Copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done.',
+      listing: {
+        section: ZulipHelpSection.Mirror,
+        summary: 'copy the Discord history of the channel or thread this topic mirrors',
+      },
       positionals: 0,
       options: [],
       administrators: MIRROR,
@@ -283,7 +364,8 @@ export class ZulipCommandService {
     },
     'mirror-list': {
       usage: 'mirror-list',
-      description: 'list the mirrored channels and streams, and the linked accounts',
+      description: 'List the mirrored channels and streams, and the linked accounts.',
+      listing: { section: ZulipHelpSection.Mirror, summary: 'list the mirrored channels and the linked accounts' },
       positionals: 0,
       options: [],
       administrators: MIRROR,
@@ -291,7 +373,18 @@ export class ZulipCommandService {
     },
     expanders: {
       usage: 'expanders <on <group>|off [group]|default <repository>|list>',
-      description: `turn a group of repositories on or off in this stream for a bare \`#1234\` and \`name#1234\` to look among (\`off\` alone turns off every group), choose which of its repositories \`#1234\` goes to here, or \`list\` the streams with groups; GitHub and gitlab.futo.org issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and x.com links are mirrored on nitter.net`,
+      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+      subcommands: {
+        'on <group>': 'turn that group on here',
+        'off [group]': 'turn that group off here, or every group when none is named',
+        'default <repository>': 'choose which of the repositories turned on here a bare `#1234` goes to',
+        list: 'list the streams with groups',
+      },
+      example: 'expanders on immich',
+      listing: {
+        section: ZulipHelpSection.Links,
+        summary: 'choose the groups of repositories a bare `#1234` looks in, in this stream',
+      },
       positionals: 2,
       options: [],
       run: (context) => this.expanders(context),
@@ -299,7 +392,22 @@ export class ZulipCommandService {
     'expander-group': {
       usage:
         'expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list',
-      description: `create a group of repositories (${REPOSITORY_FORMS}, or their URLs) for \`expanders on\`, the first one it names itself, not a pattern's, its default for \`#1234\`; add or remove repositories; with \`threshold\`, have a bare \`#1234\` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; \`info\` shows one group's repositories and streams, \`list\` every group`,
+      description: `Create and change the groups of repositories \`expanders on\` turns on. A repository is ${REPOSITORY_FORMS}; URLs work too. A group's default for \`#1234\` is the first repository it names itself, not through a pattern.`,
+      subcommands: {
+        'create <group> <repository>…': 'create a group of those repositories',
+        'add <group> <repository>…': 'add those repositories to the group',
+        'remove <group> <repository>…': 'remove those repositories from the group',
+        'threshold <group> <number>':
+          'have a bare `#1234` below the number expand only for a pull request updated in the last two weeks',
+        'delete <group>': 'delete the group, which turns it off everywhere',
+        'info <group>': "show the group's repositories and streams",
+        list: 'list every group',
+      },
+      example: 'expander-group create fhs futo-org/fhs-core futo-org/fhs-web',
+      listing: {
+        section: ZulipHelpSection.Links,
+        summary: 'create and change the groups of repositories `expanders` turns on',
+      },
       positionals: Number.POSITIVE_INFINITY,
       options: [],
       run: (context) => this.expanderGroup(context),
@@ -307,7 +415,11 @@ export class ZulipCommandService {
     'discord-unlink': {
       usage: 'discord-unlink',
       description:
-        'unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
+        'Unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)".',
+      listing: {
+        section: ZulipHelpSection.Mirror,
+        summary: 'unlink your Zulip and Discord accounts; `/zulip-link` on Discord links them',
+      },
       positionals: 0,
       options: [],
       run: ({ message }) => this.mirrorLinks.unlinkIdentity({ zulipUserId: message.senderId }, 'zulip'),
@@ -315,7 +427,12 @@ export class ZulipCommandService {
     similar: {
       usage: 'similar [text]',
       description:
-        'list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
+        'List the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest.',
+      example: 'similar uploads fail behind nginx',
+      listing: {
+        section: ZulipHelpSection.Links,
+        summary: 'find immich-app/immich issues and discussions like a message',
+      },
       positionals: Number.POSITIVE_INFINITY,
       options: ['text'],
       run: (context) => this.similar(context),
@@ -389,7 +506,7 @@ export class ZulipCommandService {
     }
     const { name, tokens } = parsed.command;
     if (name === '') {
-      return this.help(message.streamId);
+      return this.listCommands(message);
     }
     const command = this.commands[name];
     if (!command) {
@@ -513,24 +630,55 @@ export class ZulipCommandService {
     return this.zulip.sendMessage({ stream: streamId!, topic, content: fit(content) });
   }
 
-  /** Outside the team streams, only the commands taken there. */
-  private help(streamId: number) {
-    const teamStream = Constants.Zulip.Commands.includes(streamId);
-    const lines = Object.values(this.commands)
-      .filter(({ teamStreams }) => teamStream || !teamStreams)
-      .map(
-        ({ usage, description, administrators, teamStreams }) =>
-          `- ${code(usage)}${administrators ? ' (administrators)' : teamStreams ? ' (team streams)' : ''}: ${description}`,
+  private help({ message, args: [given] }: CommandContext) {
+    return given ? Promise.resolve(this.describeCommand(given)) : this.listCommands(message);
+  }
+
+  /** What the sender can run here; a role that cannot be read hides the administrators' commands. */
+  private async listCommands(message: StreamMessage) {
+    const teamStream = Constants.Zulip.Commands.includes(message.streamId);
+    const administrator = await this.isAdministrator(message.senderId).catch((error) => {
+      this.logger.debug(`Could not read the role of Zulip user ${message.senderId} for help`, error);
+      return false;
+    });
+    const shown = Object.entries(this.commands).filter(
+      ([, { teamStreams, administrators }]) => (teamStream || !teamStreams) && (administrator || !administrators),
+    );
+    const sections = Object.values(ZulipHelpSection).flatMap((section) => {
+      const entries = shown.flatMap(([name, { listing }]) =>
+        listing?.section === section ? [{ name, summary: listing.summary }] : [],
       );
+      return entries.length > 0 ? [helpSection(section, toHelpLines(entries))] : [];
+    });
+    const leftOut = [...(teamStream ? [] : [LEFT_OUT_TEAM]), ...(administrator ? [] : [LEFT_OUT_ADMINISTRATORS])];
+    const botName = neutraliseZulipMentions(this.zulipService.ownUser?.fullName ?? '');
     return [
-      teamStream
-        ? 'Mention me at the start of a message, then one of:'
-        : `Mention me at the start of a message, then one of these (the commands the Immich team streams alone take are left out; ${code('help')} there lists every one):`,
-      ...lines,
-      // The blank line ends the list: without it, Markdown reads the next line as the last item's continuation.
-      '',
-      `Arguments are positional or ${code('key=value')}; quote a value with spaces (${code('text="two words"')}). Every reply is posted here, in the topic.`,
-      `The commands marked (administrators) are taken from organization administrators and owners only, and the ones marked (team streams) in the Immich team streams only. Scheduled messages, RSS feeds and \`expanders\` act on this stream alone, while expander groups are shared by every stream. To link your Zulip account with your Discord account, run ${code('/zulip-link')} on Discord and send me the code it gives you in a direct message.`,
+      `**${botName}**: mention me, then a command. ${code('help <command>')} explains one.`,
+      ...sections,
+      ...(leftOut.length > 0 ? [`*Left out here: ${leftOut.join(' and ')}.*`] : []),
+      HELP_FINE_PRINT,
+    ].join('\n\n');
+  }
+
+  private describeCommand(given: string) {
+    const name = given.toLowerCase();
+    if (!Object.hasOwn(this.commands, name)) {
+      return `There is no command ${code(shorten(given, ECHO_LENGTH))}; ${code('help')} lists them.`;
+    }
+
+    const { usage, description, subcommands = {}, administrators, teamStreams, options, example } = this.commands[name];
+    const where = administrators
+      ? 'in any stream, from organization administrators and owners only'
+      : teamStreams
+        ? 'in the Immich team streams only'
+        : 'in any stream';
+    return [
+      code(usage),
+      description,
+      ...Object.entries(subcommands).map(([form, summary]) => helpLine([form], summary)),
+      `- Taken ${where}.`,
+      ...(options.length > 0 ? [`- Options: ${options.map((key) => code(`${key}=`)).join(', ')}`] : []),
+      ...(example ? [`- Example: ${code(example)}`] : []),
     ].join('\n');
   }
 

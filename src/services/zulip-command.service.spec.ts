@@ -44,6 +44,10 @@ import { Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vit
 
 const BOT: ZulipUser = { userId: 7, fullName: 'Immich' };
 
+const ADMIN = { userId: 12, fullName: 'Alice', role: 200 };
+
+const MEMBER = { ...ADMIN, role: 400 };
+
 const newZulipMock = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
   isInitialised: vitest.fn(),
@@ -341,40 +345,82 @@ const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 const SERVER = 'the Immich Discord server (979116623879368755)';
 
-const HELP = [
-  'Mention me at the start of a message, then one of:',
-  '- `help`: this list',
-  `- \`emote-sync\` (team streams): upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has`,
-  '- `backfill-pull-requests <number|all>` (team streams): create the Discord team thread and the Zulip topic that open pull request lacks, or with `all` for every open one; one that has both, was opened by a bot, or is not in the database is skipped, and nothing that exists is touched',
-  '- `fourthwall update <id|all>` (team streams): fetch that Fourthwall order again and update its row in the database, or with `all` every order',
-  '- `schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]`: post the message in this stream on that cron schedule, in the topic given or this one; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
-  '- `schedule-list`: list the scheduled messages of this stream, with their schedule, topic and the start of their text',
-  '- `schedule-edit <name> [cron=<expression>] [message=<text>] [topic=<topic>] [suppress-embeds=<true|false>]`: change the schedule, text or topic of a scheduled message of this stream, from its next post on; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message',
-  '- `schedule-remove <name>`: delete a scheduled message of this stream, which stops it',
-  '- `rss-subscribe <url> [topic=<topic>]`: post the newest post of that RSS feed now, and every new one after it (checked every 15 minutes), in this stream, in the topic given or this one',
-  '- `rss-unsubscribe <url>`: stop posting that RSS feed in this stream',
-  '- `rss-list`: list the RSS feeds this stream is subscribed to, with their topics',
-  "- `mirror-link [topic=<main topic>]` (administrators): start mirroring this stream with a Discord text channel or forum, both ways: this answers with the `/mirror-link` command a Discord administrator then runs in that channel; the main topic (text channels only, general chat by default) holds the channel's own messages",
-  '- `mirror-unlink` (administrators): stop mirroring this stream with its Discord channel, and announce it on both sides',
-  '- `mirror-backfill` (administrators): copy the messages of the Discord channel or thread this topic mirrors that are not here yet into this topic, oldest first, between two notices; new Discord messages there wait until it is done',
-  '- `mirror-list` (administrators): list the mirrored channels and streams, and the linked accounts',
-  '- `expanders <on <group>|off [group]|default <repository>|list>`: turn a group of repositories on or off in this stream for a bare `#1234` and `name#1234` to look among (`off` alone turns off every group), choose which of its repositories `#1234` goes to here, or `list` the streams with groups; GitHub and gitlab.futo.org issue, pull request, merge request and discussion links, file permalinks and `owner/name#1234` expand in every subscribed stream, with or without a group, and x.com links are mirrored on nitter.net',
-  "- `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list`: create a group of repositories (`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date, or their URLs) for `expanders on`, the first one it names itself, not a pattern's, its default for `#1234`; add or remove repositories; with `threshold`, have a bare `#1234` below the number expand only for a pull request updated in the last two weeks; or delete the group, which turns it off everywhere; `info` shows one group's repositories and streams, `list` every group",
-  '- `discord-unlink`: unlink your Zulip account from your Discord account, so that your messages appear on Discord as "Name (Zulip)"',
-  '- `similar [text]`: list the immich-app/immich issues and discussions like the text, or without text like the last message a human wrote in this topic, looked for among its ten newest',
-  '',
-  'Arguments are positional or `key=value`; quote a value with spaces (`text="two words"`). Every reply is posted here, in the topic.',
-  'The commands marked (administrators) are taken from organization administrators and owners only, and the ones marked (team streams) in the Immich team streams only. Scheduled messages, RSS feeds and `expanders` act on this stream alone, while expander groups are shared by every stream. To link your Zulip account with your Discord account, run `/zulip-link` on Discord and send me the code it gives you in a direct message.',
+const HELP_FINE_PRINT = [
+  '```spoiler How it works',
+  '- Mention me at the very start of a message; a mention anywhere else is not a command.',
+  '- Arguments are positional or `key=value`; quote a value with spaces: `text="two words"`.',
+  '- Every reply is posted here, in this topic, for everyone in the stream to see.',
+  '- Scheduled messages, RSS feeds and `expanders` act on this stream alone; expander groups are shared by every stream.',
+  '- The team tools are taken in the Immich team streams only, the `mirror-*` commands from organization administrators and owners only.',
+  '```',
 ].join('\n');
 
-const HELP_ELSEWHERE = HELP.split('\n')
-  .map((line, index) =>
-    index === 0
-      ? 'Mention me at the start of a message, then one of these (the commands the Immich team streams alone take are left out; `help` there lists every one):'
-      : line,
-  )
-  .filter((line) => !line.includes('(team streams):'))
-  .join('\n');
+const HELP = [
+  '**Immich**: mention me, then a command. `help <command>` explains one.',
+  '',
+  '**Issues and links**',
+  '- `expanders`: choose the groups of repositories a bare `#1234` looks in, in this stream',
+  '- `expander-group`: create and change the groups of repositories `expanders` turns on',
+  '- `similar`: find immich-app/immich issues and discussions like a message',
+  '',
+  '**Scheduled messages**',
+  '- `schedule-add`, `schedule-list`, `schedule-edit`, `schedule-remove`: post messages in this stream on a cron schedule',
+  '',
+  '**RSS**',
+  '- `rss-subscribe`, `rss-unsubscribe`, `rss-list`: post RSS feeds in this stream',
+  '',
+  '**Discord mirror**',
+  '- `mirror-link`, `mirror-unlink`: mirror this stream with a Discord channel, both ways, or stop',
+  '- `mirror-backfill`: copy the Discord history of the channel or thread this topic mirrors',
+  '- `mirror-list`: list the mirrored channels and the linked accounts',
+  '- `discord-unlink`: unlink your Zulip and Discord accounts; `/zulip-link` on Discord links them',
+  '',
+  '**Team tools**',
+  '- `emote-sync`: upload the emotes of the Immich Discord server to Zulip',
+  '- `backfill-pull-requests`: create the Discord thread and the Zulip topic a pull request lacks',
+  '- `fourthwall`: fetch a Fourthwall order again, or every order',
+  '',
+  HELP_FINE_PRINT,
+].join('\n');
+
+const HELP_FOR_EVERYONE = [
+  '**Immich**: mention me, then a command. `help <command>` explains one.',
+  '',
+  '**Issues and links**',
+  '- `expanders`: choose the groups of repositories a bare `#1234` looks in, in this stream',
+  '- `expander-group`: create and change the groups of repositories `expanders` turns on',
+  '- `similar`: find immich-app/immich issues and discussions like a message',
+  '',
+  '**Scheduled messages**',
+  '- `schedule-add`, `schedule-list`, `schedule-edit`, `schedule-remove`: post messages in this stream on a cron schedule',
+  '',
+  '**RSS**',
+  '- `rss-subscribe`, `rss-unsubscribe`, `rss-list`: post RSS feeds in this stream',
+  '',
+  '**Discord mirror**',
+  '- `discord-unlink`: unlink your Zulip and Discord accounts; `/zulip-link` on Discord links them',
+  '',
+  '*Left out here: the commands taken in the Immich team streams only and the commands for organization administrators and owners.*',
+  '',
+  HELP_FINE_PRINT,
+].join('\n');
+
+const DIRECT_MESSAGE_HELP = [
+  '**In a direct message**, send me one of these; in a group conversation, mention me first.',
+  '',
+  '**Issues and links**',
+  '- `expanders`: choose the groups of repositories a bare `#1234` looks in, in this conversation',
+  '',
+  '**Discord mirror**',
+  '- `link <code>`: link your Zulip account with the Discord account `/zulip-link` gave you the code on',
+  '- `unlink`: unlink your Zulip account from your Discord account',
+  '',
+  '```spoiler How it works',
+  '- `expanders on <group>`, `expanders off [group]`, `expanders default <repository>` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+  '- Links expand here without a group, unless a guest is in the conversation.',
+  '- Everyone in the conversation sees what `expanders` changes; anything else is answered to you alone.',
+  '```',
+].join('\n');
 
 describe('tokenize', () => {
   it.each([
@@ -518,6 +564,7 @@ describe('ZulipCommandService', () => {
     sut.onZulipMessage(message({ content, ...overrides }));
 
   beforeEach(() => {
+    vitest.spyOn(Logger.prototype, 'debug').mockImplementation(() => {});
     vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     zulipMock = newZulipMock();
@@ -649,15 +696,15 @@ describe('ZulipCommandService', () => {
     });
 
     it('should answer help and a bare mention in any stream, with the commands taken there', async () => {
+      zulipMock.getUser.mockResolvedValue(MEMBER);
+
       await send('@**Immich** help', { streamId: Constants.Zulip.Streams.Immich });
       await send('@**Immich**', { streamId: 999 });
 
       expect(replies().map(({ stream, content }) => ({ stream, content }))).toEqual([
-        { stream: Constants.Zulip.Streams.Immich, content: HELP_ELSEWHERE },
-        { stream: 999, content: HELP_ELSEWHERE },
+        { stream: Constants.Zulip.Streams.Immich, content: HELP_FOR_EVERYONE },
+        { stream: 999, content: HELP_FOR_EVERYONE },
       ]);
-      expect(HELP_ELSEWHERE).not.toContain('emote-sync');
-      expect(HELP_ELSEWHERE).toContain('`mirror-link');
     });
 
     it('should ignore a direct message, without a reply', async () => {
@@ -697,12 +744,16 @@ describe('ZulipCommandService', () => {
 
   describe('replies', () => {
     it('should answer in the same stream and topic', async () => {
+      zulipMock.getUser.mockResolvedValue(ADMIN);
+
       await send('@**Immich** help', { streamId: 109, topic: 'ios build' });
 
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({ stream: 109, topic: 'ios build', content: HELP });
     });
 
     it('should answer in the empty topic when the command was given there', async () => {
+      zulipMock.getUser.mockResolvedValue(ADMIN);
+
       await send('@**Immich** help', { topic: '' });
 
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({ stream: 107, topic: '', content: HELP });
@@ -764,22 +815,197 @@ describe('ZulipCommandService', () => {
   });
 
   describe('help', () => {
-    it('should list every command with its arguments', async () => {
+    const COMMANDS = [
+      'help',
+      'emote-sync',
+      'backfill-pull-requests',
+      'fourthwall',
+      'schedule-add',
+      'schedule-list',
+      'schedule-edit',
+      'schedule-remove',
+      'rss-subscribe',
+      'rss-unsubscribe',
+      'rss-list',
+      'mirror-link',
+      'mirror-unlink',
+      'mirror-backfill',
+      'mirror-list',
+      'expanders',
+      'expander-group',
+      'discord-unlink',
+      'similar',
+    ];
+    const SCHEDULE_ADD = [
+      '`schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]`',
+      'Post the message in this stream on that cron schedule, in the topic given or this one; `suppress-embeds` is accepted and ignored: Zulip cannot turn off link previews for one message.',
+      '- Taken in any stream.',
+      '- Options: `name=`, `cron=`, `message=`, `topic=`, `suppress-embeds=`',
+      '- Example: `schedule-add standup cron="0 9 * * 1-5" message="Standup in five minutes" topic=standup`',
+    ].join('\n');
+    const contents = () => replies().map(({ content }) => content);
+    const lines = (content: string) => content.split('\n');
+
+    beforeEach(() => {
+      zulipMock.getUser.mockResolvedValue(ADMIN);
+    });
+
+    it('should list the commands under their sections for an administrator in a team stream', async () => {
       await send('@**Immich** help');
 
       expect(replies()).toEqual([{ stream: 107, topic: 'deploy', content: HELP }]);
+      expect(zulipMock.getUser).toHaveBeenCalledExactlyOnceWith(12);
     });
 
-    it('should answer a bare mention with the list too', async () => {
-      await send('@**Immich**');
+    it.each(['@**Immich**', '@**Immich** help ""'])('should answer %j with the list too', async (content) => {
+      await send(content);
 
-      expect(replies().map(({ content }) => content)).toEqual([HELP]);
+      expect(contents()).toEqual([HELP]);
     });
 
-    it('should end the list with a blank line, so the line after it is not part of the last item', async () => {
+    it('should name the bot by its Zulip name, which is not hard-coded', async () => {
+      zulipServiceMock.ownUser = { userId: 7, fullName: 'FUBot' };
+
+      await send('@**FUBot** help');
+
+      expect(contents()[0]).toMatch(/^\*\*FUBot\*\*: mention me, then a command\./);
+    });
+
+    it('should list only what a member can run outside the team streams, and say what is left out', async () => {
+      zulipMock.getUser.mockResolvedValue(MEMBER);
+
+      await send('@**Immich** help', { streamId: 999 });
+
+      expect(contents()).toEqual([HELP_FOR_EVERYONE]);
+    });
+
+    it('should leave the team tools out for an administrator outside the team streams', async () => {
+      await send('@**Immich** help', { streamId: 999 });
+
+      const [content] = contents();
+      expect(content).not.toContain('**Team tools**');
+      expect(content).toContain('- `mirror-link`, `mirror-unlink`:');
+      expect(lines(content)).toContain('*Left out here: the commands taken in the Immich team streams only.*');
+    });
+
+    it("should leave the administrators' commands out for a member in a team stream", async () => {
+      zulipMock.getUser.mockResolvedValue(MEMBER);
+
       await send('@**Immich** help');
 
-      expect(replies()[0].content).toMatch(/\n- `similar \[text]`: [^\n]+\n\nArguments are positional/);
+      const [content] = contents();
+      expect(content).toContain('**Team tools**');
+      expect(lines(content).filter((line) => line.startsWith('- `mirror-'))).toEqual([]);
+      expect(lines(content)).toContain('*Left out here: the commands for organization administrators and owners.*');
+    });
+
+    it("should answer with a member's list, and log it at debug, when the sender's role cannot be read", async () => {
+      zulipMock.getUser.mockResolvedValue(MEMBER);
+      await send('@**Immich** help');
+      const error = new Error('Zulip is down');
+      zulipMock.getUser.mockRejectedValue(error);
+
+      await send('@**Immich** help');
+
+      const [member, unread] = contents();
+      expect(unread).toBe(member);
+      expect(lines(unread)).toContain('*Left out here: the commands for organization administrators and owners.*');
+      expect(Logger.prototype.debug).toHaveBeenCalledExactlyOnceWith(
+        'Could not read the role of Zulip user 12 for help',
+        error,
+      );
+      expect(Logger.prototype.error).not.toHaveBeenCalled();
+    });
+
+    it('should explain one command, without reading any role', async () => {
+      await send('@**Immich** help schedule-add');
+
+      expect(contents()).toEqual([SCHEDULE_ADD]);
+      expect(zulipMock.getUser).not.toHaveBeenCalled();
+    });
+
+    it('should explain a command whatever its case', async () => {
+      await send('@**Immich** help SCHEDULE-ADD');
+
+      expect(contents()).toEqual([SCHEDULE_ADD]);
+    });
+
+    it("should explain an administrators' command to anyone, saying who it is taken from", async () => {
+      zulipMock.getUser.mockResolvedValue(MEMBER);
+
+      await send('@**Immich** help mirror-list');
+
+      expect(contents()).toEqual([
+        [
+          '`mirror-list`',
+          'List the mirrored channels and streams, and the linked accounts.',
+          '- Taken in any stream, from organization administrators and owners only.',
+        ].join('\n'),
+      ]);
+      expect(zulipMock.getUser).not.toHaveBeenCalled();
+    });
+
+    it('should explain a team command outside the team streams instead of refusing it', async () => {
+      await send('@**Immich** help emote-sync', { streamId: 999 });
+
+      expect(contents()).toEqual([
+        [
+          '`emote-sync`',
+          `Upload every emote of ${SERVER} to Zulip, skipping a name Zulip already has.`,
+          '- Taken in the Immich team streams only.',
+        ].join('\n'),
+      ]);
+    });
+
+    it('should explain each form of a command that has several on a line of its own, with no host turned into a link', async () => {
+      await send('@**Immich** help expanders');
+
+      expect(contents()).toEqual([
+        [
+          '`expanders <on <group>|off [group]|default <repository>|list>`',
+          'Choose the groups of repositories a bare `#1234` and `name#1234` look among in this stream. GitHub and `gitlab.futo.org` issue, pull request, merge request and discussion links, file permalinks and `owner/name#1234` expand in every subscribed stream, with or without a group, and `x.com` links are mirrored on `nitter.net`.',
+          '- `on <group>`: turn that group on here',
+          '- `off [group]`: turn that group off here, or every group when none is named',
+          '- `default <repository>`: choose which of the repositories turned on here a bare `#1234` goes to',
+          '- `list`: list the streams with groups',
+          '- Taken in any stream.',
+          '- Example: `expanders on immich`',
+        ].join('\n'),
+      ]);
+    });
+
+    it.each([
+      ['backfill-pull-requests', '- Example: `backfill-pull-requests 1234`'],
+      ['fourthwall', '- Example: `fourthwall update ORD-1`'],
+    ])('should offer the narrow form of %s to copy, never the wide one', async (name, example) => {
+      await send(`@**Immich** help ${name}`);
+
+      expect(lines(contents()[0]).at(-1)).toBe(example);
+    });
+
+    it.each([
+      ['nonsense', '`nonsense`'],
+      ['constructor', '`constructor`'],
+      ['__proto__', '`__proto__`'],
+      ['@**all**', '`@\u200B**all**`'],
+    ])('should answer help %j with no such command, mentioning nobody', async (given, echo) => {
+      await send(`@**Immich** help ${given}`);
+
+      expect(contents()).toEqual([`There is no command ${echo}; \`help\` lists them.`]);
+    });
+
+    it('should echo a name it does not know shortened', async () => {
+      await send(`@**Immich** help ${'y'.repeat(9000)}`);
+
+      expect(contents()).toEqual([`There is no command \`${'y'.repeat(77)}...\`; \`help\` lists them.`]);
+    });
+
+    it.each(COMMANDS)('should explain %s whole', async (name) => {
+      await send(`@**Immich** help ${name}`);
+
+      const [content] = contents();
+      expect(content.startsWith(`\`${name}`)).toBe(true);
+      expect(lines(content)[1]).toMatch(/\.$/);
     });
 
     it('should answer an unknown command with a pointer to help, mentioning nobody', async () => {
@@ -809,7 +1035,7 @@ describe('ZulipCommandService', () => {
     });
 
     it.each([
-      ['@**Immich** help me', 'Usage: `help`'],
+      ['@**Immich** help me please', 'Usage: `help [command]`'],
       ['@**Immich** emote-sync server=foo', 'Usage: `emote-sync`'],
       ['@**Immich** emote-sync now', 'Usage: `emote-sync`'],
       ['@**Immich** backfill-pull-requests 1 2', 'Usage: `backfill-pull-requests <number|all>`'],
@@ -1822,7 +2048,6 @@ describe('ZulipCommandService', () => {
   });
 
   describe('mirror', () => {
-    const ADMIN = { userId: 12, fullName: 'Alice', role: 200 };
     const NOT_AN_ADMINISTRATOR =
       'Only Zulip organization administrators and owners can change or list the Discord-Zulip mirror.';
     const REQUESTED = 'To mirror this stream with a Discord channel, run `/mirror-link id:K7Q2XM` in that channel.';
@@ -1854,8 +2079,9 @@ describe('ZulipCommandService', () => {
       expect(replies().slice(0, 3)).toEqual([
         { stream: 120, topic: 'setup', content: REQUESTED },
         { stream: 54, topic: 'deploy', content: 'No channel is mirrored.' },
-        { stream: 120, topic: 'deploy', content: HELP_ELSEWHERE },
+        { stream: 120, topic: 'deploy', content: expect.stringContaining('- `mirror-link`, `mirror-unlink`:') },
       ]);
+      expect(replies()[2].content).not.toContain('**Team tools**');
     });
 
     it.each([
@@ -2109,7 +2335,6 @@ describe('ZulipCommandService', () => {
   });
 
   describe('expanders', () => {
-    const ADMIN = { userId: 12, fullName: 'Alice', role: 200 };
     const ALICE = 'Alice on Zulip (user 12)';
     const NOT_SUBSCRIBED =
       '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -2229,8 +2454,8 @@ describe('ZulipCommandService', () => {
         async ({ content, recipientIds }) => {
           await direct(content, recipientIds);
 
-          expect(answers()).toEqual([[[12], expect.stringMatching(/^In a direct message with me/)]]);
-          expect(answers()[0][1]).toContain('`expanders <on <group>|off [group]|default <repository>|list>`');
+          expect(answers()).toEqual([[[12], DIRECT_MESSAGE_HELP]]);
+          expect(zulipMock.getUser).not.toHaveBeenCalled();
         },
       );
     });
