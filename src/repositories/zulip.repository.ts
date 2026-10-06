@@ -538,6 +538,9 @@ const toReceivedMessage = (message: components['schemas']['MessagesBase']): Zuli
   content: message.content ?? '',
   timestamp: message.timestamp ?? 0,
   movedAt: message.last_moved_timestamp,
+  recipientIds: Array.isArray(message.display_recipient)
+    ? message.display_recipient.flatMap(({ id }) => (id === undefined ? [] : [id]))
+    : undefined,
 });
 
 const REACTION_TYPES = new Set<string>(['unicode_emoji', 'realm_emoji', 'zulip_extra_emoji']);

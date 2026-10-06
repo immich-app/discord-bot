@@ -62,6 +62,32 @@ describe(GitlabRepository.name, () => {
     });
   });
 
+  describe('isProjectPublic', () => {
+    it.each([
+      { visibility: 'public', expected: true },
+      { visibility: 'internal', expected: false },
+      { visibility: 'private', expected: false },
+      { visibility: undefined, expected: false },
+    ])('should resolve to $expected for a $visibility project', async ({ visibility, expected }) => {
+      respond(200, { path_with_namespace: 'harbor/harbor', visibility });
+
+      expect(await new GitlabRepository().isProjectPublic('harbor/harbor')).toBe(expected);
+      expect(fetchMock.mock.calls[0][0]).toBe(`${API}/projects/harbor%2Fharbor`);
+    });
+
+    it.each([401, 403, 404])('should resolve to false when GitLab answers %s', async (status) => {
+      respond(status, { message: 'nope' });
+
+      expect(await new GitlabRepository().isProjectPublic('team/private')).toBe(false);
+    });
+
+    it('should throw when GitLab fails otherwise', async () => {
+      respond(502, 'Bad Gateway');
+
+      await expect(new GitlabRepository().isProjectPublic('team/project')).rejects.toThrow('GitLab answered 502');
+    });
+  });
+
   describe('getItem', () => {
     it('should read an issue or a merge request', async () => {
       respond(200, {

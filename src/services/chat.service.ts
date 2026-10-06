@@ -35,6 +35,7 @@ import {
 } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
 import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
+import { parseDirectCommand } from 'src/zulip-command-parser';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
@@ -122,6 +123,15 @@ const mapConcurrently = async <T, R>(items: T[], limit: number, map: (item: T) =
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, work));
   return results;
+};
+
+/** Where a Zulip message's expansions come from and go to. */
+type ZulipConversation = { scope?: ExpanderScope; isPrivileged: boolean; reply: (content: string) => Promise<unknown> };
+
+/** The items `keep` resolves to `true` for, in order, asked all at once. */
+const filterAsync = async <T>(items: T[], keep: (item: T) => Promise<boolean>) => {
+  const kept = await Promise.all(items.map(keep));
+  return items.filter((_, index) => kept[index]);
 };
 
 /**
@@ -288,26 +298,66 @@ export class ChatService {
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
   }
 
-  async onZulipMessage({ type, streamId, topic, content }: ZulipReceivedMessage) {
-    if (type !== 'stream' || streamId === undefined) {
+  async onZulipMessage(message: ZulipReceivedMessage) {
+    const conversation = this.zulipConversation(message);
+    if (!conversation) {
       return;
     }
+    const { content } = message;
 
     // One failing lookup must not cost the reply the rest; the failure still reaches the event loop's log.
-    const [expansions] = await Promise.allSettled([this.zulipExpansions(streamId, content)]);
+    const [expansions] = await Promise.allSettled([
+      this.zulipExpansions(content, conversation.scope, conversation.isPrivileged),
+    ]);
     const parts = [...(expansions.status === 'fulfilled' ? expansions.value : []), ...emojiImages(content)];
 
     if (parts.length !== 0) {
-      await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });
+      await conversation.reply(parts.join('\n'));
     }
     if (expansions.status === 'rejected') {
       throw expansions.reason;
     }
   }
 
-  private async zulipExpansions(streamId: number, content: string) {
+  /**
+   * A stream expands with its groups, privileged, into its topic; a direct message, one to one or in a group, with
+   * the public-only direct message scope, back to everyone in it but the bot. A direct message that is a `link` or
+   * `unlink` command is the command service's alone.
+   */
+  private zulipConversation({
+    type,
+    streamId,
+    topic,
+    content,
+    recipientIds,
+  }: ZulipReceivedMessage): ZulipConversation | undefined {
+    if (type === 'stream') {
+      return streamId === undefined
+        ? undefined
+        : {
+            scope: this.zulipExpanders.getScope(streamId),
+            isPrivileged: true,
+            reply: (reply) => this.zulip.sendMessage({ stream: streamId, topic, content: reply }),
+          };
+    }
+
+    const self = this.zulipService.ownUser;
+    if (!self || parseDirectCommand(content, self.fullName)) {
+      return;
+    }
+    const recipients = (recipientIds ?? []).filter((id) => id !== self.userId);
+    if (recipients.length === 0) {
+      return;
+    }
+    return {
+      scope: this.zulipExpanders.getDirectScope(),
+      isPrivileged: false,
+      reply: (reply) => this.zulip.sendDirectMessage(recipients, reply),
+    };
+  }
+
+  private async zulipExpansions(content: string, scope: ExpanderScope | undefined, isPrivileged: boolean) {
     const parts: string[] = [];
-    const scope = this.zulipExpanders.getScope(streamId);
     if (scope) {
       // Snippets are not neutralised: Zulip renders no mention inside a code fence,
       // and a zero-width space would corrupt the code.
@@ -318,9 +368,18 @@ export class ChatService {
         .sort((a, b) => a.index - b.index)
         .slice(0, MAX_ZULIP_FILE_REFERENCES);
       const [githubSnippets, gitlabSnippets, links] = await Promise.all([
-        this.handleGithubFileReferences(content, true, firstPermalinks.filter(({ host }) => host === 'github').length),
-        this.handleGitlabFileReferences(content, firstPermalinks.filter(({ host }) => host === 'gitlab').length),
-        this.handleGithubThreadReferences({ content, scope }, true),
+        this.handleGithubFileReferences(
+          content,
+          isPrivileged,
+          firstPermalinks.filter(({ host }) => host === 'github').length,
+          scope.allows,
+        ),
+        this.handleGitlabFileReferences(
+          content,
+          firstPermalinks.filter(({ host }) => host === 'gitlab').length,
+          scope.allows,
+        ),
+        this.handleGithubThreadReferences({ content, scope }, isPrivileged),
       ]);
       parts.push(
         ...githubSnippets,
@@ -635,10 +694,18 @@ export class ChatService {
       }
     }
 
+    const allows = scope?.allows;
+    const [allowedLinks, allowedGitlabLinks] = allows
+      ? await Promise.all([
+          filterAsync(links, ({ org, repo }) => allows(`${org}/${repo}`)),
+          filterAsync(gitlabLinks, ({ path }) => allows(`${Constants.Gitlab.Host}/${path}`)),
+        ])
+      : [links, gitlabLinks];
+
     const keys = new Set<string>();
     const requests: GithubLink[] = [];
 
-    for (const { id, org, repo, type, discordThreadId } of links) {
+    for (const { id, org, repo, type, discordThreadId } of allowedLinks) {
       const key = id + org + repo;
       if (keys.has(key)) {
         continue;
@@ -668,7 +735,7 @@ export class ChatService {
     );
 
     const gitlabKeys = new Set<string>();
-    const gitlabRequests = gitlabLinks.filter(({ path, id, kind }) => {
+    const gitlabRequests = allowedGitlabLinks.filter(({ path, id, kind }) => {
       const key = `${path.toLowerCase()}#${id}:${kind}`;
       if (gitlabKeys.has(key)) {
         return false;
@@ -767,23 +834,39 @@ export class ChatService {
     return { org, repo, id, type: category ?? (isPullRequest ? 'pull' : undefined) };
   }
 
-  /** `limit` is how many of the message's permalinks are read, every one when it is left out. */
-  handleGithubFileReferences(content: string, isPrivileged: boolean, limit?: number) {
-    return this.handleFileReferences(content, GITHUB_FILE_REGEX, limit, ({ org, repo, ref, path }) => {
+  /**
+   * `limit` is how many of the message's permalinks are read, every one when it is left out; with `allows`, only the
+   * files of the repositories it allows are read.
+   */
+  handleGithubFileReferences(
+    content: string,
+    isPrivileged: boolean,
+    limit?: number,
+    allows?: (repository: string) => Promise<boolean>,
+  ) {
+    return this.handleFileReferences(content, GITHUB_FILE_REGEX, limit, allows, ({ org, repo, ref, path }) => {
       const file = decode(path);
       return file === undefined
         ? undefined
-        : { path, read: () => this.github.getRepositoryFileContent(org, repo, ref, file, isPrivileged) };
+        : {
+            repository: `${org}/${repo}`,
+            path,
+            read: () => this.github.getRepositoryFileContent(org, repo, ref, file, isPrivileged),
+          };
     });
   }
 
-  handleGitlabFileReferences(content: string, limit: number) {
-    return this.handleFileReferences(content, GITLAB_FILE_REGEX, limit, ({ path, refAndFile }) => {
+  handleGitlabFileReferences(content: string, limit: number, allows?: (repository: string) => Promise<boolean>) {
+    return this.handleFileReferences(content, GITLAB_FILE_REGEX, limit, allows, ({ path, refAndFile }) => {
       const segments = refAndFile.split('/').map(decode);
       if (segments.length < 2 || segments.some((segment) => !segment)) {
         return;
       }
-      return { path: segments.at(-1) as string, read: () => this.readGitlabFile(path, segments as string[]) };
+      return {
+        repository: `${Constants.Gitlab.Host}/${path}`,
+        path: segments.at(-1) as string,
+        read: () => this.readGitlabFile(path, segments as string[]),
+      };
     });
   }
 
@@ -805,7 +888,10 @@ export class ChatService {
     content: string,
     regex: RegExp,
     limit: number | undefined,
-    toFile: (groups: Record<string, string>) => { path: string; read: () => Promise<string[] | undefined> } | undefined,
+    allows: ((repository: string) => Promise<boolean>) | undefined,
+    toFile: (
+      groups: Record<string, string>,
+    ) => { repository: string; path: string; read: () => Promise<string[] | undefined> } | undefined,
   ) {
     const found = await mapConcurrently(
       [...content.matchAll(regex)].slice(0, limit),
@@ -822,7 +908,7 @@ export class ChatService {
         }
 
         const extension = reference.path.split('/').pop()?.split('.').pop();
-        if (!extension) {
+        if (!extension || (allows && !(await allows(reference.repository)))) {
           return;
         }
 

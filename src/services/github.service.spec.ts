@@ -20,6 +20,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   getPullRequests: vitest.fn(),
   getPullRequest: vitest.fn(),
   getRepositoryName: vitest.fn(),
+  isRepositoryPublic: vitest.fn(),
   getOwnerRepositories: vitest.fn(),
 });
 

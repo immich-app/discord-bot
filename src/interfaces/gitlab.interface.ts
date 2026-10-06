@@ -8,6 +8,8 @@ export type GitlabItem = { kind: GitlabItemKind; title: string; url: string; upd
 export interface IGitlabInterface {
   /** The path as GitLab spells it, `undefined` when GitLab knows no such project or the bot cannot see it. */
   getProjectPath(path: string): Promise<string | undefined>;
+  /** Whether the project's visibility is `public`; `false` when the bot cannot see it. Throws when GitLab fails. */
+  isProjectPublic(path: string): Promise<boolean>;
   /** `undefined` when there is none, the bot cannot see it, or GitLab cannot be reached. */
   getItem(path: string, kind: GitlabItemKind, iid: number): Promise<GitlabItem | undefined>;
   getFileContent(path: string, ref: string, file: string): Promise<string[] | undefined>;

@@ -455,6 +455,26 @@ export class GithubRepository implements IGithubInterface {
     return login === undefined ? undefined : { owner: login, repositories };
   }
 
+  async isRepositoryPublic({ org, repo }: { org: string; repo: string }) {
+    try {
+      const { repository } = await this.graphql<{ repository: { visibility: string } | null }>(
+        org,
+        `
+      query isRepositoryPublic($org: String!, $repo: String!) {
+        repository(owner: $org, name: $repo) {
+          visibility
+        }
+      }
+      `,
+        { org, repo },
+      );
+      return repository?.visibility === 'PUBLIC';
+    } catch (error) {
+      handleGraphqlError(error);
+      return false;
+    }
+  }
+
   async getRepositoryName({ org, repo }: { org: string; repo: string }) {
     try {
       const { repository } = await this.graphql<{ repository: { nameWithOwner: string } }>(

@@ -10,7 +10,7 @@ import { IGithubInterface } from 'src/interfaces/github.interface';
 import { GitlabItem, GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
-import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { PullRequest, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
@@ -58,6 +58,7 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   getPullRequests: vitest.fn(),
   getPullRequest: vitest.fn(),
   getRepositoryName: vitest.fn(),
+  isRepositoryPublic: vitest.fn().mockResolvedValue(true),
   getOwnerRepositories: vitest.fn(),
 });
 
@@ -156,8 +157,11 @@ const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
   getOrder: vitest.fn(),
 });
 
+const OWN_USER_ID = 99;
+
 const newZulipServiceMock = () => ({
   onMessage: vitest.fn<(handler: ZulipMessageHandler) => void>(),
+  ownUser: { userId: OWN_USER_ID, fullName: 'Immich' } as ZulipUser | undefined,
 });
 
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
@@ -190,6 +194,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
 
 const newGitlabMockRepository = (): Mocked<IGitlabInterface> => ({
   getProjectPath: vitest.fn(),
+  isProjectPublic: vitest.fn().mockResolvedValue(true),
   getItem: vitest.fn().mockResolvedValue(undefined),
   getFileContent: vitest.fn().mockResolvedValue(undefined),
   getGroupProjects: vitest.fn(),
@@ -1883,10 +1888,19 @@ describe('Bot test', () => {
         });
       });
 
-      it('should not answer a direct message', async () => {
-        await sut.onZulipMessage(zulipMessage({ type: 'private', streamId: undefined, content: ':we-are-checking:' }));
+      it('should answer a direct message in that conversation', async () => {
+        await sut.onZulipMessage(
+          zulipMessage({
+            type: 'private',
+            streamId: undefined,
+            topic: '',
+            recipientIds: [12, OWN_USER_ID],
+            content: ':we-are-checking:',
+          }),
+        );
 
         expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith([12], IMAGE);
       });
 
       it('should post the image after the expansions of the same message, in one reply', async () => {
@@ -2878,6 +2892,214 @@ describe('Bot test', () => {
         );
         expect(gitlabMock.getFileContent).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('onZulipMessage in direct messages', () => {
+    const PERMALINK = 'https://github.com/immich-app/immich/blob/main/server/src/app.ts#L1';
+    const PRIVATE_PERMALINK = 'https://github.com/futo-org/secret/blob/main/src/app.ts#L1';
+    const GITLAB_PRIVATE_PERMALINK = 'https://gitlab.futo.org/harbor/secret/-/blob/main/src/app.ts#L1';
+    const PUBLIC = new Set(['immich-app/immich', 'octokit/rest.js']);
+
+    const direct = (content: string, overrides: Partial<ZulipReceivedMessage> = {}) =>
+      sut.onZulipMessage(
+        zulipMessage({
+          type: 'private',
+          streamId: undefined,
+          topic: '',
+          recipientIds: [12, OWN_USER_ID],
+          content,
+          ...overrides,
+        }),
+      );
+
+    beforeEach(async () => {
+      zulipMock.sendDirectMessage.mockResolvedValue({ id: 902 });
+      githubMock.isRepositoryPublic.mockImplementation(async ({ org, repo }) => PUBLIC.has(`${org}/${repo}`));
+      gitlabMock.isProjectPublic.mockResolvedValue(false);
+      databaseMock.getZulipExpanderGroups.mockResolvedValue([expanderGroup('immich', ['immich-app/immich'], 1000)]);
+      databaseMock.getZulipExpanders.mockResolvedValue([expanderRow(107)]);
+      await zulipExpanders.init();
+    });
+
+    it('should expand a bare #N to immich-app/immich, into the conversation, unprivileged', async () => {
+      await direct('see #4242');
+
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+        'immich-app',
+        'immich',
+        4242,
+        undefined,
+        false,
+      );
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+        [12],
+        'https://github.com/immich-app/immich/pull/4242',
+      );
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should drop a bare #N below the threshold the groups give immich-app/immich', async () => {
+      await direct('just chatting about #123');
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it('should reply to every participant of a group conversation but the bot', async () => {
+      await direct('see #4242', { recipientIds: [12, OWN_USER_ID, 13, 14] });
+
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+        [12, 13, 14],
+        'https://github.com/immich-app/immich/pull/4242',
+      );
+    });
+
+    it('should expand links and references to a public repository', async () => {
+      await direct('https://github.com/octokit/rest.js/issues/5 octokit/rest.js#6');
+
+      expect(githubMock.getIssueOrPrMessage.mock.calls).toEqual([
+        ['octokit', 'rest.js', 5, undefined, false],
+        ['octokit', 'rest.js', 6, undefined, false],
+      ]);
+      expect(githubMock.isRepositoryPublic).toHaveBeenCalledExactlyOnceWith({ org: 'octokit', repo: 'rest.js' });
+    });
+
+    it('should post the snippet of a permalink to a public repository', async () => {
+      await direct(PERMALINK);
+
+      expect(githubMock.getRepositoryFileContent).toHaveBeenCalledExactlyOnceWith(
+        'immich-app',
+        'immich',
+        'main',
+        'server/src/app.ts',
+        false,
+      );
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+        [12],
+        '```ts\nfunction test() { return "immich-app/immich @ main: server/src/app.ts"; }\n```',
+      );
+    });
+
+    it('should expand nothing of a private repository, link, reference or permalink, on either host', async () => {
+      await direct(
+        [
+          'https://github.com/futo-org/secret/issues/5',
+          'https://github.com/futo-org/secret/discussions/6',
+          'futo-org/secret#7',
+          'secret#8',
+          PRIVATE_PERMALINK,
+          'https://gitlab.futo.org/harbor/secret/-/issues/9',
+          GITLAB_PRIVATE_PERMALINK,
+        ].join(' '),
+      );
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+      expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
+      expect(gitlabMock.getItem).not.toHaveBeenCalled();
+      expect(gitlabMock.getFileContent).not.toHaveBeenCalled();
+      expect(gitlabMock.isProjectPublic).toHaveBeenCalledExactlyOnceWith('harbor/secret');
+      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it('should expand a public GitLab project', async () => {
+      gitlabMock.isProjectPublic.mockResolvedValue(true);
+      gitlabMock.getItem.mockResolvedValue({
+        kind: 'issues',
+        title: 'Quoted posts',
+        url: 'https://gitlab.futo.org/harbor/harbor/-/issues/310',
+        updatedAt: new Date(0),
+      });
+
+      await direct('https://gitlab.futo.org/harbor/harbor/-/issues/310');
+
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+        [12],
+        '[Issue] Quoted posts ([harbor/harbor#310](https://gitlab.futo.org/harbor/harbor/-/issues/310))',
+      );
+    });
+
+    it('should expand the public repositories of a message and leave out the private ones', async () => {
+      await direct(`#4242 futo-org/secret#7 ${PRIVATE_PERMALINK} ${PERMALINK}`);
+
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledOnce();
+      const [[, content]] = zulipMock.sendDirectMessage.mock.calls;
+      expect(content).toContain('immich-app/immich/pull/4242');
+      expect(content).toContain('immich-app/immich @ main');
+      expect(content).not.toContain('secret');
+    });
+
+    it('should count a repository whose visibility cannot be read as private, and read it again next time', async () => {
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      githubMock.isRepositoryPublic.mockRejectedValueOnce(new Error('GitHub is down'));
+
+      await direct(`octokit/rest.js#5 ${'https://github.com/octokit/rest.js/blob/main/src/index.ts#L1'}`);
+
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getRepositoryFileContent).not.toHaveBeenCalled();
+      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        'Could not read whether octokit/rest.js is public, so it counts as private',
+        expect.any(Error),
+      );
+
+      await direct('octokit/rest.js#5');
+
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith('octokit', 'rest.js', 5, undefined, false);
+      warn.mockRestore();
+    });
+
+    it('should mirror x.com links in a direct message too', async () => {
+      await direct('https://x.com/immich/status/1');
+
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith([12], 'https://nitter.net/immich/status/1');
+    });
+
+    it.each(['link #4242', 'unlink', '@**Immich** link #4242', 'discord-unlink'])(
+      'should leave the direct message command %j to the command service',
+      async (content) => {
+        await direct(content);
+
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should expand a message that only looks like a command', async () => {
+      await direct('link #4242 please');
+
+      expect(zulipMock.sendDirectMessage).toHaveBeenCalledOnce();
+    });
+
+    it('should answer nothing while its own account is unknown, since it cannot leave itself out', async () => {
+      zulipServiceMock.ownUser = undefined;
+
+      await direct('see #4242');
+
+      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it('should leave the stream path as it was: privileged, without a visibility check', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: `futo-org/secret#7 ${PRIVATE_PERMALINK}` }));
+
+      expect(githubMock.isRepositoryPublic).not.toHaveBeenCalled();
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'secret', 7, undefined, true);
+      expect(githubMock.getRepositoryFileContent).toHaveBeenCalledExactlyOnceWith(
+        'futo-org',
+        'secret',
+        'main',
+        'src/app.ts',
+        true,
+      );
+      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it("should be subscribed without other bots' messages, so a bot's direct message never reaches it", async () => {
+      await sut.init();
+
+      expect(zulipServiceMock.onMessage).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
     });
   });
 });

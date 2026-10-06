@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { GraphqlResponseError } from '@octokit/graphql';
 import { GithubRepository } from 'src/repositories/github.repository';
 import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -34,6 +35,51 @@ describe(GithubRepository.name, () => {
 
       expect(await sut.getLatestReleaseTag('immich-app', 'immich')).toBeUndefined();
       expect(warn).toHaveBeenCalledExactlyOnceWith('The latest release of immich-app/immich is tagged on no commit');
+    });
+  });
+
+  describe('isRepositoryPublic', () => {
+    it.each([
+      { visibility: 'PUBLIC', expected: true },
+      { visibility: 'PRIVATE', expected: false },
+      { visibility: 'INTERNAL', expected: false },
+    ])('should resolve to $expected for a $visibility repository', async ({ visibility, expected }) => {
+      graphql.mockResolvedValue({ repository: { visibility } });
+
+      expect(await sut.isRepositoryPublic({ org: 'immich-app', repo: 'immich' })).toBe(expected);
+      expect(graphql).toHaveBeenCalledWith(expect.stringContaining('visibility'), {
+        org: 'immich-app',
+        repo: 'immich',
+      });
+    });
+
+    it('should resolve to false for a repository GitHub does not show', async () => {
+      graphql.mockRejectedValue(
+        new GraphqlResponseError(
+          { method: 'POST', url: '/graphql' },
+          {},
+          {
+            data: { repository: null },
+            errors: [
+              {
+                type: 'NOT_FOUND',
+                message: 'Not found',
+                locations: [{ line: 1, column: 1 }],
+                path: ['repository'],
+                extensions: {},
+              },
+            ],
+          },
+        ),
+      );
+
+      expect(await sut.isRepositoryPublic({ org: 'futo-org', repo: 'secret' })).toBe(false);
+    });
+
+    it('should throw when GitHub cannot be read', async () => {
+      graphql.mockRejectedValue(new Error('GitHub is down'));
+
+      await expect(sut.isRepositoryPublic({ org: 'immich-app', repo: 'immich' })).rejects.toThrow('GitHub is down');
     });
   });
 

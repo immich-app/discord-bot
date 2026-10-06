@@ -27,7 +27,7 @@ import {
   sameRepository,
 } from 'src/services/zulip-expander.service';
 import { ZulipService, isBotSender } from 'src/services/zulip.service';
-import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
+import { Arguments, ParseResult, parseCommand, parseDirectCommand, splitArguments } from 'src/zulip-command-parser';
 
 const SIMILAR_LOOKBACK = 10;
 const ECHO_LENGTH = 80;
@@ -401,34 +401,30 @@ export class ZulipCommandService {
   }
 
   /**
-   * Only `link <code>` and `unlink` are taken in a direct message, exactly as typed, so that nothing else said to the
-   * bot, in a group conversation too, gets an answer. The answer goes to the sender alone.
+   * Only `link <code>` and `unlink` are taken in a direct message, exactly as typed (`parseDirectCommand`), so that
+   * nothing else said to the bot, in a group conversation too, is answered as a command; the expanders leave such a
+   * message alone. The answer goes to the sender alone.
    */
   private async onDirectMessage(message: ZulipReceivedMessage) {
-    const parsed = parseCommand(message.content, this.zulipService.ownUser?.fullName ?? '');
-    const tokens = parsed.status === 'ok' ? [parsed.command.name, ...parsed.command.tokens] : tokenize(message.content);
-    if (parsed.status === 'malformed' || !tokens) {
+    const command = parseDirectCommand(message.content, this.zulipService.ownUser?.fullName ?? '');
+    if (!command) {
       return;
     }
-    const [name = '', ...args] = tokens;
-    const command = name.toLowerCase();
-    let run: (() => Promise<string>) | undefined;
-    if ((command === 'link' || command === 'discord-link') && args.length === 1) {
-      run = () =>
-        this.mirrorLinks.redeemIdentityCode({ id: message.senderId, fullName: message.senderFullName }, args[0]);
-    } else if ((command === 'unlink' || command === 'discord-unlink') && args.length === 0) {
-      run = () => this.mirrorLinks.unlinkIdentity({ zulipUserId: message.senderId }, 'zulip');
-    }
-    if (!run) {
-      return;
-    }
+    const run =
+      command.kind === 'link'
+        ? () =>
+            this.mirrorLinks.redeemIdentityCode(
+              { id: message.senderId, fullName: message.senderFullName },
+              command.code,
+            )
+        : () => this.mirrorLinks.unlinkIdentity({ zulipUserId: message.senderId }, 'zulip');
 
     let reply: string;
     try {
       reply = await run();
     } catch (error) {
-      this.logger.error(`The Zulip direct message command ${command} failed on message ${message.id}`, error);
-      reply = `${code(command)} failed: ${describeError(error)}`;
+      this.logger.error(`The Zulip direct message command ${command.name} failed on message ${message.id}`, error);
+      reply = `${code(command.name)} failed: ${describeError(error)}`;
     }
     try {
       await this.zulip.sendDirectMessage([message.senderId], fit(reply));

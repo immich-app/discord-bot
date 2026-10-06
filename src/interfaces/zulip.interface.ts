@@ -69,6 +69,8 @@ export type ZulipReceivedMessage = {
   /** Seconds since the epoch. */
   timestamp: number;
   movedAt?: number;
+  /** A direct message's participants, the sender and the bot included. */
+  recipientIds?: number[];
 };
 
 export type ZulipMessageUpdated = {

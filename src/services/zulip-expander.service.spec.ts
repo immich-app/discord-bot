@@ -10,7 +10,7 @@ import {
   gitlabPath,
   isGitlabRepository,
 } from 'src/services/zulip-expander.service';
-import { beforeEach, describe, expect, it, vitest } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 type Tables = { groups: ZulipExpanderGroup[]; streams: ZulipExpander[]; defaults: ZulipExpanderDefault[] };
 
@@ -118,8 +118,11 @@ describe(ZulipExpanderService.name, () => {
   let tables: Tables;
   let database: ReturnType<typeof fakeDatabase>;
   let sut: ZulipExpanderService;
-  let github: { getOwnerRepositories: ReturnType<typeof vitest.fn> };
-  let gitlab: { getGroupProjects: ReturnType<typeof vitest.fn> };
+  let github: {
+    getOwnerRepositories: ReturnType<typeof vitest.fn>;
+    isRepositoryPublic: ReturnType<typeof vitest.fn>;
+  };
+  let gitlab: { getGroupProjects: ReturnType<typeof vitest.fn>; isProjectPublic: ReturnType<typeof vitest.fn> };
 
   beforeEach(async () => {
     tables = {
@@ -132,8 +135,8 @@ describe(ZulipExpanderService.name, () => {
       defaults: [],
     };
     database = fakeDatabase(tables);
-    github = { getOwnerRepositories: vitest.fn() };
-    gitlab = { getGroupProjects: vitest.fn() };
+    github = { getOwnerRepositories: vitest.fn(), isRepositoryPublic: vitest.fn().mockResolvedValue(true) };
+    gitlab = { getGroupProjects: vitest.fn(), isProjectPublic: vitest.fn().mockResolvedValue(true) };
     sut = newSut();
     await sut.init();
   });
@@ -204,6 +207,78 @@ describe(ZulipExpanderService.name, () => {
       expect(scope.threshold('futo-org/fhs-core')).toBe(0);
       expect(scope.threshold('someone/else')).toBe(0);
     });
+  });
+
+  describe('getDirectScope', () => {
+    it('should resolve a bare #N to immich-app/immich, with the highest threshold of the groups that hold it', () => {
+      const scope = sut.getDirectScope();
+
+      expect(scope.repositories).toEqual(['immich-app/immich']);
+      expect(scope.defaultRepository).toBe('immich-app/immich');
+      expect(scope.threshold('immich-app/immich')).toBe(1000);
+    });
+
+    it('should have no threshold when no group holds immich-app/immich', async () => {
+      await sut.deleteGroup('immich');
+      await sut.deleteGroup('apps');
+
+      expect(sut.getDirectScope().threshold('immich-app/immich')).toBe(0);
+    });
+
+    it('should allow only the repositories isPublic says are public', async () => {
+      github.isRepositoryPublic.mockResolvedValue(false);
+
+      expect(await sut.getDirectScope().allows?.('futo-org/secret')).toBe(false);
+      expect(github.isRepositoryPublic).toHaveBeenCalledExactlyOnceWith({ org: 'futo-org', repo: 'secret' });
+    });
+  });
+
+  describe('isPublic', () => {
+    afterEach(() => {
+      vitest.useRealTimers();
+      vitest.restoreAllMocks();
+    });
+
+    it('should ask GitHub for a GitHub repository and GitLab for a GitLab project', async () => {
+      gitlab.isProjectPublic.mockResolvedValue(false);
+
+      expect(await sut.isPublic('immich-app/immich')).toBe(true);
+      expect(await sut.isPublic('gitlab.futo.org/harbor/secret')).toBe(false);
+      expect(github.isRepositoryPublic).toHaveBeenCalledExactlyOnceWith({ org: 'immich-app', repo: 'immich' });
+      expect(gitlab.isProjectPublic).toHaveBeenCalledExactlyOnceWith('harbor/secret');
+    });
+
+    it('should cache the answer for ten minutes, whatever the case, and read it again after', async () => {
+      vitest.useFakeTimers();
+
+      await sut.isPublic('immich-app/immich');
+      await sut.isPublic('Immich-App/Immich');
+      expect(github.isRepositoryPublic).toHaveBeenCalledOnce();
+
+      vitest.advanceTimersByTime(10 * 60 * 1000);
+      await sut.isPublic('immich-app/immich');
+      expect(github.isRepositoryPublic).toHaveBeenCalledTimes(2);
+    });
+
+    it('should count a repository whose visibility cannot be read as private, and not cache that', async () => {
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      gitlab.isProjectPublic.mockRejectedValueOnce(new Error('GitLab answered 502'));
+
+      expect(await sut.isPublic('gitlab.futo.org/harbor/harbor')).toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        'Could not read whether gitlab.futo.org/harbor/harbor is public, so it counts as private',
+        expect.any(Error),
+      );
+      expect(await sut.isPublic('gitlab.futo.org/harbor/harbor')).toBe(true);
+    });
+
+    it.each(['immich', 'a/b/c', '/immich'])(
+      'should count %j, which names no GitHub repository, as private',
+      async (name) => {
+        expect(await sut.isPublic(name)).toBe(false);
+        expect(github.isRepositoryPublic).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('should create a group, resolving to whether the name was free', async () => {

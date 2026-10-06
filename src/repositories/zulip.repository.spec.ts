@@ -719,7 +719,14 @@ describe('ZulipRepository', () => {
               id: 5,
               type: 'message',
               flags: [],
-              message: { id: 501, sender_id: 12, type: 'private', display_recipient: [], subject: '', content: 'hi' },
+              message: {
+                id: 501,
+                sender_id: 12,
+                type: 'private',
+                display_recipient: [{ id: 12 }, { id: 99 }],
+                subject: '',
+                content: 'hi',
+              },
             },
           ],
         }),
@@ -741,6 +748,7 @@ describe('ZulipRepository', () => {
             content: 'see #4242',
             timestamp: 1_700_000_000,
             movedAt: undefined,
+            recipientIds: undefined,
           },
         },
         {
@@ -757,6 +765,7 @@ describe('ZulipRepository', () => {
             content: 'hi',
             timestamp: 0,
             movedAt: undefined,
+            recipientIds: [12, 99],
           },
         },
       ]);

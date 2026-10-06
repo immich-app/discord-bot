@@ -819,6 +819,17 @@ describe('ZulipService', () => {
         expect(polls[1].queue.lastEventId).toBe(13);
       });
 
+      it("should hand a direct message from another bot, or the bot's own, to no handler without withBots", async () => {
+        polls[0].resolve([
+          messageEvent(9, { id: 9, type: 'private', senderId: 30, senderEmail: 'ci-bot@zulip.example.com' }),
+          messageEvent(10, { id: 10, type: 'private', senderId: OWN_USER_ID }),
+          messageEvent(11, { id: 11, type: 'private', streamId: undefined }),
+        ]);
+        await nextPoll();
+
+        expect(handler.mock.calls.map(([message]) => message.id)).toEqual([11]);
+      });
+
       it('should log a handler that throws and keep going, to the next handler and the next poll', async () => {
         const second = vitest.fn<(message: ZulipReceivedMessage) => Promise<void>>();
         sut.onMessage(second);

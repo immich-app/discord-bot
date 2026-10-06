@@ -65,6 +65,29 @@ export const parseCommand = (content: string, botName: string): ParseResult => {
   return { status: 'ok', command: { name: name.toLowerCase(), tokens: rest } };
 };
 
+/** `name` is the command as typed, lower-cased: `discord-link` and `discord-unlink` are `link` and `unlink` too. */
+export type DirectCommand = { kind: 'link'; name: string; code: string } | { kind: 'unlink'; name: string };
+
+/**
+ * `link <code>` or `unlink` alone, with or without a mention first: the only commands a direct message takes, so
+ * that nothing else said to the bot is taken for one.
+ */
+export const parseDirectCommand = (content: string, botName: string): DirectCommand | undefined => {
+  const parsed = parseCommand(content, botName);
+  const tokens = parsed.status === 'ok' ? [parsed.command.name, ...parsed.command.tokens] : tokenize(content);
+  if (parsed.status === 'malformed' || !tokens) {
+    return;
+  }
+  const [typed = '', ...args] = tokens;
+  const name = typed.toLowerCase();
+  if ((name === 'link' || name === 'discord-link') && args.length === 1) {
+    return { kind: 'link', name, code: args[0] };
+  }
+  if ((name === 'unlink' || name === 'discord-unlink') && args.length === 0) {
+    return { kind: 'unlink', name };
+  }
+};
+
 export const splitArguments = (tokens: string[], keys: string[]): Arguments => {
   const args: string[] = [];
   const options: Record<string, string> = {};

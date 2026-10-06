@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { Constants } from 'src/constants';
+import { Constants, GithubOrg, GithubRepo } from 'src/constants';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
@@ -8,7 +8,7 @@ import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 /** `repositories` holds repositories and patterns, `owner/*` or `gitlab.futo.org/namespace/*`. */
 export type ExpanderGroup = { name: string; repositories: string[]; threshold: number };
 
-/** What GitHub expansion resolves `#123` and `repo#123` against in one stream. */
+/** What GitHub expansion resolves `#123` and `repo#123` against in one stream, or in direct messages. */
 export type ExpanderScope = {
   /** `owner/name`, every repository of the stream's groups, patterns expanded, in the order the groups were turned on. */
   repositories: string[];
@@ -16,6 +16,8 @@ export type ExpanderScope = {
   defaultRepository?: string;
   /** A bare `#123` below this expands only for a pull request updated in the last two weeks. */
   threshold: (repository: string) => number;
+  /** When set, a repository expands, link, reference or permalink, only once this resolves to `true` for it. */
+  allows?: (repository: string) => Promise<boolean>;
 };
 
 type Cache = {
@@ -28,6 +30,12 @@ type Cache = {
 export const sameRepository = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 const GITLAB_PREFIX = `${Constants.Gitlab.Host}/`;
+
+/** What a bare `#123` means in a direct message. */
+const DIRECT_MESSAGE_REPOSITORY = `${GithubOrg.ImmichApp}/${GithubRepo.Immich}`;
+
+/** How long a repository's visibility is trusted once read. */
+const VISIBILITY_MAX_AGE_MS = 10 * 60 * 1000;
 
 export const isGitlabRepository = (repository: string) => repository.toLowerCase().startsWith(GITLAB_PREFIX);
 
@@ -71,6 +79,8 @@ export class ZulipExpanderService {
   private writes: Promise<unknown> = Promise.resolve();
   /** The repositories of each pattern, by the pattern in lower case, as last read. */
   private patterns = new Map<string, string[]>();
+  /** Whether each repository is public, by the repository in lower case, as last read. */
+  private visibility = new Map<string, { isPublic: Promise<boolean>; readAt: number }>();
 
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
@@ -192,6 +202,64 @@ export class ZulipExpanderService {
             .map((entry) => entry.group.threshold),
         ),
     };
+  }
+
+  /**
+   * Anyone in the realm can message the bot, so a direct message expands public repositories alone: a bare `#123` is
+   * `immich-app/immich`'s, below the highest threshold of the groups that hold it as in a stream, and links,
+   * references and permalinks expand once `isPublic` says their repository is.
+   */
+  getDirectScope(): ExpanderScope {
+    const threshold = Math.max(
+      0,
+      ...this.getGroups()
+        .filter((group) => hasRepository(this.getRepositories(group), DIRECT_MESSAGE_REPOSITORY))
+        .map((group) => group.threshold),
+    );
+    return {
+      repositories: [DIRECT_MESSAGE_REPOSITORY],
+      defaultRepository: DIRECT_MESSAGE_REPOSITORY,
+      threshold: () => threshold,
+      allows: (repository) => this.isPublic(repository),
+    };
+  }
+
+  /**
+   * Whether GitHub or GitLab shows the repository to everyone, cached for ten minutes; one whose visibility cannot be
+   * read counts as private, and is read again the next time.
+   */
+  isPublic(repository: string) {
+    const key = repository.toLowerCase();
+    const now = Date.now();
+    const cached = this.visibility.get(key);
+    if (cached && now - cached.readAt < VISIBILITY_MAX_AGE_MS) {
+      return cached.isPublic;
+    }
+    for (const [stale, { readAt }] of this.visibility) {
+      if (now - readAt >= VISIBILITY_MAX_AGE_MS) {
+        this.visibility.delete(stale);
+      }
+    }
+    const entry = {
+      readAt: now,
+      isPublic: this.readVisibility(repository).catch((error: unknown) => {
+        this.logger.warn(`Could not read whether ${repository} is public, so it counts as private`, error);
+        if (this.visibility.get(key) === entry) {
+          this.visibility.delete(key);
+        }
+        return false;
+      }),
+    };
+    this.visibility.set(key, entry);
+    return entry.isPublic;
+  }
+
+  private async readVisibility(repository: string) {
+    if (isGitlabRepository(repository)) {
+      return this.gitlab.isProjectPublic(gitlabPath(repository));
+    }
+    const [org, repo, ...rest] = repository.split('/');
+    return !!org && !!repo && rest.length === 0 && this.github.isRepositoryPublic({ org, repo });
   }
 
   /** Resolves to whether it was created, `false` when the name is taken. */

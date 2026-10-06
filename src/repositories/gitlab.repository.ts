@@ -59,6 +59,11 @@ export class GitlabRepository implements IGitlabInterface {
     return project?.path_with_namespace;
   }
 
+  async isProjectPublic(path: string) {
+    const project = await this.request<{ visibility?: string }>(`/projects/${encodeURIComponent(path)}`);
+    return project?.visibility === 'public';
+  }
+
   async getGroupProjects(path: string) {
     const group = await this.request<{ id: number; full_path: string }>(`/groups/${encodeURIComponent(path)}`);
     if (!group) {
