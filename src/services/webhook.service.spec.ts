@@ -896,31 +896,78 @@ describe(WebhookService.name, () => {
     };
 
     it.each([
-      { name: 'pull_request', payload: { action: 'opened', pull_request: makePullRequest() } },
+      'pull_request',
+      'pull_request_review',
+      'pull_request_review_comment',
+      'pull_request_review_thread',
+    ] as const)(
+      "should record another allowed organization's pull request from a %s event, and post nothing",
+      async (name) => {
+        await sut.onGithub(
+          githubEvent(name, { action: 'submitted', sender, repository: futoRepo, pull_request: makePullRequest() }),
+          'github-slug',
+        );
+
+        expect(databaseMock.upsertPullRequest).toHaveBeenCalledExactlyOnceWith({
+          nodeId: 'PR_node_1234',
+          number: 1234,
+          organization: 'futo-org',
+          repository: 'grayjay',
+          updatedAt: '2026-01-01T00:00:00Z',
+        });
+        expect(sent()).toEqual({ discord: [], zulip: [] });
+      },
+    );
+
+    it.each([
       { name: 'issues', payload: { action: 'opened', issue } },
       { name: 'discussion', payload: { action: 'created', discussion } },
       { name: 'release', payload: { action: 'published', release: makeRelease() } },
       { name: 'workflow_run', payload: { action: 'completed', workflow_run: workflowRun } },
-    ] as const)("should record and post nothing for another organization's $name event", async ({ name, payload }) => {
-      await sut.onGithub(githubEvent(name, { ...payload, sender, repository: futoRepo }), 'github-slug');
+    ] as const)(
+      "should record and post nothing for another allowed organization's $name event",
+      async ({ name, payload }) => {
+        await sut.onGithub(githubEvent(name, { ...payload, sender, repository: futoRepo }), 'github-slug');
 
-      expect(databaseMock.upsertPullRequest).not.toHaveBeenCalled();
-      expect(githubMock.getCheckSuiteTriggerCommit).not.toHaveBeenCalled();
-      expect(sent()).toEqual({ discord: [], zulip: [] });
-    });
+        expect(databaseMock.upsertPullRequest).not.toHaveBeenCalled();
+        expect(githubMock.getCheckSuiteTriggerCommit).not.toHaveBeenCalled();
+        expect(sent()).toEqual({ discord: [], zulip: [] });
+      },
+    );
 
-    it('should record a pull request of immich-app', async () => {
+    it('should record nothing for an organization outside the allowed owners', async () => {
       await sut.onGithub(
         githubEvent('pull_request', {
-          action: 'edited',
+          action: 'opened',
           sender,
-          repository: immichRepo,
+          repository: unrelatedRepo,
           pull_request: makePullRequest(),
         }),
         'github-slug',
       );
 
-      expect(databaseMock.upsertPullRequest).toHaveBeenCalledOnce();
+      expect(databaseMock.upsertPullRequest).not.toHaveBeenCalled();
+      expect(sent()).toEqual({ discord: [], zulip: [] });
+    });
+
+    it.each([
+      'pull_request',
+      'pull_request_review',
+      'pull_request_review_comment',
+      'pull_request_review_thread',
+    ] as const)('should record a pull request of immich-app from a %s event the same way', async (name) => {
+      await sut.onGithub(
+        githubEvent(name, { action: 'edited', sender, repository: immichRepo, pull_request: makePullRequest() }),
+        'github-slug',
+      );
+
+      expect(databaseMock.upsertPullRequest).toHaveBeenCalledExactlyOnceWith({
+        nodeId: 'PR_node_1234',
+        number: 1234,
+        organization: 'immich-app',
+        repository: 'immich',
+        updatedAt: '2026-01-01T00:00:00Z',
+      });
     });
   });
 

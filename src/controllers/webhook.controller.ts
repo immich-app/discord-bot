@@ -10,7 +10,7 @@ import { WebhookService } from 'src/services/webhook.service';
 export class WebhookController {
   constructor(private service: WebhookService) {}
 
-  @Post('github/:slug')
+  @Post('github-app/:slug')
   async onGithub(
     @Headers('x-github-delivery') id: EmitterWebhookEvent['id'],
     @Headers('x-github-event') name: EmitterWebhookEvent['name'],

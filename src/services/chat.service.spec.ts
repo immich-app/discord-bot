@@ -487,7 +487,7 @@ describe('Bot test', () => {
       await expect(sut.handleGithubThreadReferences({ content: '#4242' }, false)).resolves.toEqual([
         'https://github.com/immich-app/immich/pull/4242',
       ]);
-      expect(databaseMock.getLatestPullRequestByNumber).toHaveBeenCalledWith(4242);
+      expect(databaseMock.getLatestPullRequestByNumber).toHaveBeenCalledWith(4242, 'immich-app');
       expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
     });
   });
