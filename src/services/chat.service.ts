@@ -289,25 +289,38 @@ export class ChatService {
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
   }
 
-  async onZulipMessage({ type, streamId, topic, content }: ZulipReceivedMessage) {
-    if (type !== 'stream' || streamId === undefined) {
+  async onZulipMessage({ type, streamId, topic, content, recipientIds = [] }: ZulipReceivedMessage) {
+    let reply: (content: string) => Promise<unknown>;
+    let scope: ExpanderScope;
+    if (type === 'private') {
+      const others = recipientIds.filter((userId) => userId !== this.zulipService.ownUser?.userId);
+      // Private repositories expand too, so a conversation with a guest gets nothing.
+      const guests = await Promise.all(others.map((userId) => this.zulipService.isGuest(userId)));
+      if (others.length === 0 || guests.includes(true)) {
+        return;
+      }
+      reply = (content) => this.zulip.sendDirectMessage(others, content);
+      scope = LINKS_ONLY;
+    } else if (streamId === undefined) {
       return;
+    } else {
+      reply = (content) => this.zulip.sendMessage({ stream: streamId, topic, content });
+      scope = this.zulipExpanders.getScope(streamId) ?? LINKS_ONLY;
     }
 
     // One failing lookup must not cost the reply the rest; the failure still reaches the event loop's log.
-    const [expansions] = await Promise.allSettled([this.zulipExpansions(streamId, content)]);
+    const [expansions] = await Promise.allSettled([this.zulipExpansions(scope, content)]);
     const parts = [...(expansions.status === 'fulfilled' ? expansions.value : []), ...emojiImages(content)];
 
     if (parts.length !== 0) {
-      await this.zulip.sendMessage({ stream: streamId, topic, content: parts.join('\n') });
+      await reply(parts.join('\n'));
     }
     if (expansions.status === 'rejected') {
       throw expansions.reason;
     }
   }
 
-  private async zulipExpansions(streamId: number, content: string) {
-    const scope = this.zulipExpanders.getScope(streamId) ?? LINKS_ONLY;
+  private async zulipExpansions(scope: ExpanderScope, content: string) {
     // Snippets are not neutralised: Zulip renders no mention inside a code fence,
     // and a zero-width space would corrupt the code.
     const firstPermalinks = [

@@ -156,8 +156,12 @@ const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
   getOrder: vitest.fn(),
 });
 
+const BOT_USER_ID = 99;
+
 const newZulipServiceMock = () => ({
   onMessage: vitest.fn<(handler: ZulipMessageHandler) => void>(),
+  ownUser: { userId: BOT_USER_ID, fullName: 'FUBot' },
+  isGuest: vitest.fn<(userId: number) => Promise<boolean>>().mockResolvedValue(false),
 });
 
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
@@ -1823,6 +1827,70 @@ describe('Bot test', () => {
         [54, 107, 108, 109, 110, 111, 112, 113, 120].map((streamId) => expanderRow(streamId)),
       );
       await zulipExpanders.init();
+    });
+
+    describe('direct messages', () => {
+      const LINK = 'https://github.com/futo-org/fhs-core/pull/7';
+      const direct = (recipientIds: number[], content: string) =>
+        sut.onZulipMessage(zulipMessage({ type: 'private', streamId: undefined, topic: '', recipientIds, content }));
+
+      beforeEach(() => {
+        zulipMock.sendDirectMessage.mockResolvedValue({ id: 902 });
+        githubMock.getIssueOrPrMessage.mockResolvedValue('[Pull Request] Fix (futo-org/fhs-core#7)');
+      });
+
+      it('should expand a link in a direct message, answering the sender', async () => {
+        await direct([BOT_USER_ID, 12], LINK);
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'futo-org',
+          'fhs-core',
+          7,
+          undefined,
+          true,
+        );
+        expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+          [12],
+          '[Pull Request] Fix (futo-org/fhs-core#7)',
+        );
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should answer everyone in a group direct message', async () => {
+        await direct([12, BOT_USER_ID, 13], `${LINK} :we-are-checking:`);
+
+        expect(zulipServiceMock.isGuest.mock.calls).toEqual([[12], [13]]);
+        expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+          [12, 13],
+          '[Pull Request] Fix (futo-org/fhs-core#7)\nhttps://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg',
+        );
+      });
+
+      it('should expand nothing in a conversation with a guest', async () => {
+        zulipServiceMock.isGuest.mockImplementation((userId) => Promise.resolve(userId === 13));
+
+        await direct([12, BOT_USER_ID, 13], `${LINK} :we-are-checking:`);
+
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+      });
+
+      it('should expand nothing when a role cannot be read', async () => {
+        zulipServiceMock.isGuest.mockRejectedValue(new Error('Zulip is down'));
+
+        await expect(direct([12, BOT_USER_ID], LINK)).rejects.toThrow('Zulip is down');
+
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+      });
+
+      it('should give no shorthand a meaning in a direct message', async () => {
+        await direct([BOT_USER_ID, 12], '#4242 immich#12');
+
+        expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+      });
     });
 
     describe('emoji images', () => {

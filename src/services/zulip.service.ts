@@ -62,6 +62,12 @@ const describeZulipStream = (streamId: number) => {
   return name ? `${streamId} (${name})` : `${streamId}`;
 };
 
+/** Zulip's role for a guest; see `ZulipUserDetails`. */
+const ZULIP_GUEST_ROLE = 600;
+
+/** A user's role is read again once this old: it rarely changes, and every direct message asks for its users'. */
+const ROLE_MAX_AGE_MS = 10 * 60 * 1000;
+
 @Injectable()
 export class ZulipService implements OnModuleDestroy {
   private logger = new Logger(ZulipService.name);
@@ -73,6 +79,7 @@ export class ZulipService implements OnModuleDestroy {
   private queue?: ZulipEventQueue;
   private registration?: Promise<unknown>;
   private self?: ZulipUser;
+  private roles = new Map<number, { role: Promise<number>; readAt: number }>();
   private emptyTopic?: string;
   private loop?: { promise: Promise<void>; controller: AbortController };
 
@@ -114,6 +121,18 @@ export class ZulipService implements OnModuleDestroy {
 
   get ownUser(): ZulipUser | undefined {
     return this.self;
+  }
+
+  /** A role that cannot be read rejects, and is asked for again next time. */
+  async isGuest(userId: number) {
+    let cached = this.roles.get(userId);
+    if (!cached || Date.now() - cached.readAt >= ROLE_MAX_AGE_MS) {
+      const entry = { role: this.zulip.getUser(userId).then(({ role }) => role), readAt: Date.now() };
+      entry.role.catch(() => this.roles.get(userId) === entry && this.roles.delete(userId));
+      this.roles.set(userId, entry);
+      cached = entry;
+    }
+    return (await cached.role) === ZULIP_GUEST_ROLE;
   }
 
   /** The realm's name for the empty topic in the messages handlers receive, known once a queue is registered. */

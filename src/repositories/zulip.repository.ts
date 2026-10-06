@@ -534,6 +534,9 @@ const toReceivedMessage = (message: components['schemas']['MessagesBase']): Zuli
   senderFullName: message.sender_full_name ?? '',
   type: message.type === 'private' ? 'private' : 'stream',
   streamId: message.stream_id,
+  recipientIds: Array.isArray(message.display_recipient)
+    ? message.display_recipient.flatMap(({ id }) => (id === undefined ? [] : [id]))
+    : undefined,
   topic: message.subject ?? '',
   content: message.content ?? '',
   timestamp: message.timestamp ?? 0,

@@ -64,6 +64,8 @@ export type ZulipReceivedMessage = {
   senderFullName: string;
   type: 'stream' | 'private';
   streamId?: number;
+  /** A direct message's users, the sender and the bot included. */
+  recipientIds?: number[];
   topic: string;
   content: string;
   /** Seconds since the epoch. */

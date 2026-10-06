@@ -155,6 +155,44 @@ describe('ZulipService', () => {
     expect(sut).toBeDefined();
   });
 
+  describe('isGuest', () => {
+    const user = (userId: number, role: number) => ({ userId, fullName: `User ${userId}`, role });
+
+    afterEach(() => {
+      vitest.useRealTimers();
+    });
+
+    it('should tell a guest from a member by their role', async () => {
+      zulipMock.getUser.mockImplementation((userId) => Promise.resolve(user(userId, userId === 7 ? 600 : 400)));
+
+      await expect(sut.isGuest(7)).resolves.toBe(true);
+      await expect(sut.isGuest(8)).resolves.toBe(false);
+    });
+
+    it('should read a role once in ten minutes', async () => {
+      vitest.useFakeTimers();
+      zulipMock.getUser.mockResolvedValue(user(7, 400));
+
+      await sut.isGuest(7);
+      vitest.advanceTimersByTime(9 * 60 * 1000);
+      await sut.isGuest(7);
+      expect(zulipMock.getUser).toHaveBeenCalledOnce();
+
+      zulipMock.getUser.mockResolvedValue(user(7, 600));
+      vitest.advanceTimersByTime(60 * 1000);
+      await expect(sut.isGuest(7)).resolves.toBe(true);
+      expect(zulipMock.getUser).toHaveBeenCalledTimes(2);
+    });
+
+    it('should read a role that could not be read again next time', async () => {
+      zulipMock.getUser.mockRejectedValueOnce(new Error('Zulip is down'));
+      zulipMock.getUser.mockResolvedValueOnce(user(7, 600));
+
+      await expect(sut.isGuest(7)).rejects.toThrow('Zulip is down');
+      await expect(sut.isGuest(7)).resolves.toBe(true);
+    });
+  });
+
   describe('notifyHoliday', () => {
     it("should look up US holidays for tomorrow's year", async () => {
       await sut.notifyHoliday();
