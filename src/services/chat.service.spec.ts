@@ -2151,18 +2151,28 @@ describe('Bot test', () => {
       zulipMock.sendMessage.mockResolvedValue({ id: 901 });
     });
 
-    it('should ask GitHub nothing in a stream with no group on, and still mirror x.com links there', async () => {
+    it('should expand links but no shorthand in a stream with no group on, and still mirror x.com links there', async () => {
       await setUp({ groups: [FHS], streamGroups: [] });
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Pull Request] Fix (futo-org/fhs-core#7)');
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Issue] Bug (immich-app/immich#8)');
 
-      await send('#4242 fhs-core#12 https://x.com/immich/status/1');
+      await send(
+        '#4242 fhs-core#12 https://github.com/futo-org/fhs-core/pull/7 immich-app/immich#8 https://x.com/immich/status/1',
+      );
 
-      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
-      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
-      expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
+      expect(githubMock.getIssueOrPrMessage.mock.calls).toEqual([
+        ['futo-org', 'fhs-core', 7, undefined, true],
+        ['immich-app', 'immich', 8, undefined, true],
+      ]);
+      expect(databaseMock.getPullRequestsByNumber.mock.calls).toEqual([[7], [8]]);
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: STREAM,
         topic: 'thumbnails',
-        content: 'https://nitter.net/immich/status/1',
+        content: [
+          '[Pull Request] Fix (futo-org/fhs-core#7)',
+          '[Issue] Bug (immich-app/immich#8)',
+          'https://nitter.net/immich/status/1',
+        ].join('\n'),
       });
     });
 
@@ -2525,13 +2535,16 @@ describe('Bot test', () => {
         expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
       });
 
-      it('should expand no GitLab link in a stream without a group', async () => {
+      it('should expand a GitLab link in a stream without a group', async () => {
         await setUp({ groups: [FHS], streamGroups: [] });
+        withItems(located('issues', 'Quoted posts', 'harbor/harbor', 310));
 
         await send('https://gitlab.futo.org/harbor/harbor/-/issues/310');
 
-        expect(gitlabMock.getItem).not.toHaveBeenCalled();
-        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(gitlabMock.getItem).toHaveBeenCalledExactlyOnceWith('harbor/harbor', 'issues', 310);
+        expect(reply()).toEqual([
+          '[Issue] Quoted posts ([harbor/harbor#310](https://gitlab.futo.org/harbor/harbor/-/issues/310))',
+        ]);
       });
 
       it('should fetch a link repeated in another case once', async () => {
@@ -2679,6 +2692,28 @@ describe('Bot test', () => {
         gitlabMock.getFileContent.mockImplementation(async (_, givenRef, givenFile) =>
           givenRef === ref && givenFile === file ? lines : undefined,
         );
+
+      it('should post the lines of GitHub and GitLab permalinks in a stream without a group, mentions as written', async () => {
+        await setUp({ groups: [FHS], streamGroups: [] });
+        githubMock.getRepositoryFileContent.mockResolvedValueOnce(['const who = "@**all**";', 'two']);
+        fileAt('master', 'app/Main.kt', ['val who = "@**all**"', 'two']);
+
+        await send(
+          'https://github.com/immich-app/immich/blob/main/src/x.ts#L1 https://gitlab.futo.org/videostreaming/grayjay/-/blob/master/app/Main.kt#L1',
+        );
+
+        expect(githubMock.getRepositoryFileContent).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'immich',
+          'main',
+          'src/x.ts',
+          true,
+        );
+        expect(gitlabMock.getFileContent).toHaveBeenCalledWith('videostreaming/grayjay', 'master', 'app/Main.kt');
+        const [content] = reply();
+        expect(content).toContain('const who = "@**all**";');
+        expect(content).toContain('```kt\nval who = "@**all**"\n```');
+      });
 
       it.each(['#L2-4', '#L2-L4'])('should post the lines of a GitLab permalink ending %s', async (anchor) => {
         await setUp({ groups: [FHS], streamGroups: ['fhs'] });

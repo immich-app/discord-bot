@@ -30,6 +30,7 @@ import {
   findRepository,
   gitlabPath,
   isGitlabRepository,
+  LINKS_ONLY,
   sameRepository,
   ZulipExpanderService,
 } from 'src/services/zulip-expander.service';
@@ -306,30 +307,26 @@ export class ChatService {
   }
 
   private async zulipExpansions(streamId: number, content: string) {
-    const parts: string[] = [];
-    const scope = this.zulipExpanders.getScope(streamId);
-    if (scope) {
-      // Snippets are not neutralised: Zulip renders no mention inside a code fence,
-      // and a zero-width space would corrupt the code.
-      const firstPermalinks = [
-        ...[...content.matchAll(GITHUB_FILE_REGEX)].map(({ index }) => ({ index, host: 'github' })),
-        ...[...content.matchAll(GITLAB_FILE_REGEX)].map(({ index }) => ({ index, host: 'gitlab' })),
-      ]
-        .sort((a, b) => a.index - b.index)
-        .slice(0, MAX_ZULIP_FILE_REFERENCES);
-      const [githubSnippets, gitlabSnippets, links] = await Promise.all([
-        this.handleGithubFileReferences(content, true, firstPermalinks.filter(({ host }) => host === 'github').length),
-        this.handleGitlabFileReferences(content, firstPermalinks.filter(({ host }) => host === 'gitlab').length),
-        this.handleGithubThreadReferences({ content, scope }, true),
-      ]);
-      parts.push(
-        ...githubSnippets,
-        ...gitlabSnippets,
-        ...links.filter((link) => link !== undefined).map(neutraliseZulipMentions),
-      );
-    }
-    parts.push(...(await this.handleTwitterReferences(content)).map(neutraliseZulipMentions));
-    return parts;
+    const scope = this.zulipExpanders.getScope(streamId) ?? LINKS_ONLY;
+    // Snippets are not neutralised: Zulip renders no mention inside a code fence,
+    // and a zero-width space would corrupt the code.
+    const firstPermalinks = [
+      ...[...content.matchAll(GITHUB_FILE_REGEX)].map(({ index }) => ({ index, host: 'github' })),
+      ...[...content.matchAll(GITLAB_FILE_REGEX)].map(({ index }) => ({ index, host: 'gitlab' })),
+    ]
+      .sort((a, b) => a.index - b.index)
+      .slice(0, MAX_ZULIP_FILE_REFERENCES);
+    const [githubSnippets, gitlabSnippets, links, twitter] = await Promise.all([
+      this.handleGithubFileReferences(content, true, firstPermalinks.filter(({ host }) => host === 'github').length),
+      this.handleGitlabFileReferences(content, firstPermalinks.filter(({ host }) => host === 'gitlab').length),
+      this.handleGithubThreadReferences({ content, scope }, true),
+      this.handleTwitterReferences(content),
+    ]);
+    return [
+      ...githubSnippets,
+      ...gitlabSnippets,
+      ...[...links.filter((link) => link !== undefined), ...twitter].map(neutraliseZulipMentions),
+    ];
   }
 
   @Cron(Constants.Cron.ImmichBirthday)
@@ -723,6 +720,10 @@ export class ChatService {
       isPage,
     }: { owner?: string; name?: string; id: number; category?: LinkType; isPage: boolean },
   ): Promise<GithubLink | GitlabLink | undefined> {
+    if (!(owner && name) && scope.repositories.length === 0 && !scope.defaultRepository) {
+      return;
+    }
+
     const pullRequests = await this.database.getPullRequestsByNumber(id);
     const fullName = (pullRequest: PullRequest) => `${pullRequest.organization}/${pullRequest.repository}`;
 

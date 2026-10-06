@@ -18,6 +18,9 @@ export type ExpanderScope = {
   threshold: (repository: string) => number;
 };
 
+/** A stream with no group: links and `owner/name#1234` expand, a bare `#1234` or `name#1234` goes nowhere. */
+export const LINKS_ONLY: ExpanderScope = { repositories: [], threshold: () => 0 };
+
 type Cache = {
   groups: Map<string, ExpanderGroup>;
   /** Group names, in the order they were turned on in the stream. */
