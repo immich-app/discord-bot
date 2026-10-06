@@ -110,6 +110,11 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   addZulipExpander: vitest.fn(),
   removeZulipExpander: vitest.fn(),
   setZulipExpanderDefault: vitest.fn(),
+  getZulipDmExpanders: vitest.fn().mockResolvedValue([]),
+  getZulipDmExpanderDefaults: vitest.fn().mockResolvedValue([]),
+  addZulipDmExpander: vitest.fn(),
+  removeZulipDmExpander: vitest.fn(),
+  setZulipDmExpanderDefault: vitest.fn(),
   getZulipEmotes: vitest.fn().mockResolvedValue([]),
   addZulipEmote: vitest.fn(),
 });

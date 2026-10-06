@@ -2,17 +2,30 @@ import { Logger } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
-import { ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
+import {
+  ZulipDmExpander,
+  ZulipDmExpanderDefault,
+  ZulipExpander,
+  ZulipExpanderDefault,
+  ZulipExpanderGroup,
+} from 'src/schema';
 import {
   ExpanderGroupEmptyError,
   ZulipExpanderService,
   findRepository,
   gitlabPath,
   isGitlabRepository,
+  toConversationKey,
 } from 'src/services/zulip-expander.service';
 import { beforeEach, describe, expect, it, vitest } from 'vitest';
 
-type Tables = { groups: ZulipExpanderGroup[]; streams: ZulipExpander[]; defaults: ZulipExpanderDefault[] };
+type Tables = {
+  groups: ZulipExpanderGroup[];
+  streams: ZulipExpander[];
+  defaults: ZulipExpanderDefault[];
+  conversations?: ZulipDmExpander[];
+  conversationDefaults?: ZulipDmExpanderDefault[];
+};
 
 const group = (name: string, repositories: string[], threshold = 0): ZulipExpanderGroup => ({
   name,
@@ -31,8 +44,12 @@ const stream = (streamId: number, groupName: string): ZulipExpander => ({
 
 /** Keeps the rules the tables keep: a cascade from groups, and no default without a group. */
 const fakeDatabase = (tables: Tables) => {
+  const dms = { conversations: tables.conversations ?? [], defaults: tables.conversationDefaults ?? [] };
   const dropOrphanDefaults = () => {
     tables.defaults = tables.defaults.filter((row) => tables.streams.some((other) => other.streamId === row.streamId));
+    dms.defaults = dms.defaults.filter((row) =>
+      dms.conversations.some((other) => other.conversation === row.conversation),
+    );
   };
   return {
     getZulipExpanderGroups: vitest.fn(async () => structuredClone(tables.groups)),
@@ -57,6 +74,7 @@ const fakeDatabase = (tables: Tables) => {
       const before = tables.groups.length;
       tables.groups = tables.groups.filter((row) => row.name !== name);
       tables.streams = tables.streams.filter((row) => row.groupName !== name);
+      dms.conversations = dms.conversations.filter((row) => row.groupName !== name);
       dropOrphanDefaults();
       return tables.groups.length !== before;
     }),
@@ -79,8 +97,36 @@ const fakeDatabase = (tables: Tables) => {
       tables.defaults = tables.defaults.filter((row) => row.streamId !== streamId);
       tables.defaults.push({ streamId, repository, createdBy, createdAt: new Date(0) });
     }),
+    getZulipDmExpanders: vitest.fn(async () => structuredClone(dms.conversations)),
+    getZulipDmExpanderDefaults: vitest.fn(async () => structuredClone(dms.defaults)),
+    addZulipDmExpander: vitest.fn(async (conversation: string, groupName: string, createdBy: string) => {
+      if (dms.conversations.some((row) => row.conversation === conversation && row.groupName === groupName)) {
+        return false;
+      }
+      dms.conversations.push({ conversation, groupName, createdBy, createdAt: new Date(0) });
+      return true;
+    }),
+    removeZulipDmExpander: vitest.fn(async (conversation: string, groupName?: string) => {
+      const removed = dms.conversations.filter(
+        (row) => row.conversation === conversation && (groupName === undefined || row.groupName === groupName),
+      );
+      dms.conversations = dms.conversations.filter((row) => !removed.includes(row));
+      dropOrphanDefaults();
+      return removed.map((row) => row.groupName);
+    }),
+    setZulipDmExpanderDefault: vitest.fn(async (conversation: string, repository: string, createdBy: string) => {
+      dms.defaults = dms.defaults.filter((row) => row.conversation !== conversation);
+      dms.defaults.push({ conversation, repository, createdBy, createdAt: new Date(0) });
+    }),
   } satisfies Partial<Record<keyof IDatabaseRepository, unknown>>;
 };
+
+describe('toConversationKey', () => {
+  it('should name a conversation by its users, ascending, once each, whatever order they come in', () => {
+    expect(toConversationKey([99, 13, 12, 13])).toBe('12,13,99');
+    expect(toConversationKey([12, 99])).toBe(toConversationKey([99, 12]));
+  });
+});
 
 describe('repository names', () => {
   const repositories = [
@@ -159,7 +205,7 @@ describe(ZulipExpanderService.name, () => {
     expect(sut.isEnabled(999)).toBe(false);
     expect(sut.list()).toEqual([54, 107]);
     expect(sut.getGroups().map(({ name }) => name)).toEqual(['apps', 'fhs', 'immich']);
-    expect(sut.getStreamGroups(54)).toEqual(['immich', 'fhs']);
+    expect(sut.getPlaceGroups(54)).toEqual(['immich', 'fhs']);
     expect(sut.getStreams('immich')).toEqual([54, 107]);
     expect(database.getZulipExpanderGroups).toHaveBeenCalledOnce();
     expect(database.getZulipExpanders).toHaveBeenCalledOnce();
@@ -256,7 +302,7 @@ describe(ZulipExpanderService.name, () => {
 
     expect(sut.getGroup('immich')).toBeUndefined();
     expect(sut.isEnabled(107)).toBe(false);
-    expect(sut.getStreamGroups(54)).toEqual(['fhs']);
+    expect(sut.getPlaceGroups(54)).toEqual(['fhs']);
     expect(sut.getScope(54)?.defaultRepository).toBe('futo-org/fhs-core');
   });
 
@@ -273,11 +319,55 @@ describe(ZulipExpanderService.name, () => {
 
     expect(await sut.disable(54, 'fhs')).toEqual(['fhs']);
     expect(await sut.disable(54, 'fhs')).toEqual([]);
-    expect(sut.getStreamGroups(54)).toEqual(['immich']);
+    expect(sut.getPlaceGroups(54)).toEqual(['immich']);
 
     expect(await sut.disable(54)).toEqual(['immich']);
     expect(sut.isEnabled(54)).toBe(false);
     expect(sut.getDefault(54)).toBeUndefined();
+  });
+
+  describe('direct message conversations', () => {
+    const DM = '12,13,99';
+
+    it('should turn a group on in a conversation, keeping it out of the stream listings', async () => {
+      expect(await sut.enable(DM, 'fhs', 'Alice on Zulip (user 12)')).toBe(true);
+      expect(await sut.enable(DM, 'fhs', 'Alice on Zulip (user 12)')).toBe(false);
+
+      expect(database.addZulipDmExpander).toHaveBeenCalledWith(DM, 'fhs', 'Alice on Zulip (user 12)');
+      expect(database.addZulipExpander).not.toHaveBeenCalled();
+      expect(sut.getScope(DM)).toMatchObject({
+        repositories: ['futo-org/fhs-core', 'futo-org/grayjay'],
+        defaultRepository: 'futo-org/fhs-core',
+      });
+      expect(sut.list()).toEqual([54, 107]);
+      expect(sut.getStreams('fhs')).toEqual([54]);
+    });
+
+    it('should set a default and turn groups off in a conversation, dropping its default with its last group', async () => {
+      await sut.enable(DM, 'fhs', 'Alice');
+      await sut.setDefault(DM, 'futo-org/grayjay', 'Alice');
+
+      expect(database.setZulipDmExpanderDefault).toHaveBeenCalledWith(DM, 'futo-org/grayjay', 'Alice');
+      expect(sut.getScope(DM)?.defaultRepository).toBe('futo-org/grayjay');
+
+      expect(await sut.disable(DM)).toEqual(['fhs']);
+      expect(database.removeZulipDmExpander).toHaveBeenCalledWith(DM, undefined);
+      expect(sut.isEnabled(DM)).toBe(false);
+      expect(sut.getDefault(DM)).toBeUndefined();
+    });
+
+    it('should load conversations at init, and turn a deleted group off in them', async () => {
+      tables.conversations = [{ conversation: DM, groupName: 'fhs', createdBy: 'Alice', createdAt: new Date(0) }];
+      database = fakeDatabase(tables);
+      sut = newSut();
+      await sut.init();
+
+      expect(sut.getPlaceGroups(DM)).toEqual(['fhs']);
+
+      await sut.deleteGroup('fhs');
+
+      expect(sut.isEnabled(DM)).toBe(false);
+    });
   });
 
   it('should leave the cache as it was when a write fails', async () => {
@@ -323,7 +413,7 @@ describe(ZulipExpanderService.name, () => {
 
     failRead();
     expect(await sut.enable(120, 'fhs', 'Alice')).toBe(true);
-    expect(sut.getStreamGroups(120)).toEqual(['fhs']);
+    expect(sut.getPlaceGroups(120)).toEqual(['fhs']);
 
     failRead();
     await sut.setDefault(120, 'futo-org/grayjay', 'Alice');
@@ -348,7 +438,7 @@ describe(ZulipExpanderService.name, () => {
 
     failRead();
     expect(await sut.deleteGroup('immich')).toBe(true);
-    expect(sut.getStreamGroups(54)).toEqual(['fhs']);
+    expect(sut.getPlaceGroups(54)).toEqual(['fhs']);
     expect(sut.isEnabled(107)).toBe(false);
 
     expect(Logger.prototype.warn).toHaveBeenCalledTimes(7);

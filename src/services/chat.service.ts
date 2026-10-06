@@ -32,6 +32,7 @@ import {
   isGitlabRepository,
   LINKS_ONLY,
   sameRepository,
+  toConversationKey,
   ZulipExpanderService,
 } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
@@ -300,7 +301,7 @@ export class ChatService {
         return;
       }
       reply = (content) => this.zulip.sendDirectMessage(others, content);
-      scope = LINKS_ONLY;
+      scope = this.zulipExpanders.getScope(toConversationKey(recipientIds)) ?? LINKS_ONLY;
     } else if (streamId === undefined) {
       return;
     } else {

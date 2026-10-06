@@ -15,6 +15,8 @@ import {
   ScheduledMessage,
   UpdateRSSFeed,
   UpdateZulipExpanderGroup,
+  ZulipDmExpander,
+  ZulipDmExpanderDefault,
   ZulipExpander,
   ZulipExpanderDefault,
   ZulipExpanderGroup,
@@ -138,9 +140,15 @@ const newFakeDatabase = () => {
   const groups: ZulipExpanderGroup[] = [];
   const expanders: ZulipExpander[] = [];
   const defaults: ZulipExpanderDefault[] = [];
+  const conversations: ZulipDmExpander[] = [];
+  const conversationDefaults: ZulipDmExpanderDefault[] = [];
   const dropOrphanDefaults = () => {
     const kept = defaults.filter(({ streamId }) => expanders.some((row) => row.streamId === streamId));
     defaults.splice(0, defaults.length, ...kept);
+    const keptDm = conversationDefaults.filter(({ conversation }) =>
+      conversations.some((row) => row.conversation === conversation),
+    );
+    conversationDefaults.splice(0, conversationDefaults.length, ...keptDm);
   };
   const findFeed = (url: string, channelId: string, service: RSSFeed['service']) =>
     feeds.findIndex((feed) => feed.url === url && feed.channelId === channelId && feed.service === service);
@@ -150,6 +158,8 @@ const newFakeDatabase = () => {
     groups,
     expanders,
     defaults,
+    conversations,
+    conversationDefaults,
     getZulipExpanderGroups: () =>
       Promise.resolve(
         groups
@@ -184,6 +194,8 @@ const newFakeDatabase = () => {
         groups.splice(index, 1);
         const kept = expanders.filter((row) => row.groupName !== name);
         expanders.splice(0, expanders.length, ...kept);
+        const keptDm = conversations.filter((row) => row.groupName !== name);
+        conversations.splice(0, conversations.length, ...keptDm);
         dropOrphanDefaults();
       }
       return Promise.resolve(index !== -1);
@@ -210,6 +222,33 @@ const newFakeDatabase = () => {
         Object.assign(row, { repository, createdBy });
       } else {
         defaults.push({ streamId, repository, createdBy, createdAt: new Date() });
+      }
+      return Promise.resolve();
+    },
+    getZulipDmExpanders: () => Promise.resolve(conversations.map((row) => ({ ...row }))),
+    getZulipDmExpanderDefaults: () => Promise.resolve(conversationDefaults.map((row) => ({ ...row }))),
+    addZulipDmExpander: (conversation: string, groupName: string, createdBy: string) => {
+      if (conversations.some((row) => row.conversation === conversation && row.groupName === groupName)) {
+        return Promise.resolve(false);
+      }
+      conversations.push({ conversation, groupName, createdBy, createdAt: new Date() });
+      return Promise.resolve(true);
+    },
+    removeZulipDmExpander: (conversation: string, groupName?: string) => {
+      const matches = (row: ZulipDmExpander) =>
+        row.conversation === conversation && (groupName === undefined || row.groupName === groupName);
+      const removed = conversations.filter((row) => matches(row)).map((row) => row.groupName);
+      const kept = conversations.filter((row) => !matches(row));
+      conversations.splice(0, conversations.length, ...kept);
+      dropOrphanDefaults();
+      return Promise.resolve(removed);
+    },
+    setZulipDmExpanderDefault: (conversation: string, repository: string, createdBy: string) => {
+      const row = conversationDefaults.find((candidate) => candidate.conversation === conversation);
+      if (row) {
+        Object.assign(row, { repository, createdBy });
+      } else {
+        conversationDefaults.push({ conversation, repository, createdBy, createdAt: new Date() });
       }
       return Promise.resolve();
     },
@@ -2018,7 +2057,7 @@ describe('ZulipCommandService', () => {
         expect(answers()).toEqual([[[12], 'Unlinked.']]);
       });
 
-      it.each(['hello', 'link', 'link me the doc', 'unlink it please', '@**Immich** help', 'link "ABCD', ''])(
+      it.each(['hello', 'link', 'link me the doc', 'unlink it please', 'link "ABCD', ''])(
         'should say nothing to %j',
         async (content) => {
           await direct(content);
@@ -2127,6 +2166,75 @@ describe('ZulipCommandService', () => {
       await zulipExpanders.init();
     });
 
+    describe('in direct messages', () => {
+      const direct = (content: string, recipientIds: number[]) =>
+        send(content, { type: 'private', streamId: undefined, topic: '', recipientIds });
+      const answers = () => zulipMock.sendDirectMessage.mock.calls;
+      const conversations = () =>
+        database.conversations.map(({ conversation, groupName }) => `${conversation}:${groupName}`);
+
+      it('should turn a group on in a conversation with the bot alone, answering the sender', async () => {
+        await direct('expanders on fhs', [12, BOT.userId]);
+
+        expect(conversations()).toEqual(['7,12:fhs']);
+        expect(stored()).toEqual(['107:immich']);
+        expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
+        expect(answers()).toEqual([
+          [
+            [12],
+            'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` goes to `futo-org/fhs-core` here.',
+          ],
+        ]);
+      });
+
+      it('should take expanders in a group conversation only when they mention the bot, answering everyone', async () => {
+        await direct('expanders on fhs', [12, BOT.userId, 13]);
+        expect(conversations()).toEqual([]);
+
+        await direct('@**Immich** expanders on fhs', [12, BOT.userId, 13]);
+        await direct('@**Immich** expanders default fhs-web', [13, BOT.userId, 12]);
+        await direct('@**Immich** expanders off', [12, BOT.userId, 13]);
+
+        expect(answers().map(([recipients]) => recipients)).toEqual([
+          [12, 13],
+          [13, 12],
+          [12, 13],
+        ]);
+        expect(answers().map(([, content]) => content)).toEqual([
+          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` goes to `futo-org/fhs-core` here.',
+          'A bare `#1234` now goes to `futo-org/fhs-web` in this conversation.',
+          'Turned off every group in this conversation (`fhs`): links still expand here, a bare `#1234` no longer does.',
+        ]);
+        expect(conversations()).toEqual([]);
+        expect(database.conversationDefaults).toEqual([]);
+      });
+
+      it('should answer the usage, and change nothing, for expanders given too many arguments', async () => {
+        await direct('expanders on fhs', [12, BOT.userId]);
+        zulipMock.sendDirectMessage.mockClear();
+
+        await direct('expanders off fhs immich', [12, BOT.userId]);
+
+        expect(conversations()).toEqual(['7,12:fhs']);
+        expect(answers()).toEqual([
+          [[12], expect.stringContaining('expanders <on <group>|off [group]|default <repository>|list>')],
+        ]);
+      });
+
+      it.each([
+        { content: 'help', recipientIds: [12, BOT.userId] },
+        { content: '@**Immich**', recipientIds: [12, BOT.userId, 13] },
+      ])(
+        'should answer $content with the direct message commands, to the sender alone',
+        async ({ content, recipientIds }) => {
+          await direct(content, recipientIds);
+
+          expect(answers()).toEqual([[[12], expect.stringMatching(/^In a direct message with me/)]]);
+          expect(answers()[0][1]).toContain('`expanders <on <group>|off [group]|default <repository>|list>`');
+        },
+      );
+    });
+
     describe('on', () => {
       it('should turn a group on in this stream, in any stream, and store who did it', async () => {
         await send('@**Immich** expanders on immich', { streamId: 120, topic: 'setup' });
@@ -2153,7 +2261,7 @@ describe('ZulipCommandService', () => {
           'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
         ]);
         expect(stored()).toEqual(['107:fhs', '107:immich']);
-        expect(zulipExpanders.getStreamGroups(107)).toEqual(['immich', 'fhs']);
+        expect(zulipExpanders.getPlaceGroups(107)).toEqual(['immich', 'fhs']);
       });
 
       it('should say when the group was already on, whatever the case of the command', async () => {
@@ -2943,7 +3051,7 @@ describe('ZulipCommandService', () => {
           expect(database.defaults).toEqual([]);
           expect(zulipExpanders.getGroup('fhs')).toBeUndefined();
           expect(zulipExpanders.isEnabled(120)).toBe(false);
-          expect(zulipExpanders.getStreamGroups(107)).toEqual(['immich']);
+          expect(zulipExpanders.getPlaceGroups(107)).toEqual(['immich']);
         });
 
         it('should count one stream', async () => {

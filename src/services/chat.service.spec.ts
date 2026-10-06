@@ -148,6 +148,11 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   addZulipExpander: vitest.fn(),
   removeZulipExpander: vitest.fn(),
   setZulipExpanderDefault: vitest.fn(),
+  getZulipDmExpanders: vitest.fn().mockResolvedValue([]),
+  getZulipDmExpanderDefaults: vitest.fn().mockResolvedValue([]),
+  addZulipDmExpander: vitest.fn(),
+  removeZulipDmExpander: vitest.fn(),
+  setZulipDmExpanderDefault: vitest.fn(),
   getZulipEmotes: vitest.fn().mockResolvedValue([]),
   addZulipEmote: vitest.fn(),
 });
@@ -1884,7 +1889,29 @@ describe('Bot test', () => {
         expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
       });
 
-      it('should give no shorthand a meaning in a direct message', async () => {
+      it('should give shorthand the meaning of the groups turned on in the conversation', async () => {
+        databaseMock.getZulipDmExpanders.mockResolvedValue([
+          { conversation: `12,${BOT_USER_ID}`, groupName: 'immich', createdBy: 'Alice', createdAt: new Date(0) },
+        ]);
+        await zulipExpanders.init();
+        githubMock.getIssueOrPrMessage.mockResolvedValue('[Issue] Bug (immich-app/immich#4242)');
+
+        await direct([BOT_USER_ID, 12], '#4242');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'immich',
+          4242,
+          undefined,
+          true,
+        );
+        expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
+          [12],
+          '[Issue] Bug (immich-app/immich#4242)',
+        );
+      });
+
+      it('should give no shorthand a meaning in a conversation without a group', async () => {
         await direct([BOT_USER_ID, 12], '#4242 immich#12');
 
         expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
