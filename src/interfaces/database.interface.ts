@@ -29,6 +29,8 @@ import {
   UpdateRSSFeed,
   UpdateScheduledMessage,
   UpdateZulipExpanderGroup,
+  ZulipDmExpander,
+  ZulipDmExpanderDefault,
   ZulipEmote,
   ZulipExpander,
   ZulipExpanderDefault,
@@ -132,13 +134,20 @@ export interface IDatabaseRepository {
   createZulipExpanderGroup(group: NewZulipExpanderGroup): Promise<boolean>;
   /** Resolves to whether there was a group of that name. */
   updateZulipExpanderGroup(name: string, update: UpdateZulipExpanderGroup): Promise<boolean>;
-  /** Also turns the group off in every stream; resolves to whether there was one. */
+  /** Also turns the group off in every stream and direct message conversation; resolves to whether there was one. */
   removeZulipExpanderGroup(name: string): Promise<boolean>;
   /** Resolves to whether it was added, `false` when the group was on in the stream already. */
   addZulipExpander(streamId: number, groupName: string, createdBy: string): Promise<boolean>;
   /** Every group of the stream when none is named; resolves to the groups it turned off. */
   removeZulipExpander(streamId: number, groupName?: string): Promise<string[]>;
   setZulipExpanderDefault(streamId: number, repository: string, createdBy: string): Promise<void>;
+  getZulipDmExpanders(): Promise<ZulipDmExpander[]>;
+  getZulipDmExpanderDefaults(): Promise<ZulipDmExpanderDefault[]>;
+  /** As `addZulipExpander`, in a direct message conversation. */
+  addZulipDmExpander(conversation: string, groupName: string, createdBy: string): Promise<boolean>;
+  /** As `removeZulipExpander`, in a direct message conversation. */
+  removeZulipDmExpander(conversation: string, groupName?: string): Promise<string[]>;
+  setZulipDmExpanderDefault(conversation: string, repository: string, createdBy: string): Promise<void>;
   /** The Discord emotes the emote sync uploaded to Zulip or checked there. */
   getZulipEmotes(): Promise<ZulipEmote[]>;
   /** Records the emote as padded under that Zulip name. */

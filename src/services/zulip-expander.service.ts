@@ -21,11 +21,19 @@ export type ExpanderScope = {
 /** A stream with no group: links and `owner/name#1234` expand, a bare `#1234` or `name#1234` goes nowhere. */
 export const LINKS_ONLY: ExpanderScope = { repositories: [], threshold: () => 0 };
 
+/** Where groups are turned on: a stream by its ID, or a direct message conversation by `toConversationKey`. */
+export type ExpanderPlace = number | string;
+
+/** A direct message conversation's users, whatever order they come in, the bot's included. */
+export const toConversationKey = (userIds: number[]) => [...new Set(userIds)].sort((a, b) => a - b).join(',');
+
+const isStream = (place: ExpanderPlace): place is number => typeof place === 'number';
+
 type Cache = {
   groups: Map<string, ExpanderGroup>;
-  /** Group names, in the order they were turned on in the stream. */
-  streams: Map<number, string[]>;
-  defaults: Map<number, string>;
+  /** Group names, in the order they were turned on in the place. */
+  places: Map<ExpanderPlace, string[]>;
+  defaults: Map<ExpanderPlace, string>;
 };
 
 export const sameRepository = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -70,7 +78,7 @@ const unique = (repositories: string[]) => {
 @Injectable()
 export class ZulipExpanderService {
   private logger = new Logger(ZulipExpanderService.name);
-  private cache: Cache = { groups: new Map(), streams: new Map(), defaults: new Map() };
+  private cache: Cache = { groups: new Map(), places: new Map(), defaults: new Map() };
   private writes: Promise<unknown> = Promise.resolve();
   /** The repositories of each pattern, by the pattern in lower case, as last read. */
   private patterns = new Map<string, string[]>();
@@ -144,13 +152,13 @@ export class ZulipExpanderService {
     return repositories.find((entry) => !isPattern(entry));
   }
 
-  isEnabled(streamId: number) {
-    return this.cache.streams.has(streamId);
+  isEnabled(place: ExpanderPlace) {
+    return this.cache.places.has(place);
   }
 
-  /** The streams GitHub expansion is on in. */
+  /** The streams with a group on; direct message conversations are never listed. */
   list() {
-    return [...this.cache.streams.keys()].sort((a, b) => a - b);
+    return [...this.cache.places.keys()].filter(isStream).sort((a, b) => a - b);
   }
 
   getGroups() {
@@ -161,16 +169,16 @@ export class ZulipExpanderService {
     return this.cache.groups.get(name);
   }
 
-  getStreamGroups(streamId: number) {
-    return this.cache.streams.get(streamId) ?? [];
+  getPlaceGroups(place: ExpanderPlace) {
+    return this.cache.places.get(place) ?? [];
   }
 
   getStreams(groupName: string) {
-    return this.list().filter((streamId) => this.getStreamGroups(streamId).includes(groupName));
+    return this.list().filter((streamId) => this.getPlaceGroups(streamId).includes(groupName));
   }
 
-  getScope(streamId: number): ExpanderScope | undefined {
-    const groups = this.getStreamGroups(streamId)
+  getScope(place: ExpanderPlace): ExpanderScope | undefined {
+    const groups = this.getPlaceGroups(place)
       .map((name) => this.cache.groups.get(name))
       .filter((group): group is ExpanderGroup => group !== undefined && group.repositories.length > 0);
     if (groups.length === 0) {
@@ -179,7 +187,7 @@ export class ZulipExpanderService {
 
     const expanded = groups.map((group) => ({ group, repositories: this.getRepositories(group) }));
     const repositories = unique(expanded.flatMap((entry) => entry.repositories));
-    const chosen = this.cache.defaults.get(streamId);
+    const chosen = this.cache.defaults.get(place);
     const defaultRepository =
       (chosen && repositories.find((repository) => sameRepository(repository, chosen))) ??
       groups.map((group) => this.getGroupDefault(group)).find((repository) => repository !== undefined);
@@ -254,10 +262,10 @@ export class ZulipExpanderService {
           return;
         }
         cache.groups.delete(name);
-        for (const [streamId, groups] of cache.streams) {
-          this.setStreamGroups(
+        for (const [place, groups] of cache.places) {
+          this.setPlaceGroups(
             cache,
-            streamId,
+            place,
             groups.filter((group) => group !== name),
           );
         }
@@ -266,41 +274,50 @@ export class ZulipExpanderService {
   }
 
   /** Resolves to whether it was off and is now on. */
-  enable(streamId: number, groupName: string, createdBy: string) {
+  enable(place: ExpanderPlace, groupName: string, createdBy: string) {
     return this.write(
-      () => this.database.addZulipExpander(streamId, groupName, createdBy),
+      () =>
+        isStream(place)
+          ? this.database.addZulipExpander(place, groupName, createdBy)
+          : this.database.addZulipDmExpander(place, groupName, createdBy),
       (added, cache) => {
         if (added) {
-          this.setStreamGroups(cache, streamId, [...this.groupsOf(cache, streamId), groupName]);
+          this.setPlaceGroups(cache, place, [...this.groupsOf(cache, place), groupName]);
         }
       },
     );
   }
 
-  /** Every group of the stream when none is named; resolves to the groups it turned off. */
-  disable(streamId: number, groupName?: string) {
+  /** Every group of the place when none is named; resolves to the groups it turned off. */
+  disable(place: ExpanderPlace, groupName?: string) {
     return this.write(
-      () => this.database.removeZulipExpander(streamId, groupName),
+      () =>
+        isStream(place)
+          ? this.database.removeZulipExpander(place, groupName)
+          : this.database.removeZulipDmExpander(place, groupName),
       (removed, cache) =>
-        this.setStreamGroups(
+        this.setPlaceGroups(
           cache,
-          streamId,
-          this.groupsOf(cache, streamId).filter((group) => !removed.includes(group)),
+          place,
+          this.groupsOf(cache, place).filter((group) => !removed.includes(group)),
         ),
     );
   }
 
-  setDefault(streamId: number, repository: string, createdBy: string) {
+  setDefault(place: ExpanderPlace, repository: string, createdBy: string) {
     return this.write(
-      () => this.database.setZulipExpanderDefault(streamId, repository, createdBy),
+      () =>
+        isStream(place)
+          ? this.database.setZulipExpanderDefault(place, repository, createdBy)
+          : this.database.setZulipDmExpanderDefault(place, repository, createdBy),
       (_, cache) => {
-        cache.defaults.set(streamId, repository);
+        cache.defaults.set(place, repository);
       },
     );
   }
 
-  getDefault(streamId: number) {
-    return this.cache.defaults.get(streamId);
+  getDefault(place: ExpanderPlace) {
+    return this.cache.defaults.get(place);
   }
 
   private changeRepositories(
@@ -328,34 +345,43 @@ export class ZulipExpanderService {
     ).then((result) => result?.changed);
   }
 
-  private groupsOf(cache: Cache, streamId: number) {
-    return cache.streams.get(streamId) ?? [];
+  private groupsOf(cache: Cache, place: ExpanderPlace) {
+    return cache.places.get(place) ?? [];
   }
 
-  private setStreamGroups(cache: Cache, streamId: number, groups: string[]) {
+  private setPlaceGroups(cache: Cache, place: ExpanderPlace, groups: string[]) {
     if (groups.length > 0) {
-      cache.streams.set(streamId, groups);
+      cache.places.set(place, groups);
       return;
     }
-    cache.streams.delete(streamId);
-    cache.defaults.delete(streamId);
+    cache.places.delete(place);
+    cache.defaults.delete(place);
   }
 
   private async load(): Promise<Cache> {
-    const [groups, streams, defaults] = await Promise.all([
+    const [groups, streams, defaults, conversations, conversationDefaults] = await Promise.all([
       this.database.getZulipExpanderGroups(),
       this.database.getZulipExpanders(),
       this.database.getZulipExpanderDefaults(),
+      this.database.getZulipDmExpanders(),
+      this.database.getZulipDmExpanderDefaults(),
     ]);
-    const cache: Cache = { groups: new Map(), streams: new Map(), defaults: new Map() };
+    const cache: Cache = { groups: new Map(), places: new Map(), defaults: new Map() };
     for (const { name, repositories, threshold } of groups) {
       cache.groups.set(name, { name, repositories, threshold });
     }
-    for (const { streamId, groupName } of streams) {
-      cache.streams.set(streamId, [...this.groupsOf(cache, streamId), groupName]);
+    const placed = [
+      ...streams.map(({ streamId, groupName }) => ({ place: streamId as ExpanderPlace, groupName })),
+      ...conversations.map(({ conversation, groupName }) => ({ place: conversation, groupName })),
+    ];
+    for (const { place, groupName } of placed) {
+      cache.places.set(place, [...this.groupsOf(cache, place), groupName]);
     }
-    for (const { streamId, repository } of defaults) {
-      cache.defaults.set(streamId, repository);
+    for (const { place, repository } of [
+      ...defaults.map(({ streamId, repository }) => ({ place: streamId as ExpanderPlace, repository })),
+      ...conversationDefaults.map(({ conversation, repository }) => ({ place: conversation, repository })),
+    ]) {
+      cache.defaults.set(place, repository);
     }
     return cache;
   }

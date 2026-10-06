@@ -40,6 +40,8 @@ import {
   UpdateRSSFeed,
   UpdateScheduledMessage,
   UpdateZulipExpanderGroup,
+  ZulipDmExpander,
+  ZulipDmExpanderDefault,
   ZulipEmote,
   ZulipExpander,
   ZulipExpanderDefault,
@@ -602,6 +604,10 @@ export class DatabaseRepository implements IDatabaseRepository {
         .deleteFrom('zulip_expander_default')
         .where('streamId', 'not in', trx.selectFrom('zulip_expander').select('streamId'))
         .execute();
+      await trx
+        .deleteFrom('zulip_dm_expander_default')
+        .where('conversation', 'not in', trx.selectFrom('zulip_dm_expander').select('conversation'))
+        .execute();
       return removed !== undefined;
     });
   }
@@ -637,6 +643,48 @@ export class DatabaseRepository implements IDatabaseRepository {
       .insertInto('zulip_expander_default')
       .values({ streamId, repository, createdBy })
       .onConflict((oc) => oc.column('streamId').doUpdateSet({ repository, createdBy }))
+      .execute();
+  }
+
+  getZulipDmExpanders(): Promise<ZulipDmExpander[]> {
+    return this.db.selectFrom('zulip_dm_expander').selectAll().orderBy('conversation').orderBy('createdAt').execute();
+  }
+
+  getZulipDmExpanderDefaults(): Promise<ZulipDmExpanderDefault[]> {
+    return this.db.selectFrom('zulip_dm_expander_default').selectAll().orderBy('conversation').execute();
+  }
+
+  async addZulipDmExpander(conversation: string, groupName: string, createdBy: string): Promise<boolean> {
+    const added = await this.db
+      .insertInto('zulip_dm_expander')
+      .values({ conversation, groupName, createdBy })
+      .onConflict((oc) => oc.columns(['conversation', 'groupName']).doNothing())
+      .returning('conversation')
+      .executeTakeFirst();
+    return added !== undefined;
+  }
+
+  async removeZulipDmExpander(conversation: string, groupName?: string): Promise<string[]> {
+    return this.db.transaction().execute(async (trx) => {
+      let query = trx.deleteFrom('zulip_dm_expander').where('conversation', '=', conversation);
+      if (groupName !== undefined) {
+        query = query.where('groupName', '=', groupName);
+      }
+      const removed = await query.returning('groupName').execute();
+      await trx
+        .deleteFrom('zulip_dm_expander_default')
+        .where('conversation', '=', conversation)
+        .where('conversation', 'not in', trx.selectFrom('zulip_dm_expander').select('conversation'))
+        .execute();
+      return removed.map((row) => row.groupName);
+    });
+  }
+
+  async setZulipDmExpanderDefault(conversation: string, repository: string, createdBy: string): Promise<void> {
+    await this.db
+      .insertInto('zulip_dm_expander_default')
+      .values({ conversation, repository, createdBy })
+      .onConflict((oc) => oc.column('conversation').doUpdateSet({ repository, createdBy }))
       .execute();
   }
 

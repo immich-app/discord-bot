@@ -19,12 +19,14 @@ import { ScheduledMessageService } from 'src/services/scheduled-message.service'
 import { BackfillPlatforms, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
 import {
   ExpanderGroupEmptyError,
+  ExpanderPlace,
   ZulipExpanderService,
   findRepository,
   gitlabPath,
   isGitlabRepository,
   isPattern,
   sameRepository,
+  toConversationKey,
 } from 'src/services/zulip-expander.service';
 import { ZulipService, isBotSender } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
@@ -81,7 +83,8 @@ const toRepositoryName = (given: string) =>
     .replace(/(\.git)?\/*$/i, '');
 
 /** Who made a row, for its `createdBy`. */
-const describeZulipSender = (message: StreamMessage) => `${message.senderFullName} on Zulip (user ${message.senderId})`;
+const describeZulipSender = (message: ZulipReceivedMessage) =>
+  `${message.senderFullName} on Zulip (user ${message.senderId})`;
 
 const countRepositories = (count: number) => `${count} ${count === 1 ? 'repository' : 'repositories'}`;
 
@@ -89,6 +92,14 @@ const listRepositories = (repositories: string[]) => repositories.map((repositor
 
 const NO_DEFAULT =
   'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.';
+
+const DIRECT_MESSAGE_HELP = [
+  'In a direct message with me, mentioning me in a group one:',
+  '- `expanders <on <group>|off [group]|default <repository>|list>`: turn a group of repositories on or off in this conversation for a bare `#1234` and `name#1234` to look among, or choose which of them `#1234` goes to; links expand here without one, unless a guest is in the conversation',
+  '- `link <code>`: link your Zulip account with the Discord account that `/zulip-link` gave you the code on',
+  '- `unlink`: unlink your Zulip account from your Discord account',
+  '`expander-group list`, in a stream, lists the groups.',
+].join('\n');
 
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -130,6 +141,9 @@ const fit = (content: string) => {
 type StreamMessage = ZulipReceivedMessage & { streamId: number };
 
 type CommandContext = Arguments & { message: StreamMessage };
+
+/** Where `expanders` turns groups on and off, and what its answers call that place. */
+type ExpanderTarget = { place: ExpanderPlace; kind: 'stream' | 'conversation' };
 
 type Command = {
   usage: string;
@@ -414,8 +428,17 @@ export class ZulipCommandService {
     }
     const [name = '', ...args] = tokens;
     const command = name.toLowerCase();
+    const conversation = message.recipientIds ?? [message.senderId];
     let run: (() => Promise<string>) | undefined;
-    if ((command === 'link' || command === 'discord-link') && args.length === 1) {
+    let recipients = [message.senderId];
+    // A mention alone is `help`, as in a stream.
+    if (command === 'help' || (parsed.status === 'ok' && command === '')) {
+      run = () => Promise.resolve(DIRECT_MESSAGE_HELP);
+    } else if (command === 'expanders') {
+      run = () => this.runExpanders(message, args, { place: toConversationKey(conversation), kind: 'conversation' });
+      // Everyone in the conversation is told how its expansion changed.
+      recipients = conversation.filter((userId) => userId !== this.zulipService.ownUser?.userId);
+    } else if ((command === 'link' || command === 'discord-link') && args.length === 1) {
       run = () =>
         this.mirrorLinks.redeemIdentityCode({ id: message.senderId, fullName: message.senderFullName }, args[0]);
     } else if ((command === 'unlink' || command === 'discord-unlink') && args.length === 0) {
@@ -433,7 +456,7 @@ export class ZulipCommandService {
       reply = `${code(command)} failed: ${describeError(error)}`;
     }
     try {
-      await this.zulip.sendDirectMessage([message.senderId], fit(reply));
+      await this.zulip.sendDirectMessage(recipients, fit(reply));
     } catch (error) {
       this.logger.error(`Could not answer the Zulip direct message ${message.id}`, error);
     }
@@ -737,72 +760,78 @@ export class ZulipCommandService {
     ].join('\n');
   }
 
-  private async expanders({ message, args }: CommandContext) {
+  private expanders({ message, args }: CommandContext) {
+    return this.runExpanders(message, args, { place: message.streamId, kind: 'stream' });
+  }
+
+  private async runExpanders(message: ZulipReceivedMessage, args: string[], target: ExpanderTarget) {
+    // A direct message reaches here without the check `answer` makes for a stream.
+    if (args.length > this.commands.expanders.positionals) {
+      return this.usage('expanders');
+    }
     const [action, argument] = [args[0]?.toLowerCase(), args[1]];
-    const { streamId } = message;
     if (action === 'list' && argument === undefined) {
       return this.expanderList();
     }
     if (action === 'off') {
-      return this.expandersOff(streamId, argument?.toLowerCase());
+      return this.expandersOff(target, argument?.toLowerCase());
     }
     if (action === 'on' && argument !== undefined) {
-      return this.expandersOn(message, argument.toLowerCase());
+      return this.expandersOn(message, target, argument.toLowerCase());
     }
     if (action === 'default' && argument !== undefined) {
-      return this.expandersDefault(message, argument);
+      return this.expandersDefault(message, target, argument);
     }
     return this.usage('expanders');
   }
 
-  private async expandersOn(message: StreamMessage, name: string) {
+  private async expandersOn(message: ZulipReceivedMessage, { place, kind }: ExpanderTarget, name: string) {
     const group = this.zulipExpanders.getGroup(name);
     if (!group) {
       return this.noGroup(name);
     }
-    const { streamId } = message;
-    const subscriptions = await this.zulip.getSubscriptions();
-    const added = await this.zulipExpanders.enable(streamId, name, describeZulipSender(message));
-    const scope = this.zulipExpanders.getScope(streamId);
+    const subscriptions = typeof place === 'number' ? await this.zulip.getSubscriptions() : undefined;
+    const added = await this.zulipExpanders.enable(place, name, describeZulipSender(message));
+    const scope = this.zulipExpanders.getScope(place);
     const reply = added
-      ? `Turned on the group ${code(name)} (${group.repositories.map((repository) => code(repository)).join(', ')}) in this stream.`
-      : `Nothing changed: the group ${code(name)} was already on in this stream.`;
+      ? `Turned on the group ${code(name)} (${group.repositories.map((repository) => code(repository)).join(', ')}) in this ${kind}.`
+      : `Nothing changed: the group ${code(name)} was already on in this ${kind}.`;
     const lines = [reply];
     if (scope?.defaultRepository) {
       lines.push(`A bare ${code('#1234')} goes to ${code(scope.defaultRepository)} here.`);
     } else if (scope) {
       lines.push(NO_DEFAULT);
     }
-    if (!subscriptions.some((subscription) => subscription.streamId === streamId)) {
+    if (subscriptions && !subscriptions.some((subscription) => subscription.streamId === place)) {
       lines.push(NOT_SUBSCRIBED);
     }
     return lines.join('\n');
   }
 
-  private async expandersOff(streamId: number, name?: string) {
-    const removed = await this.zulipExpanders.disable(streamId, name);
+  private async expandersOff({ place, kind }: ExpanderTarget, name?: string) {
+    const removed = await this.zulipExpanders.disable(place, name);
     if (removed.length === 0) {
       return name === undefined
-        ? 'Nothing changed: no group was on in this stream.'
-        : `Nothing changed: the group ${code(name)} was not on in this stream.`;
+        ? `Nothing changed: no group was on in this ${kind}.`
+        : `Nothing changed: the group ${code(name)} was not on in this ${kind}.`;
     }
     const groups = removed.map((group) => code(group)).join(', ');
-    return this.zulipExpanders.isEnabled(streamId)
-      ? `Turned off the group ${groups} in this stream.`
-      : `Turned off every group in this stream (${groups}): links still expand here, a bare ${code('#1234')} no longer does.`;
+    return this.zulipExpanders.isEnabled(place)
+      ? `Turned off the group ${groups} in this ${kind}.`
+      : `Turned off every group in this ${kind} (${groups}): links still expand here, a bare ${code('#1234')} no longer does.`;
   }
 
-  private async expandersDefault(message: StreamMessage, given: string) {
-    const scope = this.zulipExpanders.getScope(message.streamId);
+  private async expandersDefault(message: ZulipReceivedMessage, { place, kind }: ExpanderTarget, given: string) {
+    const scope = this.zulipExpanders.getScope(place);
     if (!scope) {
-      return `No group is on in this stream; turn one on with ${code('expanders on <group>')} first.`;
+      return `No group is on in this ${kind}; turn one on with ${code('expanders on <group>')} first.`;
     }
     const repository = findRepository(scope.repositories, toRepositoryName(given));
     if (!repository) {
-      return `${code(given)} is in none of this stream's groups; the default must be one of ${scope.repositories.map((candidate) => code(candidate)).join(', ')}.`;
+      return `${code(given)} is in none of this ${kind}'s groups; the default must be one of ${scope.repositories.map((candidate) => code(candidate)).join(', ')}.`;
     }
-    await this.zulipExpanders.setDefault(message.streamId, repository, describeZulipSender(message));
-    return `A bare ${code('#1234')} now goes to ${code(repository)} in this stream.`;
+    await this.zulipExpanders.setDefault(place, repository, describeZulipSender(message));
+    return `A bare ${code('#1234')} now goes to ${code(repository)} in this ${kind}.`;
   }
 
   private async expanderList() {
@@ -815,7 +844,7 @@ export class ZulipCommandService {
       'Groups are on in:',
       ...streams.map((streamId, index) => {
         const groupNames = this.zulipExpanders
-          .getStreamGroups(streamId)
+          .getPlaceGroups(streamId)
           .map((group) => code(group))
           .join(', ');
         const scope = this.zulipExpanders.getScope(streamId);
