@@ -403,6 +403,11 @@ export class ZulipCommandService {
    */
   private async onDirectMessage(message: ZulipReceivedMessage) {
     const parsed = parseCommand(message.content, this.zulipService.ownUser?.fullName ?? '');
+    // With others in the conversation, a command mentions the bot as in a stream, so that chat is never taken for one.
+    const isGroup = (message.recipientIds?.length ?? 0) > 2;
+    if (isGroup && parsed.status !== 'ok') {
+      return;
+    }
     const tokens = parsed.status === 'ok' ? [parsed.command.name, ...parsed.command.tokens] : tokenize(message.content);
     if (parsed.status === 'malformed' || !tokens) {
       return;
