@@ -2030,6 +2030,30 @@ describe('ZulipCommandService', () => {
         },
       );
 
+      it.each(['unlink', 'link ABCD2345'])(
+        'should take no %j that does not mention the bot in a group direct message',
+        async (content) => {
+          await direct(content, { recipientIds: [12, 99, 13] });
+
+          expect(mirrorLinksMock.redeemIdentityCode).not.toHaveBeenCalled();
+          expect(mirrorLinksMock.unlinkIdentity).not.toHaveBeenCalled();
+          expect(answers()).toEqual([]);
+        },
+      );
+
+      it('should take a command that mentions the bot in a group direct message, answering the sender alone', async () => {
+        await direct('@**Immich** unlink', { recipientIds: [12, 99, 13] });
+
+        expect(mirrorLinksMock.unlinkIdentity).toHaveBeenCalledExactlyOnceWith({ zulipUserId: 12 }, 'zulip');
+        expect(answers()).toEqual([[[12], 'Unlinked.']]);
+      });
+
+      it('should take a command without a mention in a direct message with the bot alone', async () => {
+        await direct('unlink', { recipientIds: [12, 99] });
+
+        expect(mirrorLinksMock.unlinkIdentity).toHaveBeenCalledOnce();
+      });
+
       it('should answer a failure, and log one it cannot answer', async () => {
         mirrorLinksMock.redeemIdentityCode.mockRejectedValue(new Error('database is down'));
         await direct('link ABCD2345');
