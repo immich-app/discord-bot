@@ -978,8 +978,18 @@ describe('ZulipService', () => {
         sut.onMessage(withBots, { withBots: true });
 
         polls[0].resolve([
-          messageEvent(9, { id: 9, senderId: 30, senderEmail: 'ci-bot@zulip.example.com' }),
-          messageEvent(10, { id: 10, senderId: OWN_USER_ID, senderEmail: 'immich-bot@zulip.example.com' }),
+          messageEvent(9, {
+            id: 9,
+            senderId: 30,
+            senderEmail: 'ci-bot@zulip.example.com',
+            content: '@**Immich** help',
+          }),
+          messageEvent(10, {
+            id: 10,
+            senderId: OWN_USER_ID,
+            senderEmail: 'immich-bot@zulip.example.com',
+            content: '@**Immich** help',
+          }),
           messageEvent(11, { id: 11 }),
         ]);
         await nextPoll();

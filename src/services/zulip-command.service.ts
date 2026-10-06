@@ -325,17 +325,20 @@ export class ZulipCommandService {
   ) {}
 
   async init() {
-    this.zulipService.onMessage((message) => this.onZulipMessage(message));
+    this.zulipService.onMessage((message) => this.onZulipMessage(message), { withBots: true });
   }
 
   /**
    * Stream membership is the authorisation, so a command outside the team streams is not run; the mirror commands,
-   * whose stream is usually not a team one, check the sender's role instead.
+   * whose stream is usually not a team one, check the sender's role instead. Other bots get the commands that mention
+   * the bot, and nothing in a direct message.
    */
   async onZulipMessage(message: ZulipReceivedMessage) {
     const { streamId } = message;
     if (message.type === 'private') {
-      await this.onDirectMessage(message);
+      if (!isBotSender(message)) {
+        await this.onDirectMessage(message);
+      }
       return;
     }
     if (streamId === undefined) {

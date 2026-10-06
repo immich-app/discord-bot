@@ -1751,7 +1751,7 @@ describe('Bot test', () => {
       expect(zulipMock.init).not.toHaveBeenCalled();
     });
 
-    it('should subscribe the Zulip expanders to the event loop', async () => {
+    it("should subscribe the Zulip expanders to the event loop, without other bots' messages", async () => {
       databaseMock.getZulipExpanderGroups.mockResolvedValue([
         {
           name: 'immich',
@@ -1767,7 +1767,7 @@ describe('Bot test', () => {
       await zulipExpanders.init();
       await sut.init();
 
-      expect(zulipServiceMock.onMessage).toHaveBeenCalledOnce();
+      expect(zulipServiceMock.onMessage).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
       const [handler] = zulipServiceMock.onMessage.mock.calls[0];
       await handler(zulipMessage({ content: 'see #4242' }));
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
