@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { GithubRepository } from 'src/repositories/github.repository';
-import { beforeEach, describe, expect, it, vitest } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 describe(GithubRepository.name, () => {
   let sut: GithubRepository;
@@ -34,6 +34,190 @@ describe(GithubRepository.name, () => {
 
       expect(await sut.getLatestReleaseTag('immich-app', 'immich')).toBeUndefined();
       expect(warn).toHaveBeenCalledExactlyOnceWith('The latest release of immich-app/immich is tagged on no commit');
+    });
+  });
+
+  describe('installations', () => {
+    const CONFIGURED = 1;
+    const FUTO = 2;
+
+    const newClient = () => ({
+      graphql: vitest.fn((query: string, { owner }: { owner?: string }) =>
+        Promise.resolve(
+          query.includes('repositoryOwner')
+            ? {
+                repositoryOwner: {
+                  login: owner,
+                  repositories: {
+                    nodes: [{ nameWithOwner: `${owner}/private-thing` }],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              }
+            : { repository: { stargazerCount: 5 } },
+        ),
+      ),
+    });
+
+    const install = (installations: Promise<unknown[]>) => {
+      const configured = newClient();
+      const clients = new Map<number, ReturnType<typeof newClient>>();
+      const app = {
+        octokit: { paginate: vitest.fn().mockReturnValue(installations) },
+        getInstallationOctokit: vitest.fn((id: number) => {
+          const client = newClient();
+          clients.set(id, client);
+          return Promise.resolve(client);
+        }),
+      };
+      Object.assign(sut, {
+        app,
+        octokit: configured,
+        installationOctokits: new Map([[CONFIGURED, Promise.resolve(configured)]]),
+      });
+      return { app, configured, clients };
+    };
+
+    const installed = (futo = FUTO) =>
+      Promise.resolve([
+        { id: CONFIGURED, account: { login: 'immich-app' } },
+        { id: futo, account: { login: 'futo-org' } },
+        { id: 3, account: { slug: 'an-enterprise' } },
+        { id: 4, account: null },
+      ]);
+
+    afterEach(() => {
+      vitest.useRealTimers();
+    });
+
+    it('should read with the installation on the owner, whatever the case of its login', async () => {
+      const { app, configured, clients } = install(installed());
+
+      expect(await sut.getStarCount('FUTO-org', 'fhs-core')).toBe(5);
+      expect(app.getInstallationOctokit).toHaveBeenCalledExactlyOnceWith(FUTO);
+      expect(clients.get(FUTO)!.graphql).toHaveBeenCalledWith(expect.any(String), {
+        org: 'FUTO-org',
+        repo: 'fhs-core',
+      });
+      expect(configured.graphql).not.toHaveBeenCalled();
+    });
+
+    it("should list an organization's repositories, private ones included, with its installation", async () => {
+      const { configured, clients } = install(installed());
+
+      expect(await sut.getOwnerRepositories('futo-org')).toEqual({
+        owner: 'futo-org',
+        repositories: ['futo-org/private-thing'],
+      });
+      expect(clients.get(FUTO)!.graphql).toHaveBeenCalledOnce();
+      expect(configured.graphql).not.toHaveBeenCalled();
+    });
+
+    it('should read with the configured installation for an owner the app is not installed on', async () => {
+      const { app, configured } = install(installed());
+
+      await sut.getStarCount('someone-else', 'repo');
+
+      expect(configured.graphql).toHaveBeenCalledOnce();
+      expect(app.getInstallationOctokit).not.toHaveBeenCalled();
+    });
+
+    it("should read the configured installation's owner with the client it already has", async () => {
+      const { app, configured } = install(installed());
+
+      await sut.getStarCount('immich-app', 'immich');
+
+      expect(configured.graphql).toHaveBeenCalledOnce();
+      expect(app.getInstallationOctokit).not.toHaveBeenCalled();
+    });
+
+    it('should make one client per installation and list the installations once', async () => {
+      const { app, clients } = install(installed());
+
+      await sut.getStarCount('futo-org', 'fhs-core');
+      await sut.getStarCount('futo-org', 'grayjay');
+      await sut.getStarCount('someone-else', 'repo');
+
+      expect(app.getInstallationOctokit).toHaveBeenCalledExactlyOnceWith(FUTO);
+      expect(clients.get(FUTO)!.graphql).toHaveBeenCalledTimes(2);
+      expect(app.octokit.paginate).toHaveBeenCalledExactlyOnceWith('GET /app/installations', { per_page: 100 });
+    });
+
+    it('should list the installations again once the list is ten minutes old, for a new installation', async () => {
+      vitest.useFakeTimers();
+      const { app } = install(Promise.resolve([{ id: CONFIGURED, account: { login: 'immich-app' } }]));
+      await sut.getStarCount('futo-org', 'fhs-core');
+      vitest.advanceTimersByTime(9 * 60 * 1000);
+      await sut.getStarCount('futo-org', 'fhs-core');
+      expect(app.octokit.paginate).toHaveBeenCalledOnce();
+
+      app.octokit.paginate.mockReturnValue(installed());
+      vitest.advanceTimersByTime(60 * 1000);
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      expect(app.octokit.paginate).toHaveBeenCalledTimes(2);
+      expect(app.getInstallationOctokit).toHaveBeenCalledExactlyOnceWith(FUTO);
+    });
+
+    it('should list the installations again once the list is ten minutes old, for a reinstalled one', async () => {
+      vitest.useFakeTimers();
+      const { app, clients } = install(installed());
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      app.octokit.paginate.mockReturnValue(installed(5));
+      vitest.advanceTimersByTime(10 * 60 * 1000);
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      expect(app.getInstallationOctokit).toHaveBeenNthCalledWith(2, 5);
+      expect(clients.get(5)!.graphql).toHaveBeenCalledOnce();
+    });
+
+    it('should keep the last list, and say so, when listing the installations again fails', async () => {
+      vitest.useFakeTimers();
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const { app, configured, clients } = install(installed());
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      app.octokit.paginate.mockReturnValue(Promise.reject(new Error('Service unavailable')));
+      vitest.advanceTimersByTime(10 * 60 * 1000);
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      expect(app.octokit.paginate).toHaveBeenCalledTimes(2);
+      expect(clients.get(FUTO)!.graphql).toHaveBeenCalledTimes(2);
+      expect(configured.graphql).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "Could not list the GitHub App's installations, so the last list stays: Error: Service unavailable",
+      );
+    });
+
+    it('should say the configured installation reads every owner while no list has been read', async () => {
+      vitest.useFakeTimers();
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const { app, configured } = install(Promise.reject(new Error('Bad credentials')));
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      app.octokit.paginate.mockReturnValue(Promise.reject(new Error('Bad credentials')));
+      vitest.advanceTimersByTime(10 * 60 * 1000);
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      expect(configured.graphql).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenLastCalledWith(
+        "Could not list the GitHub App's installations, so the configured one reads every owner: Error: Bad credentials",
+      );
+    });
+
+    it('should read with the configured installation, and say so once, when the installations cannot be listed', async () => {
+      const warn = vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const { configured } = install(Promise.reject(new Error('Bad credentials')));
+
+      await sut.getStarCount('futo-org', 'fhs-core');
+      await sut.getStarCount('futo-org', 'fhs-core');
+
+      expect(configured.graphql).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "Could not list the GitHub App's installations, so the configured one reads every owner: Error: Bad credentials",
+      );
     });
   });
 });

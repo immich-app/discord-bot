@@ -17,6 +17,9 @@ const handleGraphqlError = (error: unknown) => {
 /** At 100 repositories a page, an owner with more than this many pages is read only that far. */
 const MAX_OWNER_PAGES = 20;
 
+/** How old the list of the app's installations may be before it is read again. */
+const INSTALLATIONS_MAX_AGE_MS = 10 * 60 * 1000;
+
 type OwnerRepositoriesPage = {
   repositoryOwner: {
     login: string;
@@ -46,10 +49,69 @@ const PULL_REQUEST_FIELDS = `
 export class GithubRepository implements IGithubInterface {
   private logger = new Logger(GithubRepository.name);
   private octokit: Octokit = new Octokit();
+  private app?: App;
+  /** The app's installation IDs by lowercased owner login. */
+  private installations?: { ids: Promise<Map<string, number>>; readAt: number };
+  private lastListed?: Map<string, number>;
+  private installationOctokits = new Map<number, Promise<Octokit>>();
 
   async init(appId: string, privateKey: string, installationId: string) {
-    const app = new App({ appId, privateKey });
-    this.octokit = await app.getInstallationOctokit(Number(installationId));
+    this.app = new App({ appId, privateKey });
+    this.octokit = await this.app.getInstallationOctokit(Number(installationId));
+    this.installations = undefined;
+    this.lastListed = undefined;
+    this.installationOctokits = new Map([[Number(installationId), Promise.resolve(this.octokit)]]);
+  }
+
+  /**
+   * The app's installation on the owner, which reads its private repositories too; the configured installation for an
+   * owner the app is not installed on, which reads public ones.
+   */
+  private async forOwner(owner: string) {
+    const id = this.app && (await this.getInstallationId(owner));
+    if (!this.app || id === undefined) {
+      return this.octokit;
+    }
+
+    let octokit = this.installationOctokits.get(id);
+    if (!octokit) {
+      octokit = this.app.getInstallationOctokit(id);
+      this.installationOctokits.set(id, octokit);
+      octokit.catch(() => this.installationOctokits.delete(id));
+    }
+    return octokit;
+  }
+
+  /** The list is read again once it is old, so a new or reinstalled installation needs no restart. */
+  private async getInstallationId(owner: string) {
+    if (!this.installations || Date.now() - this.installations.readAt >= INSTALLATIONS_MAX_AGE_MS) {
+      this.installations = this.readInstallations();
+    }
+    return (await this.installations.ids).get(owner.toLowerCase());
+  }
+
+  /** A failed read keeps the last list, which the configured installation stands in for until one is read. */
+  private readInstallations() {
+    const ids = this.app!.octokit.paginate('GET /app/installations', { per_page: 100 }).then(
+      (installations) => {
+        this.lastListed = new Map(
+          installations.flatMap(({ id, account }) =>
+            account && 'login' in account ? [[account.login.toLowerCase(), id] as const] : [],
+          ),
+        );
+        return this.lastListed;
+      },
+      (error: unknown) => {
+        const fallback = this.lastListed ? 'the last list stays' : 'the configured one reads every owner';
+        this.logger.warn(`Could not list the GitHub App's installations, so ${fallback}: ${error}`);
+        return this.lastListed ?? new Map<string, number>();
+      },
+    );
+    return { ids, readAt: Date.now() };
+  }
+
+  private async graphql<T>(owner: string, query: string, variables: Record<string, unknown>) {
+    return (await this.forOwner(owner)).graphql<T>(query, variables);
   }
 
   async getIssueOrPrMessage(
@@ -60,12 +122,13 @@ export class GithubRepository implements IGithubInterface {
     isPrivileged: boolean,
   ) {
     try {
-      const { repository } = await this.octokit.graphql<{
+      const { repository } = await this.graphql<{
         repository: {
           isPrivate: boolean;
           issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string };
         };
       }>(
+        org,
         `
       query issueOrPr($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
@@ -105,9 +168,10 @@ export class GithubRepository implements IGithubInterface {
 
   async getDiscussionMessage(org: string, repo: string, id: number, isPrivileged: boolean) {
     try {
-      const { repository } = await this.octokit.graphql<{
+      const { repository } = await this.graphql<{
         repository: { isPrivate: boolean; discussion: { title: string; url: string } };
       }>(
+        org,
         `
       query discussion($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
@@ -134,7 +198,8 @@ export class GithubRepository implements IGithubInterface {
   }
 
   async getStarCount(org: string, repo: string) {
-    const { repository } = await this.octokit.graphql<{ repository: { stargazerCount: number } }>(
+    const { repository } = await this.graphql<{ repository: { stargazerCount: number } }>(
+      org,
       `
       query stars($org: String!, $repo: String!) {
         repository(owner: $org, name: $repo) {
@@ -148,7 +213,8 @@ export class GithubRepository implements IGithubInterface {
   }
 
   async getForkCount(org: string, repo: string) {
-    const { repository } = await this.octokit.graphql<{ repository: { forkCount: number } }>(
+    const { repository } = await this.graphql<{ repository: { forkCount: number } }>(
+      org,
       `
       query stars($org: String!, $repo: String!) {
         repository(owner: $org, name: $repo) {
@@ -180,9 +246,10 @@ export class GithubRepository implements IGithubInterface {
   }
 
   async getRepositoryFileContent(org: string, repo: string, ref: string, path: string, isPrivileged: boolean) {
-    const { repository } = await this.octokit.graphql<{
+    const { repository } = await this.graphql<{
       repository: { isPrivate: boolean; object: { text: string | undefined } };
     }>(
+      org,
       `
       query getFile($org: String!, $repo: String!, $expression: String!) {
         repository(owner: $org, name: $repo) {
@@ -206,7 +273,8 @@ export class GithubRepository implements IGithubInterface {
   }
 
   async getCheckSuiteTriggerCommit(org: string, repo: string, checkSuiteNodeId: string) {
-    const { node } = await this.octokit.graphql<{ node: { commit: { oid: string } } }>(
+    const { node } = await this.graphql<{ node: { commit: { oid: string } } }>(
+      org,
       `
       query getCheckSuite($checkSuiteNodeId: ID!) {
         node(id: $checkSuiteNodeId) {
@@ -226,9 +294,10 @@ export class GithubRepository implements IGithubInterface {
   }
 
   async getLatestReleaseTag(org: string, repo: string) {
-    const { repository } = await this.octokit.graphql<{
+    const { repository } = await this.graphql<{
       repository: { latestRelease: { tagCommit: { oid: string } | null } | null };
     }>(
+      org,
       `
       query getLatestRelease($org: String!, $repo: String!) {
         repository(owner: $org, name: $repo) {
@@ -250,7 +319,8 @@ export class GithubRepository implements IGithubInterface {
   }
 
   async isCollaborator({ org, repo, userLogin }: { org: string; repo: string; userLogin: string }) {
-    const { repository } = await this.octokit.graphql<{ repository: { collaborators: { totalCount: number } } }>(
+    const { repository } = await this.graphql<{ repository: { collaborators: { totalCount: number } } }>(
+      org,
       `
       query isCollaborator($org: String!, $repo: String!, $userLogin: String!) {
         repository(owner: $org, name: $repo) {
@@ -278,11 +348,12 @@ export class GithubRepository implements IGithubInterface {
         repository: {
           pullRequests: { nodes, pageInfo },
         },
-      } = await this.octokit.graphql<{
+      } = await this.graphql<{
         repository: {
           pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string }; nodes: PullRequest[] };
         };
       }>(
+        org,
         `
       query getPullRequests($org: String!, $repo: String!, $states: [PullRequestState!], $after: String!) {
         repository(owner: $org, name: $repo) {
@@ -309,7 +380,8 @@ export class GithubRepository implements IGithubInterface {
 
   async getPullRequest({ org, repo, number }: { org: string; repo: string; number: number }) {
     try {
-      const { repository } = await this.octokit.graphql<{ repository: { pullRequest: PullRequest } }>(
+      const { repository } = await this.graphql<{ repository: { pullRequest: PullRequest } }>(
+        org,
         `
       query getPullRequest($org: String!, $repo: String!, $number: Int!) {
         repository(owner: $org, name: $repo) {
@@ -333,7 +405,8 @@ export class GithubRepository implements IGithubInterface {
     let login: string | undefined;
     let after: string | null = null;
     for (let page = 0; page < MAX_OWNER_PAGES; page++) {
-      const { repositoryOwner }: OwnerRepositoriesPage = await this.octokit.graphql<OwnerRepositoriesPage>(
+      const { repositoryOwner }: OwnerRepositoriesPage = await this.graphql<OwnerRepositoriesPage>(
+        owner,
         `
       query getOwnerRepositories($owner: String!, $after: String) {
         repositoryOwner(login: $owner) {
@@ -367,7 +440,8 @@ export class GithubRepository implements IGithubInterface {
 
   async getRepositoryName({ org, repo }: { org: string; repo: string }) {
     try {
-      const { repository } = await this.octokit.graphql<{ repository: { nameWithOwner: string } }>(
+      const { repository } = await this.graphql<{ repository: { nameWithOwner: string } }>(
+        org,
         `
       query getRepositoryName($org: String!, $repo: String!) {
         repository(owner: $org, name: $repo) {
