@@ -12,6 +12,44 @@ describe(GithubRepository.name, () => {
     (sut as unknown as { octokit: { graphql: typeof graphql } }).octokit = { graphql };
   });
 
+  describe('getIssueOrPrMessage', () => {
+    it.each([
+      {
+        typename: 'PullRequest',
+        url: 'https://github.com/immich-app/immich/pull/42',
+        message: '[Pull Request] Fix the thing ([Immich-App/IMMICH#42](https://github.com/immich-app/immich/pull/42))',
+        pullRequest: { organization: 'immich-app', repository: 'immich', number: 42 },
+      },
+      {
+        typename: 'Issue',
+        url: 'https://github.com/immich-app/immich/issues/42',
+        message: '[Issue] Fix the thing ([Immich-App/IMMICH#42](https://github.com/immich-app/immich/issues/42))',
+        pullRequest: undefined,
+      },
+    ])(
+      'should render a $typename answer as typed, naming a pull request as GitHub spells it',
+      async ({ typename, url, message, pullRequest }) => {
+        graphql.mockResolvedValue({
+          repository: {
+            isPrivate: false,
+            owner: { login: 'immich-app' },
+            name: 'immich',
+            issueOrPullRequest: { __typename: typename, title: 'Fix the thing', url },
+          },
+        });
+
+        const found = await sut.getIssueOrPrMessage('Immich-App', 'IMMICH', 42, undefined, true);
+
+        expect(found).toStrictEqual({ message, pullRequest });
+        expect(graphql).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/owner\s*\{\s*login\s*\}\s*name/), {
+          org: 'Immich-App',
+          repo: 'IMMICH',
+          num: 42,
+        });
+      },
+    );
+  });
+
   describe('getLatestReleaseTag', () => {
     it('should resolve to the commit the latest release is tagged on', async () => {
       graphql.mockResolvedValue({ repository: { latestRelease: { tagCommit: { oid: 'abc123' } } } });

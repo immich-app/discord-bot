@@ -8,6 +8,7 @@ import {
   OmitPartialGroupDMChannel,
   SendableChannels,
 } from 'discord.js';
+import _ from 'lodash';
 import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,7 +18,7 @@ import { neutraliseZulipMentions, plural, scanZulipFences, shorten, splitOutside
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
-import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGithubInterface, IssueOrPullRequestMessage } from 'src/interfaces/github.interface';
 import { GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
@@ -311,7 +312,7 @@ export class ChatService {
 
     // One failing lookup must not cost the reply the rest; the failure still reaches the event loop's log.
     const [expansions] = await Promise.allSettled([this.zulipExpansions(scope, content)]);
-    const parts = [...(expansions.status === 'fulfilled' ? expansions.value : []), ...emojiImages(content)];
+    const parts = [...(expansions.status === 'fulfilled' ? expansions.value.parts : []), ...emojiImages(content)];
 
     if (parts.length !== 0) {
       await reply(parts.join('\n'));
@@ -336,11 +337,10 @@ export class ChatService {
       this.handleGithubThreadReferences({ content, scope }, true),
       this.handleTwitterReferences(content),
     ]);
-    return [
-      ...githubSnippets,
-      ...gitlabSnippets,
-      ...[...links.filter((link) => link !== undefined), ...twitter].map(neutraliseZulipMentions),
-    ];
+    return {
+      parts: [...githubSnippets, ...gitlabSnippets, ...[...links.parts, ...twitter].map(neutraliseZulipMentions)],
+      pullRequests: links.pullRequests,
+    };
   }
 
   @Cron(Constants.Cron.ImmichBirthday)
@@ -563,7 +563,7 @@ export class ChatService {
     const codeSnippets = await this.handleGithubFileReferences(content, isPrivileged);
     const links = await this.handleGithubThreadReferences({ content, channelParentId }, isPrivileged);
 
-    return [...codeSnippets, ...links].filter((e) => e !== undefined);
+    return { parts: [...codeSnippets, ...links.parts], pullRequests: links.pullRequests };
   }
 
   async handleGithubThreadReferences(
@@ -660,22 +660,31 @@ export class ChatService {
     }
 
     const results = await Promise.all(
-      requests.map(async ({ org, repo, id, type, discordThreadId }) => {
+      requests.map(async ({ org, repo, id, type, discordThreadId }): Promise<IssueOrPullRequestMessage | undefined> => {
+        const getDiscussion = async () => {
+          const message = await this.github.getDiscussionMessage(org, repo, id, isPrivileged);
+          return message === undefined ? undefined : { message };
+        };
+
         switch (type) {
           case 'issues':
           case 'pull':
             return await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged);
 
           case 'discussions':
-            return await this.github.getDiscussionMessage(org, repo, id, isPrivileged);
+            return await getDiscussion();
 
           default:
             return (
-              (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged)) ||
-              (await this.github.getDiscussionMessage(org, repo, id, isPrivileged))
+              (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged)) ??
+              (await getDiscussion())
             );
         }
       }),
+    );
+    const pullRequests = _.uniqBy(
+      results.map((result) => result?.pullRequest).filter((pullRequest) => pullRequest !== undefined),
+      ({ organization, repository, number }) => `${organization}/${repository}#${number}`.toLowerCase(),
     );
 
     const gitlabKeys = new Set<string>();
@@ -699,7 +708,10 @@ export class ChatService {
       },
     );
 
-    return [...results, ...gitlabResults.map((result) => result?.message)];
+    return {
+      parts: [...results, ...gitlabResults].map((result) => result?.message).filter((part) => part !== undefined),
+      pullRequests,
+    };
   }
 
   /** `#123` is whichever of the issue and the merge request of that number was updated last. */
@@ -884,8 +896,9 @@ ${formattedCode}
     return hasBlacklistedUrl(urls);
   }
 
-  getPrOrIssue(id: number) {
-    return this.github.getIssueOrPrMessage(GithubOrg.ImmichApp, GithubRepo.Immich, id, undefined, false);
+  async getPrOrIssue(id: number) {
+    const found = await this.github.getIssueOrPrMessage(GithubOrg.ImmichApp, GithubRepo.Immich, id, undefined, false);
+    return found?.message;
   }
 
   async getMessages(value?: string) {
