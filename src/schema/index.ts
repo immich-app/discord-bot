@@ -8,6 +8,7 @@ import { MirrorIdentityTable } from 'src/schema/tables/mirror-identity.table';
 import { MirrorLinkTable } from 'src/schema/tables/mirror-link.table';
 import { MirrorMessageTable } from 'src/schema/tables/mirror-message.table';
 import { PaymentTable } from 'src/schema/tables/payment.table';
+import { PullRequestExpansionTable } from 'src/schema/tables/pull-request-expansion.table';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 import { RSSFeedTable } from 'src/schema/tables/rss-feeds.table';
 import { ScheduledMessageTable } from 'src/schema/tables/scheduled-messages.table';
@@ -41,6 +42,7 @@ export class DiscordBotDatabase {
     ZulipDmExpanderTable,
     ZulipDmExpanderDefaultTable,
     ZulipEmoteTable,
+    PullRequestExpansionTable,
   ];
 }
 
@@ -73,6 +75,8 @@ export type UpdateScheduledMessage = Updateable<ScheduledMessageTable>;
 export type PullRequest = Selectable<PullRequestTable>;
 export type NewPullRequest = Insertable<PullRequestTable>;
 export type PullRequestReference = Pick<PullRequest, 'organization' | 'repository' | 'number'>;
+export type PullRequestExpansion = Selectable<PullRequestExpansionTable>;
+export type NewPullRequestExpansion = Insertable<PullRequestExpansionTable>;
 
 export type MirrorConversation = Selectable<MirrorConversationTable>;
 export type NewMirrorConversation = Insertable<MirrorConversationTable>;
@@ -118,4 +122,5 @@ export interface Database {
   zulip_dm_expander: ZulipDmExpanderTable;
   zulip_dm_expander_default: ZulipDmExpanderDefaultTable;
   zulip_emote: ZulipEmoteTable;
+  pull_request_expansion: PullRequestExpansionTable;
 }

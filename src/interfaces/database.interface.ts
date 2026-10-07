@@ -16,10 +16,13 @@ import {
   NewMirrorMessage,
   NewPayment,
   NewPullRequest,
+  NewPullRequestExpansion,
   NewRSSFeed,
   NewScheduledMessage,
   NewZulipExpanderGroup,
   PullRequest,
+  PullRequestExpansion,
+  PullRequestReference,
   RSSFeed,
   ScheduledMessage,
   UpdateDiscordMessage,
@@ -43,6 +46,9 @@ export const IDatabaseRepository = 'IDatabaseRepository';
 export type MirrorMessageQuery = { withDeleted?: boolean };
 
 export type MirrorIdentityOwner = { zulipUserId: number } | { discordUserId: string };
+
+/** `pullRequestCount` is how many pull requests the expansion's reply names, this one included. */
+export type PullRequestExpansionWithCount = PullRequestExpansion & { pullRequestCount: number };
 
 export type ReportOptions = {
   day?: DateTime;
@@ -152,4 +158,8 @@ export interface IDatabaseRepository {
   getZulipEmotes(): Promise<ZulipEmote[]>;
   /** Records the emote as padded under that Zulip name. */
   addZulipEmote(discordEmoteId: string, zulipName: string): Promise<void>;
+  createPullRequestExpansions(rows: NewPullRequestExpansion[]): Promise<void>;
+  /** The expansions of the pull request created before `before`, oldest first. */
+  getPullRequestExpansions(pullRequest: PullRequestReference, before: Date): Promise<PullRequestExpansionWithCount[]>;
+  removePullRequestExpansions(before: Date): Promise<void>;
 }

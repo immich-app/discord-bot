@@ -15,7 +15,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, zulip_expander*, zulip_dm_expander* and zulip_emote rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, zulip_expander*, zulip_dm_expander* and zulip_emote rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -24,6 +24,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     await db.deleteFrom('mirror_link').execute();
     await db.deleteFrom('mirror_identity').execute();
     await db.deleteFrom('pull_request').execute();
+    await db.deleteFrom('pull_request_expansion').execute();
     await db.deleteFrom('zulip_emote').execute();
     await db.deleteFrom('zulip_expander_default').execute();
     await db.deleteFrom('zulip_expander').execute();
@@ -377,6 +378,67 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       expect(await sut.getLatestPullRequestByNumber(4242, 'immich-app')).toMatchObject({ nodeId: 'PR_immich_newer' });
       expect(await sut.getLatestPullRequestByNumber(4242, 'futo-org')).toMatchObject({ nodeId: 'PR_futo' });
       expect(await sut.getLatestPullRequestByNumber(4242, 'someone-else')).toBeUndefined();
+    });
+  });
+
+  describe('pull request expansions', () => {
+    const PULL_REQUEST = { organization: 'immich-app', repository: 'immich', number: 4242 };
+    const expansion = (service: 'discord' | 'zulip', messageId: string, pullRequest = PULL_REQUEST) => ({
+      service,
+      messageId,
+      channelId: service === 'discord' ? CHANNEL : null,
+      ...pullRequest,
+    });
+    const setCreatedAt = (messageId: string, createdAt: string) =>
+      db
+        .updateTable('pull_request_expansion')
+        .set({ createdAt: new Date(createdAt) })
+        .where('messageId', '=', messageId)
+        .execute();
+
+    it('should list the expansions of the pull request created before the moment, oldest first, with how many pull requests each reply names', async () => {
+      await sut.createPullRequestExpansions([
+        expansion('zulip', '901'),
+        expansion('zulip', '901', { ...PULL_REQUEST, number: 4243 }),
+        expansion('zulip', '901', { ...PULL_REQUEST, repository: 'static-pages' }),
+      ]);
+      await sut.createPullRequestExpansions([expansion('discord', '300000000000000001')]);
+      await sut.createPullRequestExpansions([expansion('zulip', '902', { ...PULL_REQUEST, organization: 'futo-org' })]);
+      await sut.createPullRequestExpansions([expansion('zulip', '903')]);
+      await setCreatedAt('901', '2026-10-02T00:00:00Z');
+      await setCreatedAt('300000000000000001', '2026-10-01T00:00:00Z');
+      await setCreatedAt('902', '2026-10-01T00:00:00Z');
+      await setCreatedAt('903', '2026-10-04T00:00:00Z');
+
+      expect(await sut.getPullRequestExpansions(PULL_REQUEST, new Date('2026-10-03T00:00:00Z'))).toEqual([
+        {
+          ...expansion('discord', '300000000000000001'),
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          pullRequestCount: 1,
+        },
+        { ...expansion('zulip', '901'), createdAt: new Date('2026-10-02T00:00:00Z'), pullRequestCount: 3 },
+      ]);
+    });
+
+    it('should count the pull requests of a reply on its own service alone', async () => {
+      await sut.createPullRequestExpansions([expansion('zulip', '901')]);
+      await sut.createPullRequestExpansions([expansion('discord', '901', { ...PULL_REQUEST, number: 4243 })]);
+
+      expect(await sut.getPullRequestExpansions(PULL_REQUEST, new Date(Date.now() + 60_000))).toEqual([
+        expect.objectContaining({ service: 'zulip', messageId: '901', pullRequestCount: 1 }),
+      ]);
+    });
+
+    it('should remove only the expansions created before the cutoff', async () => {
+      await sut.createPullRequestExpansions([expansion('zulip', '901'), expansion('zulip', '902')]);
+      await setCreatedAt('901', '2026-09-01T00:00:00Z');
+      await setCreatedAt('902', '2026-10-01T00:00:00Z');
+
+      await sut.removePullRequestExpansions(new Date('2026-09-15T00:00:00Z'));
+
+      expect(await sut.getPullRequestExpansions(PULL_REQUEST, new Date('2026-10-02T00:00:00Z'))).toEqual([
+        expect.objectContaining({ messageId: '902' }),
+      ]);
     });
   });
 

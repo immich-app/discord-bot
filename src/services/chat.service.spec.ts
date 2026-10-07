@@ -13,6 +13,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { PullRequest, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
+import { ApprovalService } from 'src/services/approval.service';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
 import { LINKS_ONLY, ZulipExpanderService } from 'src/services/zulip-expander.service';
@@ -159,6 +160,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   setZulipDmExpanderDefault: vitest.fn(),
   getZulipEmotes: vitest.fn().mockResolvedValue([]),
   addZulipEmote: vitest.fn(),
+  createPullRequestExpansions: vitest.fn(),
+  getPullRequestExpansions: vitest.fn(),
+  removePullRequestExpansions: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
@@ -172,6 +176,8 @@ const newZulipServiceMock = () => ({
   ownUser: { userId: BOT_USER_ID, fullName: 'FUBot' },
   isGuest: vitest.fn<(userId: number) => Promise<boolean>>().mockResolvedValue(false),
 });
+
+const newApprovalsMock = () => ({ track: vitest.fn<ApprovalService['track']>().mockResolvedValue() });
 
 const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
@@ -224,6 +230,7 @@ describe('Bot test', () => {
   let databaseMock: Mocked<IDatabaseRepository>;
   let zulipMock: Mocked<IZulipInterface>;
   let zulipServiceMock: ReturnType<typeof newZulipServiceMock>;
+  let approvalsMock: ReturnType<typeof newApprovalsMock>;
   let zulipExpanders: ZulipExpanderService;
   let fetchMock: ReturnType<typeof vitest.fn>;
 
@@ -237,6 +244,7 @@ describe('Bot test', () => {
     databaseMock = newDatabaseMockRepository();
     zulipMock = newZulipMockRepository();
     zulipServiceMock = newZulipServiceMock();
+    approvalsMock = newApprovalsMock();
     zulipExpanders = new ZulipExpanderService(databaseMock, githubMock, gitlabMock);
     // 7TV and BTTV lookups go through the global fetch.
     fetchMock = vitest.fn();
@@ -254,6 +262,7 @@ describe('Bot test', () => {
       zulipServiceMock as unknown as ZulipService,
       new NotificationService(discordMock, zulipMock),
       zulipExpanders,
+      approvalsMock as unknown as ApprovalService,
     );
   });
 
@@ -1868,6 +1877,7 @@ describe('Bot test', () => {
       databaseMock.getZulipExpanders.mockResolvedValue([
         { streamId: 107, groupName: 'immich', createdBy: 'migration', createdAt: new Date(0) },
       ]);
+      zulipMock.sendMessage.mockResolvedValue({ id: 901 });
       await zulipExpanders.init();
       await sut.init();
 
@@ -1927,6 +1937,62 @@ describe('Bot test', () => {
         [54, 107, 108, 109, 110, 111, 112, 113, 120].map((streamId) => expanderRow(streamId)),
       );
       await zulipExpanders.init();
+    });
+
+    describe('approval tracking', () => {
+      const ZULIP_REPLY = { service: 'zulip', messageId: '901', channelId: null };
+
+      it('should track a stream reply under its message ID with the pull requests it expanded', async () => {
+        await sut.onZulipMessage(zulipMessage({ content: 'see #4242 and #6969' }));
+
+        expect(approvalsMock.track).toHaveBeenCalledExactlyOnceWith(ZULIP_REPLY, [
+          { organization: 'immich-app', repository: 'immich', number: 4242 },
+        ]);
+        expect(zulipMock.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+          approvalsMock.track.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('should track a direct message reply under its message ID', async () => {
+        zulipMock.sendDirectMessage.mockResolvedValue({ id: 902 });
+
+        await sut.onZulipMessage(
+          zulipMessage({
+            type: 'private',
+            streamId: undefined,
+            topic: '',
+            recipientIds: [BOT_USER_ID, 12],
+            content: 'https://github.com/futo-org/fhs-core/pull/8',
+          }),
+        );
+
+        expect(approvalsMock.track).toHaveBeenCalledExactlyOnceWith({ ...ZULIP_REPLY, messageId: '902' }, [
+          { organization: 'futo-org', repository: 'fhs-core', number: 8 },
+        ]);
+      });
+
+      it('should track a reply that expanded no pull request with none', async () => {
+        await sut.onZulipMessage(zulipMessage({ content: 'see #6969 and https://x.com/immich/status/1' }));
+
+        expect(approvalsMock.track).toHaveBeenCalledExactlyOnceWith(ZULIP_REPLY, []);
+      });
+
+      it('should track a reply whose expansions failed with none, then report the failure', async () => {
+        githubMock.getIssueOrPrMessage.mockRejectedValue(new Error('GitHub is down'));
+
+        await expect(
+          sut.onZulipMessage(zulipMessage({ streamId: 120, content: 'fixes #4242 :we-are-checking:' })),
+        ).rejects.toThrow('GitHub is down');
+
+        expect(approvalsMock.track).toHaveBeenCalledExactlyOnceWith(ZULIP_REPLY, []);
+      });
+
+      it('should track nothing when there is no reply', async () => {
+        await sut.onZulipMessage(zulipMessage({ content: 'hello' }));
+
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(approvalsMock.track).not.toHaveBeenCalled();
+      });
     });
 
     describe('direct messages', () => {

@@ -10,6 +10,7 @@ import {
   IDatabaseRepository,
   MirrorIdentityOwner,
   MirrorMessageQuery,
+  PullRequestExpansionWithCount,
   ReportOptions,
 } from 'src/interfaces/database.interface';
 import {
@@ -28,9 +29,11 @@ import {
   NewMirrorLink,
   NewMirrorMessage,
   NewPayment,
+  NewPullRequestExpansion,
   NewRSSFeed,
   NewScheduledMessage,
   NewZulipExpanderGroup,
+  PullRequestReference,
   RSSFeed,
   ScheduledMessage,
   UpdateDiscordMessage,
@@ -698,5 +701,37 @@ export class DatabaseRepository implements IDatabaseRepository {
       .values({ discordEmoteId, zulipName })
       .onConflict((oc) => oc.column('discordEmoteId').doUpdateSet({ zulipName, padded: true }))
       .execute();
+  }
+
+  async createPullRequestExpansions(rows: NewPullRequestExpansion[]): Promise<void> {
+    await this.db.insertInto('pull_request_expansion').values(rows).execute();
+  }
+
+  getPullRequestExpansions(
+    { organization, repository, number }: PullRequestReference,
+    before: Date,
+  ): Promise<PullRequestExpansionWithCount[]> {
+    return this.db
+      .selectFrom('pull_request_expansion as expansion')
+      .selectAll('expansion')
+      .select((eb) =>
+        eb
+          .selectFrom('pull_request_expansion as reply')
+          .select((reply) => reply.cast<number>(reply.fn.countAll(), 'integer').as('count'))
+          .whereRef('reply.service', '=', 'expansion.service')
+          .whereRef('reply.messageId', '=', 'expansion.messageId')
+          .$asScalar()
+          .as('pullRequestCount'),
+      )
+      .where('expansion.organization', '=', organization)
+      .where('expansion.repository', '=', repository)
+      .where('expansion.number', '=', number)
+      .where('expansion.createdAt', '<', before)
+      .orderBy('expansion.createdAt')
+      .execute();
+  }
+
+  async removePullRequestExpansions(before: Date): Promise<void> {
+    await this.db.deleteFrom('pull_request_expansion').where('createdAt', '<', before).execute();
   }
 }

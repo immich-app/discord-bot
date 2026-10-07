@@ -25,6 +25,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { PullRequest } from 'src/schema';
+import { ApprovalService } from 'src/services/approval.service';
 import { NotificationService } from 'src/services/notification.service';
 import {
   ExpanderScope,
@@ -283,6 +284,7 @@ export class ChatService {
     private zulipService: ZulipService,
     private notifications: NotificationService,
     private zulipExpanders: ZulipExpanderService,
+    private approvals: ApprovalService,
   ) {}
 
   async init() {
@@ -292,7 +294,7 @@ export class ChatService {
   }
 
   async onZulipMessage({ type, streamId, topic, content, recipientIds = [] }: ZulipReceivedMessage) {
-    let reply: (content: string) => Promise<unknown>;
+    let reply: (content: string) => Promise<{ id: number }>;
     let scope: ExpanderScope;
     if (type === 'private') {
       const others = recipientIds.filter((userId) => userId !== this.zulipService.ownUser?.userId);
@@ -315,7 +317,11 @@ export class ChatService {
     const parts = [...(expansions.status === 'fulfilled' ? expansions.value.parts : []), ...emojiImages(content)];
 
     if (parts.length !== 0) {
-      await reply(parts.join('\n'));
+      const { id } = await reply(parts.join('\n'));
+      await this.approvals.track(
+        { service: 'zulip', messageId: String(id), channelId: null },
+        expansions.status === 'fulfilled' ? expansions.value.pullRequests : [],
+      );
     }
     if (expansions.status === 'rejected') {
       throw expansions.reason;

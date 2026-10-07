@@ -17,6 +17,7 @@ import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.in
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
+import { ApprovalService } from 'src/services/approval.service';
 import { GithubService } from 'src/services/github.service';
 import { NotificationService } from 'src/services/notification.service';
 import { BackfillReport, WebhookService, formatBackfillReport } from 'src/services/webhook.service';
@@ -117,6 +118,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   setZulipDmExpanderDefault: vitest.fn(),
   getZulipEmotes: vitest.fn().mockResolvedValue([]),
   addZulipEmote: vitest.fn(),
+  createPullRequestExpansions: vitest.fn(),
+  getPullRequestExpansions: vitest.fn(),
+  removePullRequestExpansions: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
@@ -380,6 +384,7 @@ describe(WebhookService.name, () => {
   let githubMock: Mocked<IGithubInterface>;
   let outlineMock: Mocked<IOutlineInterface>;
   let zulipMock: Mocked<IZulipInterface>;
+  let approvalsMock: { handleReview: ReturnType<typeof vitest.fn<ApprovalService['handleReview']>> };
 
   /** Everything that was posted, with Discord embeds serialised via `toJSON()` so the snapshot shows the wire shape. */
   const sent = () => ({
@@ -403,6 +408,7 @@ describe(WebhookService.name, () => {
     githubMock = newGithubMockRepository();
     outlineMock = newOutlineMockRepository();
     zulipMock = newZulipMockRepository();
+    approvalsMock = { handleReview: vitest.fn() };
 
     sut = new WebhookService(
       databaseMock,
@@ -412,6 +418,7 @@ describe(WebhookService.name, () => {
       outlineMock,
       zulipMock,
       new NotificationService(discordMock, zulipMock),
+      approvalsMock as unknown as ApprovalService,
     );
   });
 
@@ -973,6 +980,73 @@ describe(WebhookService.name, () => {
         repository: 'immich',
         updatedAt: '2026-01-01T00:00:00Z',
       });
+    });
+
+    describe('reviews', () => {
+      const review = {
+        id: 1,
+        state: 'approved',
+        user: { login: 'mertalev', type: 'User' },
+        submitted_at: '2026-01-02T00:00:00Z',
+      };
+      const reviewEvent = (action: string, repository: Record<string, unknown> = immichRepo) =>
+        githubEvent('pull_request_review', { action, sender, repository, pull_request: makePullRequest(), review });
+
+      it.each([
+        { owner: 'immich-app', repository: immichRepo },
+        { owner: 'futo-org', repository: futoRepo },
+      ])('should pass a review of $owner to the approvals after recording the pull request', async ({ repository }) => {
+        const event = reviewEvent('submitted', repository);
+
+        await sut.onGithub(event, 'github-slug');
+
+        expect(approvalsMock.handleReview).toHaveBeenCalledExactlyOnceWith(event.payload);
+        expect(databaseMock.upsertPullRequest.mock.invocationCallOrder[0]).toBeLessThan(
+          approvalsMock.handleReview.mock.invocationCallOrder[0],
+        );
+      });
+
+      it.each(['pull_request', 'pull_request_review_comment'] as const)(
+        'should pass no %s event to the approvals',
+        async (name) => {
+          await sut.onGithub(
+            githubEvent(name, { action: 'edited', sender, repository: immichRepo, pull_request: makePullRequest() }),
+            'github-slug',
+          );
+
+          expect(approvalsMock.handleReview).not.toHaveBeenCalled();
+        },
+      );
+
+      it('should pass no review of an organization outside the allowed owners to the approvals', async () => {
+        await sut.onGithub(reviewEvent('submitted', unrelatedRepo), 'github-slug');
+
+        expect(approvalsMock.handleReview).not.toHaveBeenCalled();
+      });
+
+      it.each(['submitted', 'edited', 'dismissed'])(
+        'should post nothing and touch neither the Discord thread nor the Zulip topic when a review is %s',
+        async (action) => {
+          zulipMock.isInitialised.mockReturnValue(true);
+          databaseMock.getPullRequestById.mockResolvedValue({
+            nodeId: 'PR_node_1234',
+            organization: 'immich-app',
+            repository: 'immich',
+            number: 1234,
+            discordThreadId: 'thread-1',
+            zulipMessageId: 42,
+            updatedAt: new Date('2026-01-01T00:00:00Z'),
+            closedAt: null,
+          } as any);
+
+          await sut.onGithub(reviewEvent(action), 'github-slug');
+
+          expect(databaseMock.getPullRequestById).not.toHaveBeenCalled();
+          expect(discordMock.updateThread).not.toHaveBeenCalled();
+          expect(zulipMock.getMessage).not.toHaveBeenCalled();
+          expect(sent()).toEqual({ discord: [], zulip: [] });
+        },
+      );
     });
   });
 
