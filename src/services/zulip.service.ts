@@ -54,7 +54,14 @@ const sleep = (ms: number, signal: AbortSignal) =>
 const backoffMs = (failures: number) => Math.min(INITIAL_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
 
 /** Message events carry no `is_bot` flag, but Zulip creates every bot as `{short_name}-bot@{realm host}`. */
-export const isBotSender = (message: ZulipReceivedMessage) => /-bot@[^@]+$/i.test(message.senderEmail);
+const BOT_EMAIL = /-bot@[^@]+$/i;
+
+export const isBotSender = (message: ZulipReceivedMessage) => BOT_EMAIL.test(message.senderEmail);
+
+/** Zulip's email gateway posts incoming email under its own name, without the `-bot@` every other bot address has. */
+const EMAIL_GATEWAY = 'emailgateway@zulip.com';
+
+export const isZulipBot = (email: string) => BOT_EMAIL.test(email) || email.toLowerCase() === EMAIL_GATEWAY;
 
 const describeZulipStream = (streamId: number) => {
   const named = [...Object.entries(Constants.Zulip.TeamStreams), ...Object.entries(Constants.Zulip.Streams)];

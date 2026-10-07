@@ -82,7 +82,7 @@ import {
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
 import { MirrorConversation, MirrorIdentity, MirrorLink, MirrorMessage, NewMirrorMessage } from 'src/schema';
 import { hasBlacklistedUrl, zulipBuiltInEmoji } from 'src/services/chat.service';
-import { isBotSender, ZulipService } from 'src/services/zulip.service';
+import { isZulipBot, ZulipService } from 'src/services/zulip.service';
 import { parseCommand } from 'src/zulip-command-parser';
 
 const MINUTE = 60 * 1000;
@@ -267,12 +267,6 @@ type OutgoingZulipMessage = {
   notes: Note[];
   identity: Identity;
 };
-
-/** Zulip's email gateway posts incoming email under its own name, without the `-bot@` every other bot address has. */
-const EMAIL_GATEWAY = 'emailgateway@zulip.com';
-
-const isZulipBot = (message: ZulipReceivedMessage) =>
-  isBotSender(message) || message.senderEmail.toLowerCase() === EMAIL_GATEWAY;
 
 /** Zulip's Notification Bot says what Zulip did, such as a move or a resolve, which the mirror carries over itself. */
 const isMirroredSender = (message: ZulipReceivedMessage) => !/^notification-bot@/i.test(message.senderEmail);
@@ -2152,7 +2146,7 @@ export class MirrorService implements OnModuleDestroy {
         name: message.senderFullName,
         expiresAt: Date.now() + IDENTITY_CACHE_MS,
       });
-      if (isZulipBot(message)) {
+      if (isZulipBot(message.senderEmail)) {
         this.botSenders.add(message.senderId);
       }
       const conversation = await this.conversationForZulip(state, message);
