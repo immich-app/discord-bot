@@ -8,7 +8,7 @@ import _ from 'lodash';
 import { DateTime } from 'luxon';
 import semver from 'semver';
 import { getConfig } from 'src/config';
-import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
+import { Constants, GithubItemKind, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import {
   DISCORD_MAX_MESSAGE_LENGTH,
@@ -36,6 +36,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
+import { GithubItemEvent } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
 import { NotificationService } from 'src/services/notification.service';
 import { makeLicenseFields, makeOrderFields, withErrorLogging } from 'src/util';
@@ -73,6 +74,41 @@ const isPullRequestEvent = (event: EmitterWebhookEvent): event is EmitterWebhook
   (PULL_REQUEST_EVENTS as readonly string[]).includes(event.name);
 
 type PullRequestEditedEvent = EmitterWebhookEvent<'pull_request.edited'>['payload'];
+
+const ITEM_REMOVING_EVENTS = new Set([
+  'issues.deleted',
+  'issues.transferred',
+  'discussion.deleted',
+  'discussion.transferred',
+]);
+
+const toGithubItem = (
+  { owner, name }: { owner: { login: string }; name: string },
+  { number, updated_at }: { number: number; updated_at: string },
+  kind: GithubItemKind,
+) => ({ organization: owner.login, repository: name, number, kind, updatedAt: updated_at });
+
+/** The pull request, issue or discussion the event is about, if any. */
+const getEventItem = (event: EmitterWebhookEvent): GithubItemEvent | undefined => {
+  if (isPullRequestEvent(event)) {
+    const { repository, pull_request } = event.payload;
+    return toGithubItem(repository, pull_request, GithubItemKind.PullRequest);
+  }
+
+  switch (event.name) {
+    case 'issues':
+    case 'issue_comment': {
+      const { repository, issue } = event.payload;
+      return toGithubItem(repository, issue, issue.pull_request ? GithubItemKind.PullRequest : GithubItemKind.Issue);
+    }
+
+    case 'discussion':
+    case 'discussion_comment': {
+      const { repository, discussion } = event.payload;
+      return toGithubItem(repository, discussion, GithubItemKind.Discussion);
+    }
+  }
+};
 
 export type BackfillPlatforms = { discord: boolean; zulip: boolean };
 
@@ -267,9 +303,10 @@ export class WebhookService {
       return;
     }
 
-    if (isPullRequestEvent(event)) {
-      await this.upsertPullRequest(event.payload);
-    }
+    await Promise.all([
+      isPullRequestEvent(event) && this.upsertPullRequest(event.payload),
+      this.recordGithubItem(event),
+    ]);
 
     // A review would otherwise refresh the Discord thread, which strips its Discussion tag.
     if (event.name === 'pull_request_review') {
@@ -1130,6 +1167,20 @@ Read only for Nicholas: ${share.url}
       }
       this.logger.warn(`Zulip refused to edit message ${messageId}: ${error.message}`);
     }
+  }
+
+  private async recordGithubItem(event: EmitterWebhookEvent) {
+    const item = getEventItem(event);
+    if (!item) {
+      return;
+    }
+
+    if ('action' in event.payload && ITEM_REMOVING_EVENTS.has(`${event.name}.${event.payload.action}`)) {
+      await this.database.removeGithubItem(item);
+      return;
+    }
+
+    await this.database.upsertGithubItem(item);
   }
 
   async upsertPullRequest({ pull_request, repository }: PullRequestEvent) {
