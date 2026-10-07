@@ -315,10 +315,6 @@ export class DatabaseRepository implements IDatabaseRepository {
       .execute();
   }
 
-  getPullRequestsByNumber(number: number) {
-    return this.db.selectFrom('pull_request').selectAll().where('number', '=', number).execute();
-  }
-
   async getLatestPullRequestByNumber(number: number, organization: string) {
     return this.db
       .selectFrom('pull_request')
@@ -327,6 +323,15 @@ export class DatabaseRepository implements IDatabaseRepository {
       .where('organization', '=', organization)
       .orderBy('updatedAt', 'desc')
       .executeTakeFirst();
+  }
+
+  getGithubItemsByNumber(number: number) {
+    return this.db
+      .selectFrom('github_item')
+      .selectAll()
+      .where('number', '=', number)
+      .where('removed', '=', false)
+      .execute();
   }
 
   async upsertGithubItem({ organization, repository, ...item }: GithubItemEvent): Promise<void> {

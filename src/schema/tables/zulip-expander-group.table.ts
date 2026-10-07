@@ -10,7 +10,7 @@ export class ZulipExpanderGroupTable {
   @Column({ array: true })
   repositories!: string[];
 
-  /** A bare `#123` below this expands only for a pull request updated in the last two weeks. */
+  /** A bare `#123` below this expands only when a stream repository has that item in `github_item`. */
   @Column({ type: 'integer', default: 0 })
   threshold!: Generated<number>;
 
