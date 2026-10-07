@@ -47,7 +47,7 @@ export class DiscordEvents {
 
     const isPrivileged = message.member?.roles.cache.has(Constants.Discord.Roles.Team) ?? false;
 
-    const [messageParts, twitterLinks] = await Promise.all([
+    const [{ parts }, twitterLinks] = await Promise.all([
       this.service.handleGithubReferences(
         { content: message.content, channelParentId: message.channel.parentId },
         isPrivileged,
@@ -56,9 +56,9 @@ export class DiscordEvents {
       this.service.handleTaggingOfPullRequestThreads(message),
     ]);
 
-    if (messageParts.length !== 0) {
+    if (parts.length !== 0) {
       await message.reply({
-        content: messageParts.join('\n'),
+        content: parts.join('\n'),
         flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
       });
     }

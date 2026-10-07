@@ -72,6 +72,7 @@ export type UpdateScheduledMessage = Updateable<ScheduledMessageTable>;
 
 export type PullRequest = Selectable<PullRequestTable>;
 export type NewPullRequest = Insertable<PullRequestTable>;
+export type PullRequestReference = Pick<PullRequest, 'organization' | 'repository' | 'number'>;
 
 export type MirrorConversation = Selectable<MirrorConversationTable>;
 export type NewMirrorConversation = Insertable<MirrorConversationTable>;

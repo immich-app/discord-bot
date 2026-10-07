@@ -6,7 +6,7 @@ import { neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
-import { IGithubInterface } from 'src/interfaces/github.interface';
+import { IGithubInterface, IssueOrPullRequestMessage } from 'src/interfaces/github.interface';
 import { GitlabItem, GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
@@ -15,7 +15,7 @@ import { ZulipApiError } from 'src/repositories/zulip.client';
 import { PullRequest, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
-import { ZulipExpanderService } from 'src/services/zulip-expander.service';
+import { LINKS_ONLY, ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
 import { MockInstance, Mocked, afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 
@@ -34,17 +34,21 @@ vitest.mock('src/config', () => ({
   }),
 }));
 
+const issueOrPr = (org: string, repo: string, id: number): IssueOrPullRequestMessage =>
+  id % 2 === 0
+    ? {
+        message: `https://github.com/${org}/${repo}/pull/${id}`,
+        pullRequest: { organization: org, repository: repo, number: id },
+      }
+    : { message: `https://github.com/${org}/${repo}/issues/${id}` };
+
 const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
   search: vitest.fn(),
   getDiscussionMessage: vitest
     .fn()
     .mockImplementation((org, repo, id) => Promise.resolve(`https://github.com/${org}/${repo}/discussions/${id}`)),
   getForkCount: vitest.fn(),
-  getIssueOrPrMessage: vitest
-    .fn()
-    .mockImplementation((org, repo, id) =>
-      Promise.resolve(`https://github.com/${org}/${repo}/${id % 2 === 0 ? 'pull' : 'issues'}/${id}`),
-    ),
+  getIssueOrPrMessage: vitest.fn().mockImplementation((org, repo, id) => Promise.resolve(issueOrPr(org, repo, id))),
   getStarCount: vitest.fn(),
   init: vitest.fn(),
   getRepositoryFileContent: vitest
@@ -405,6 +409,18 @@ describe('Bot test', () => {
     });
   });
 
+  describe('handleGithubReferences', () => {
+    it('should resolve the snippets before the links, and name the pull requests among the links', async () => {
+      githubMock.getRepositoryFileContent.mockResolvedValueOnce(['line 1', 'line 2', 'line 3']);
+      const content = '#4242 https://github.com/immich-app/immich/blob/main/src/test.js#L3';
+
+      await expect(sut.handleGithubReferences({ content }, false)).resolves.toEqual({
+        parts: ['```js\nline 3\n```', 'https://github.com/immich-app/immich/pull/4242'],
+        pullRequests: [{ organization: 'immich-app', repository: 'immich', number: 4242 }],
+      });
+    });
+  });
+
   describe('handleGithubThreadReferences', () => {
     it.each([
       {
@@ -481,23 +497,102 @@ describe('Bot test', () => {
         ],
       },
     ])('should $name', async ({ message: message, links }) => {
-      await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual(links);
+      const { parts } = await sut.handleGithubThreadReferences({ content: message }, false);
+
+      expect(parts).toEqual(links);
     });
 
     it.each([
       { name: 'a Discord channel mention', message: 'see <#1369628205035688098>' },
       { name: 'a number too large for an issue', message: '#1369628205035688098' },
     ])('should not look up $name', async ({ message }) => {
-      await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual([]);
+      await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual({
+        parts: [],
+        pullRequests: [],
+      });
       expect(databaseMock.getLatestPullRequestByNumber).not.toHaveBeenCalled();
     });
 
     it('should resolve a bare reference with the latest pull request of that number when no scope is given, as Discord does', async () => {
-      await expect(sut.handleGithubThreadReferences({ content: '#4242' }, false)).resolves.toEqual([
-        'https://github.com/immich-app/immich/pull/4242',
-      ]);
+      const { parts } = await sut.handleGithubThreadReferences({ content: '#4242' }, false);
+
+      expect(parts).toEqual(['https://github.com/immich-app/immich/pull/4242']);
       expect(databaseMock.getLatestPullRequestByNumber).toHaveBeenCalledWith(4242, 'immich-app');
       expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
+    });
+
+    it('should name the pull requests among the links, and no issue, discussion or reference GitHub cannot find', async () => {
+      githubMock.getIssueOrPrMessage.mockImplementation(async (org, repo, id) =>
+        id === 9998 ? undefined : issueOrPr(org, repo, id),
+      );
+
+      const content = [
+        '#4242',
+        '#6969',
+        'https://github.com/immich-app/immich/discussions/3',
+        'https://github.com/immich-app/immich/pull/9998',
+      ].join(' ');
+
+      await expect(sut.handleGithubThreadReferences({ content }, false)).resolves.toEqual({
+        parts: [
+          'https://github.com/immich-app/immich/pull/4242',
+          'https://github.com/immich-app/immich/issues/6969',
+          'https://github.com/immich-app/immich/discussions/3',
+        ],
+        pullRequests: [{ organization: 'immich-app', repository: 'immich', number: 4242 }],
+      });
+    });
+
+    it('should name a pull request once, however many times and in whatever case the message references it', async () => {
+      const content =
+        'immich-app/immich#4242 #4242 Immich-App/Immich#4242 https://github.com/IMMICH-APP/immich/pull/4242';
+
+      const { pullRequests } = await sut.handleGithubThreadReferences({ content }, false);
+
+      expect(pullRequests).toEqual([{ organization: 'immich-app', repository: 'immich', number: 4242 }]);
+    });
+
+    it.each([
+      { name: 'a pull request an issue link points at', path: 'issues/4242', pullRequests: [4242] },
+      { name: 'no issue a pull request link points at', path: 'pull/6969', pullRequests: [] },
+    ])("should name $name, since GitHub's answer decides", async ({ path, pullRequests }) => {
+      const { pullRequests: named } = await sut.handleGithubThreadReferences(
+        { content: `https://github.com/immich-app/immich/${path}` },
+        false,
+      );
+
+      expect(named).toEqual(
+        pullRequests.map((number) => ({ organization: 'immich-app', repository: 'immich', number })),
+      );
+    });
+
+    it('should name no GitLab merge request among the pull requests', async () => {
+      const url = 'https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/194';
+      gitlabMock.getItem.mockResolvedValue({ kind: 'merge_requests', title: 'Fix', url, updatedAt: new Date(0) });
+
+      await expect(sut.handleGithubThreadReferences({ content: url, scope: LINKS_ONLY }, true)).resolves.toEqual({
+        parts: [`[Merge Request] Fix ([videostreaming/grayjay#194](${url}))`],
+        pullRequests: [],
+      });
+    });
+  });
+
+  describe('getPrOrIssue', () => {
+    it('should resolve to the message of that number in immich-app/immich, asked unprivileged', async () => {
+      await expect(sut.getPrOrIssue(4242)).resolves.toBe('https://github.com/immich-app/immich/pull/4242');
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+        'immich-app',
+        'immich',
+        4242,
+        undefined,
+        false,
+      );
+    });
+
+    it('should resolve to undefined when GitHub cannot find it', async () => {
+      githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
+
+      await expect(sut.getPrOrIssue(4242)).resolves.toBeUndefined();
     });
   });
 
@@ -1841,7 +1936,7 @@ describe('Bot test', () => {
 
       beforeEach(() => {
         zulipMock.sendDirectMessage.mockResolvedValue({ id: 902 });
-        githubMock.getIssueOrPrMessage.mockResolvedValue('[Pull Request] Fix (futo-org/fhs-core#7)');
+        githubMock.getIssueOrPrMessage.mockResolvedValue({ message: '[Pull Request] Fix (futo-org/fhs-core#7)' });
       });
 
       it('should expand a link in a direct message, answering the sender', async () => {
@@ -1894,7 +1989,7 @@ describe('Bot test', () => {
           { conversation: `12,${BOT_USER_ID}`, groupName: 'immich', createdBy: 'Alice', createdAt: new Date(0) },
         ]);
         await zulipExpanders.init();
-        githubMock.getIssueOrPrMessage.mockResolvedValue('[Issue] Bug (immich-app/immich#4242)');
+        githubMock.getIssueOrPrMessage.mockResolvedValue({ message: '[Issue] Bug (immich-app/immich#4242)' });
 
         await direct([BOT_USER_ID, 12], '#4242');
 
@@ -2098,7 +2193,9 @@ describe('Bot test', () => {
     });
 
     it('should neutralise mentions in what GitHub returned, so a title cannot ping the stream', async () => {
-      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Issue] please @**all** look (immich-app/immich#4242)');
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce({
+        message: '[Issue] please @**all** look (immich-app/immich#4242)',
+      });
 
       await sut.onZulipMessage(zulipMessage({ content: '#4242' }));
 
@@ -2109,7 +2206,9 @@ describe('Bot test', () => {
 
     it('should leave a code snippet as GitHub has it, since a neutralised sigil inside the fence would corrupt the code', async () => {
       githubMock.getRepositoryFileContent.mockResolvedValueOnce(['name="${path#*/}"', 'echo "@**${name}**"']);
-      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Issue] please @**all** look (immich-app/immich#4242)');
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce({
+        message: '[Issue] please @**all** look (immich-app/immich#4242)',
+      });
 
       await sut.onZulipMessage(
         zulipMessage({ content: 'https://github.com/immich-app/immich/blob/main/build.sh#L1-L2 for #4242' }),
@@ -2248,8 +2347,8 @@ describe('Bot test', () => {
 
     it('should expand links but no shorthand in a stream with no group on, and still mirror x.com links there', async () => {
       await setUp({ groups: [FHS], streamGroups: [] });
-      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Pull Request] Fix (futo-org/fhs-core#7)');
-      githubMock.getIssueOrPrMessage.mockResolvedValueOnce('[Issue] Bug (immich-app/immich#8)');
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce({ message: '[Pull Request] Fix (futo-org/fhs-core#7)' });
+      githubMock.getIssueOrPrMessage.mockResolvedValueOnce({ message: '[Issue] Bug (immich-app/immich#8)' });
 
       await send(
         '#4242 fhs-core#12 https://github.com/futo-org/fhs-core/pull/7 immich-app/immich#8 https://x.com/immich/status/1',

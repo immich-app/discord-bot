@@ -142,6 +142,8 @@ export class GithubRepository implements IGithubInterface {
       const { repository } = await this.graphql<{
         repository: {
           isPrivate: boolean;
+          owner: { login: string };
+          name: string;
           issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string };
         };
       }>(
@@ -150,6 +152,10 @@ export class GithubRepository implements IGithubInterface {
       query issueOrPr($org: String!, $repo: String!, $num: Int!) {
         repository(owner: $org, name: $repo) {
           isPrivate
+          owner {
+            login
+          }
+          name
           issueOrPullRequest(number: $num) {
             __typename
             ...on Issue {
@@ -171,12 +177,19 @@ export class GithubRepository implements IGithubInterface {
         return;
       }
 
-      return makeIssueOrPRMessage({
-        link: makeLink(org, repo, num, repository.issueOrPullRequest.url),
-        type: repository.issueOrPullRequest.__typename,
-        title: repository.issueOrPullRequest.title,
-        discordThreadId,
-      });
+      const { owner, name, issueOrPullRequest } = repository;
+      return {
+        message: makeIssueOrPRMessage({
+          link: makeLink(org, repo, num, issueOrPullRequest.url),
+          type: issueOrPullRequest.__typename,
+          title: issueOrPullRequest.title,
+          discordThreadId,
+        }),
+        pullRequest:
+          issueOrPullRequest.__typename === 'PullRequest'
+            ? { organization: owner.login, repository: name, number: num }
+            : undefined,
+      };
     } catch (error) {
       handleGraphqlError(error);
       this.logger.log(`Could not fetch issue or PR #${num}`);

@@ -1,4 +1,5 @@
 import { GithubOrg, GithubRepo } from 'src/constants';
+import { PullRequestReference } from 'src/schema';
 
 export const IGithubInterface = 'IGithubRepository';
 
@@ -47,6 +48,9 @@ export type PullRequestBaseEvent = {
   };
 };
 
+/** `pullRequest` is set when GitHub answers with a pull request, its owner and name spelled as GitHub spells them. */
+export type IssueOrPullRequestMessage = { message: string; pullRequest?: PullRequestReference };
+
 export interface IGithubInterface {
   init(appId: string, privateKey: string, installationId: string): Promise<void>;
   getIssueOrPrMessage(
@@ -55,7 +59,7 @@ export interface IGithubInterface {
     num: number,
     discordThreadId: string | undefined,
     isPrivileged: boolean,
-  ): Promise<string | undefined>;
+  ): Promise<IssueOrPullRequestMessage | undefined>;
   getDiscussionMessage(
     org: GithubOrg | string,
     repo: GithubRepo | string,
