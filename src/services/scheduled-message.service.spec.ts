@@ -49,6 +49,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
   getUser: vitest.fn(),
+  getUsers: vitest.fn(),
   getStream: vitest.fn(),
   getMessages: vitest.fn(),
   registerQueue: vitest.fn(),

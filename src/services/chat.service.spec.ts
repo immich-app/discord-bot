@@ -163,6 +163,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   createPullRequestExpansions: vitest.fn(),
   getPullRequestExpansions: vitest.fn(),
   removePullRequestExpansions: vitest.fn(),
+  getZulipCommandBots: vitest.fn(),
+  addZulipCommandBot: vitest.fn(),
+  removeZulipCommandBot: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
@@ -192,6 +195,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
   getUser: vitest.fn(),
+  getUsers: vitest.fn(),
   getStream: vitest.fn(),
   getMessages: vitest.fn(),
   registerQueue: vitest.fn(),

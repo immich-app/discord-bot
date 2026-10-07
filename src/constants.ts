@@ -37,6 +37,7 @@ export enum ZulipHelpSection {
   Rss = 'RSS',
   Mirror = 'Discord mirror',
   Team = 'Team tools',
+  Bots = 'Other bots',
 }
 
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };

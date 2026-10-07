@@ -6,7 +6,7 @@ import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IGithubInterface, PullRequestBaseEvent } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
 import { IRSSInterface } from 'src/interfaces/rss.interface';
-import { IZulipInterface, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipAccount, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
 import {
   NewRSSFeed,
   NewScheduledMessage,
@@ -15,6 +15,7 @@ import {
   ScheduledMessage,
   UpdateRSSFeed,
   UpdateZulipExpanderGroup,
+  ZulipCommandBot,
   ZulipDmExpander,
   ZulipDmExpanderDefault,
   ZulipExpander,
@@ -61,6 +62,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
   getUser: vitest.fn(),
+  getUsers: vitest.fn(),
   getStream: vitest.fn(),
   getMessages: vitest.fn().mockResolvedValue([]),
   registerQueue: vitest.fn(),
@@ -146,6 +148,7 @@ const newFakeDatabase = () => {
   const defaults: ZulipExpanderDefault[] = [];
   const conversations: ZulipDmExpander[] = [];
   const conversationDefaults: ZulipDmExpanderDefault[] = [];
+  const commandBots: ZulipCommandBot[] = [];
   const dropOrphanDefaults = () => {
     const kept = defaults.filter(({ streamId }) => expanders.some((row) => row.streamId === streamId));
     defaults.splice(0, defaults.length, ...kept);
@@ -164,6 +167,23 @@ const newFakeDatabase = () => {
     defaults,
     conversations,
     conversationDefaults,
+    commandBots,
+    getZulipCommandBots: () => Promise.resolve(commandBots.map((row) => ({ ...row }))),
+    addZulipCommandBot: (userId: number, createdBy: string) => {
+      if (commandBots.some((row) => row.userId === userId)) {
+        return Promise.resolve(undefined);
+      }
+      const row = { userId, createdBy, createdAt: new Date() };
+      commandBots.push(row);
+      return Promise.resolve({ ...row });
+    },
+    removeZulipCommandBot: (userId: number) => {
+      const index = commandBots.findIndex((row) => row.userId === userId);
+      if (index !== -1) {
+        commandBots.splice(index, 1);
+      }
+      return Promise.resolve(index !== -1);
+    },
     getZulipExpanderGroups: () =>
       Promise.resolve(
         groups
@@ -351,7 +371,7 @@ const HELP_FINE_PRINT = [
   '- Arguments are positional or `key=value`; quote a value with spaces: `text="two words"`.',
   '- Every reply is posted here, in this topic, for everyone in the stream to see.',
   '- Scheduled messages, RSS feeds and `expanders` act on this stream alone; expander groups are shared by every stream.',
-  '- The team tools are taken in the Immich team streams only, the `mirror-*` commands from organization administrators and owners only.',
+  '- The team tools are taken in the Immich team streams only, the `mirror-*` and `command-bots` commands from organization administrators and owners only.',
   '```',
 ].join('\n');
 
@@ -379,6 +399,9 @@ const HELP = [
   '- `emote-sync`: upload the emotes of the Immich Discord server to Zulip',
   '- `backfill-pull-requests`: create the Discord thread and the Zulip topic a pull request lacks',
   '- `fourthwall`: fetch a Fourthwall order again, or every order',
+  '',
+  '**Other bots**',
+  '- `command-bots`: choose the other bots whose commands I take',
   '',
   HELP_FINE_PRINT,
 ].join('\n');
@@ -559,6 +582,7 @@ describe('ZulipCommandService', () => {
   let mirrorLinksMock: ReturnType<typeof newMirrorLinkServiceMock>;
   let zulipExpanders: ZulipExpanderService;
 
+  const fromClaude = { senderId: 30, senderEmail: 'claude-bot@zulip.example.com', senderFullName: 'Claude' };
   const replies = () => zulipMock.sendMessage.mock.calls.map(([payload]) => payload);
   const send = (content: string, overrides: Partial<ZulipReceivedMessage> = {}) =>
     sut.onZulipMessage(message({ content, ...overrides }));
@@ -588,6 +612,7 @@ describe('ZulipCommandService', () => {
     sut = new ZulipCommandService(
       zulipMock,
       gitlabMock as unknown as IGitlabInterface,
+      db,
       zulipServiceMock as unknown as ZulipService,
       chatServiceMock as unknown as ChatService,
       githubServiceMock as unknown as GithubService,
@@ -604,47 +629,88 @@ describe('ZulipCommandService', () => {
   });
 
   describe('init', () => {
-    it("should subscribe one handler to the event loop, other bots' messages included, which answers commands", async () => {
+    it('should subscribe one handler to the event loop, which answers the listed bots too', async () => {
+      database.commandBots.push({ userId: 30, createdBy: 'Alice on Zulip (user 12)', createdAt: new Date() });
+
       await sut.init();
 
       expect(zulipServiceMock.onMessage).toHaveBeenCalledExactlyOnceWith(expect.any(Function), { withBots: true });
       const [handler] = zulipServiceMock.onMessage.mock.calls[0];
-      await handler(message());
-      expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      await handler(message({ ...fromClaude, content: '@**Immich** rss-list', streamId: 999 }));
+      expect(replies()).toEqual([
+        { stream: 999, topic: 'deploy', content: 'This stream is not subscribed to any RSS feed.' },
+      ]);
     });
   });
 
   describe('bots', () => {
-    const fromBot = { senderId: 30, senderEmail: 'claude-bot@example.com', senderFullName: 'Claude' };
+    const fromCi = { senderId: 31, senderEmail: 'ci-bot@zulip.example.com', senderFullName: 'CI' };
 
-    it("should answer another bot's command", async () => {
-      await send('@**Immich** rss-list', { ...fromBot, streamId: 999 });
+    beforeEach(async () => {
+      database.commandBots.push({ userId: 30, createdBy: 'Alice on Zulip (user 12)', createdAt: new Date() });
+      await sut.init();
+    });
+
+    it("should answer a listed bot's command", async () => {
+      await send('@**Immich** rss-list', { ...fromClaude, streamId: 999 });
 
       expect(replies()).toEqual([
         { stream: 999, topic: 'deploy', content: 'This stream is not subscribed to any RSS feed.' },
       ]);
     });
 
-    it.each(['see #4242', 'Unknown command `nonsense`. Mention me with `help` for the list.', '@**Claude** help'])(
-      'should say nothing to a bot message that is not a command: %j',
+    it.each(['@**Immich** rss-list', '@**Immich** help', '@**Immich** nonsense'])(
+      'should ignore %j from a bot that is not listed, without a word',
       async (content) => {
-        await send(content, fromBot);
+        await send(content, { ...fromCi, streamId: 999 });
+
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(zulipMock.getUser).not.toHaveBeenCalled();
+      },
+    );
+
+    it("should ignore the Notification Bot's notice that the bot resolved a topic", async () => {
+      await send('@_**Immich|7** has marked this topic as resolved.', {
+        senderId: 5,
+        senderEmail: 'notification-bot@zulip.com',
+        senderFullName: 'Notification Bot',
+        streamId: Constants.Zulip.Streams.ImmichPullRequests,
+      });
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should ignore a command sent through the email gateway, which cannot be listed', async () => {
+      await send('@**Immich** rss-list', {
+        senderId: 6,
+        senderEmail: 'emailgateway@zulip.com',
+        senderFullName: 'Email Gateway',
+        streamId: 999,
+      });
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it.each(['see #4242', 'Unknown command `nonsense`. Mention me with `help` for the list.', '@**Claude** help'])(
+      'should say nothing to a listed bot message that is not a command: %j',
+      async (content) => {
+        await send(content, fromClaude);
 
         expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       },
     );
 
-    it("should ignore another bot's direct message", async () => {
-      await send('link ABCD2345', { ...fromBot, type: 'private', streamId: undefined, topic: '' });
+    it("should ignore a listed bot's direct message", async () => {
+      await send('link ABCD2345', { ...fromClaude, type: 'private', streamId: undefined, topic: '' });
 
       expect(mirrorLinksMock.redeemIdentityCode).not.toHaveBeenCalled();
       expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
     });
 
-    it("should check a bot's role as any sender's for the administrators' commands", async () => {
+    it("should check a listed bot's role as any sender's for the administrators' commands", async () => {
       zulipMock.getUser.mockResolvedValue({ userId: 30, fullName: 'Claude', role: 400 });
 
-      await send('@**Immich** mirror-list', { ...fromBot, streamId: 120 });
+      await send('@**Immich** mirror-list', { ...fromClaude, streamId: 120 });
 
       expect(zulipMock.getUser).toHaveBeenCalledExactlyOnceWith(30);
       expect(mirrorLinksMock.list).not.toHaveBeenCalled();
@@ -653,8 +719,8 @@ describe('ZulipCommandService', () => {
       ]);
     });
 
-    it('should refuse a team command from a bot outside the team streams', async () => {
-      await send('@**Immich** emote-sync', { ...fromBot, streamId: 999 });
+    it('should refuse a team command from a listed bot outside the team streams', async () => {
+      await send('@**Immich** emote-sync', { ...fromClaude, streamId: 999 });
 
       expect(chatServiceMock.syncEmotes).not.toHaveBeenCalled();
       expect(replies().map(({ content }) => content)).toEqual([
@@ -835,6 +901,7 @@ describe('ZulipCommandService', () => {
       'expander-group',
       'discord-unlink',
       'similar',
+      'command-bots',
     ];
     const SCHEDULE_ADD = [
       '`schedule-add <name> cron=<expression> message=<text> [topic=<topic>] [suppress-embeds=<true|false>]`',
@@ -895,6 +962,7 @@ describe('ZulipCommandService', () => {
 
       const [content] = contents();
       expect(content).toContain('**Team tools**');
+      expect(content).not.toContain('**Other bots**');
       expect(lines(content).filter((line) => line.startsWith('- `mirror-'))).toEqual([]);
       expect(lines(content)).toContain('*Left out here: the commands for organization administrators and owners.*');
     });
@@ -943,6 +1011,24 @@ describe('ZulipCommandService', () => {
         ].join('\n'),
       ]);
       expect(zulipMock.getUser).not.toHaveBeenCalled();
+    });
+
+    it('should explain each form of command-bots, saying who it is taken from', async () => {
+      zulipMock.getUser.mockResolvedValue(MEMBER);
+
+      await send('@**Immich** help command-bots');
+
+      expect(contents()).toEqual([
+        [
+          '`command-bots <add|remove> <bot> | list`',
+          "Choose the other bots whose commands I take, in every stream, with their role checked as anyone's; every other bot's are ignored, and people's are always taken. A bot is named by its mention, its email, its name or its user ID.",
+          '- `add <bot>`: take the commands of that bot',
+          '- `remove <bot>`: stop taking the commands of that bot',
+          '- `list`: list the bots whose commands I take',
+          '- Taken in any stream, from organization administrators and owners only.',
+          '- Example: `command-bots add Claude`',
+        ].join('\n'),
+      ]);
     });
 
     it('should explain a team command outside the team streams instead of refusing it', async () => {
@@ -3333,6 +3419,296 @@ describe('ZulipCommandService', () => {
         expect(contents()).toHaveLength(2);
         expect(database.groups.map(({ name }) => name).sort()).toEqual(['apps', 'immich']);
       });
+    });
+  });
+
+  describe('command-bots', () => {
+    const CLAUDE: ZulipAccount = { userId: 30, fullName: 'Claude', email: 'claude-bot@zulip.example.com' };
+    const CLAUDE_CODE: ZulipAccount = {
+      userId: 32,
+      fullName: 'Claude Code',
+      email: 'claude-code-bot@zulip.example.com',
+    };
+    const ALICE: ZulipAccount = { userId: 12, fullName: 'Alice', email: 'user12@zulip.example.com' };
+    const SELF: ZulipAccount = { userId: 7, fullName: 'Immich', email: 'immich-bot@zulip.example.com' };
+    const USAGE = 'Usage: `command-bots <add|remove> <bot> | list`';
+    const ADDED = "I now take the commands of `Claude` (user 30), with its role checked as anyone's.";
+    const REMOVED = 'I no longer take the commands of `Claude` (user 30).';
+    const RSS_LIST = 'This stream is not subscribed to any RSS feed.';
+    const RUNNING = '`command-bots` is already running; wait for it to finish.';
+    const NOT_AN_ADMINISTRATOR =
+      'Only Zulip organization administrators and owners can choose the bots whose commands I take.';
+    const noUser = (echo: string) =>
+      `There is no user \`${echo}\` in this organization; Zulip's own bots, such as the Notification Bot, are not in it and cannot be added.`;
+    const listed = (userId: number, createdBy: string, createdAt: string) =>
+      database.commandBots.push({ userId, createdBy, createdAt: new Date(createdAt) });
+    const contents = () => replies().map(({ content }) => content);
+    const command = (text: string) => send(`@**Immich** command-bots ${text}`, { streamId: 999 });
+    const fromClaudeHere = { ...fromClaude, streamId: 999 };
+
+    beforeEach(async () => {
+      zulipMock.getUser.mockResolvedValue(ADMIN);
+      zulipMock.getUsers.mockResolvedValue([ALICE, SELF, CLAUDE, CLAUDE_CODE]);
+      await sut.init();
+    });
+
+    it.each([
+      '30',
+      '@**Claude**',
+      '@_**Claude**',
+      '@**Claude|30**',
+      '@_**Claude|30**',
+      'claude-bot@zulip.example.com',
+      'CLAUDE-BOT@zulip.example.com',
+      'claude',
+    ])('should add the bot named %j', async (given) => {
+      await command(`add ${given}`);
+
+      expect(database.commandBots).toEqual([
+        { userId: 30, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) },
+      ]);
+      expect(contents()).toEqual([ADDED]);
+    });
+
+    it('should add a bot mentioned by a name with a space, which the arguments split in two', async () => {
+      await command('add @**Claude Code**');
+
+      expect(database.commandBots.map(({ userId }) => userId)).toEqual([32]);
+      expect(contents()).toEqual([
+        "I now take the commands of `Claude Code` (user 32), with its role checked as anyone's.",
+      ]);
+    });
+
+    it("should take a bot's commands from the moment it is added and ignore them once it is removed, without reading the table again", async () => {
+      const read = vitest.spyOn(database, 'getZulipCommandBots');
+
+      await send('@**Immich** rss-list', fromClaudeHere);
+      await command('add @**Claude**');
+      await send('@**Immich** rss-list', fromClaudeHere);
+      await command('remove @**Claude**');
+      await send('@**Immich** rss-list', fromClaudeHere);
+
+      expect(contents()).toEqual([ADDED, RSS_LIST, REMOVED]);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('should change nothing when the bot is listed already', async () => {
+      await command('add Claude');
+      await command('add @**Claude|30**');
+
+      expect(database.commandBots).toHaveLength(1);
+      expect(contents()).toEqual([ADDED, 'Nothing changed: I already take the commands of `Claude` (user 30).']);
+    });
+
+    it('should take the commands of a bot listed in the table but not in memory once an add finds it there', async () => {
+      listed(30, 'Bob on Zulip (user 13)', '2026-10-07T12:00:00Z');
+
+      await send('@**Immich** rss-list', fromClaudeHere);
+      await command('add Claude');
+      await send('@**Immich** rss-list', fromClaudeHere);
+
+      expect(contents()).toEqual(['Nothing changed: I already take the commands of `Claude` (user 30).', RSS_LIST]);
+      expect(database.commandBots).toEqual([
+        { userId: 30, createdBy: 'Bob on Zulip (user 13)', createdAt: new Date('2026-10-07T12:00:00Z') },
+      ]);
+    });
+
+    it("should add a person whose email ends in -bot, whose commands are ignored as a bot's until then", async () => {
+      const fromRobo = { senderId: 44, senderEmail: 'robo-bot@example.org', senderFullName: 'Robo', streamId: 999 };
+      zulipMock.getUsers.mockResolvedValue([{ userId: 44, fullName: 'Robo', email: 'robo-bot@example.org' }]);
+
+      await send('@**Immich** rss-list', fromRobo);
+      await command('add @**Robo**');
+      await send('@**Immich** rss-list', fromRobo);
+
+      expect(contents()).toEqual([
+        "I now take the commands of `Robo` (user 44), with its role checked as anyone's.",
+        RSS_LIST,
+      ]);
+    });
+
+    it.each([
+      [
+        'a person',
+        '@**Alice**',
+        "`Alice` (user 12) is a person, not a bot: people's commands are always taken; only bots are added.",
+      ],
+      ['the bot itself', '@**Immich|7**', '`Immich` (user 7) is me: my own messages are never commands.'],
+      [
+        "Zulip's Notification Bot, which is not in the organization",
+        '@_**Notification Bot|5**',
+        noUser('@​_**Notification Bot|5**'),
+      ],
+      ['a name nobody has', 'nobody', noUser('nobody')],
+    ])('should refuse to add %s, saying why', async (_, given, reply) => {
+      const add = vitest.spyOn(database, 'addZulipCommandBot');
+
+      await command(`add ${given}`);
+
+      expect(contents()).toEqual([reply]);
+      expect(add).not.toHaveBeenCalled();
+    });
+
+    it('should list the users who share the name, and add none', async () => {
+      zulipMock.getUsers.mockResolvedValue([
+        CLAUDE,
+        { ...CLAUDE, userId: 33, email: 'claude-two-bot@zulip.example.com' },
+      ]);
+
+      await command('add @**Claude**');
+
+      expect(contents()).toEqual([
+        [
+          '`@​**Claude**` names several users; name the bot by its user ID:',
+          '- `Claude` (user 30)',
+          '- `Claude` (user 33)',
+        ].join('\n'),
+      ]);
+      expect(database.commandBots).toEqual([]);
+    });
+
+    it('should remove a bot named by its name, and change nothing for one that is not listed or a name nobody has', async () => {
+      await command('add Claude');
+
+      await command('remove claude');
+      await command('remove @**Claude Code**');
+      await command('remove nobody');
+
+      expect(database.commandBots).toEqual([]);
+      expect(contents()).toEqual([
+        ADDED,
+        REMOVED,
+        'Nothing changed: I did not take the commands of `Claude Code` (user 32); `command-bots list` lists the bots I do.',
+        noUser('nobody'),
+      ]);
+    });
+
+    it.each(['30', '@**Claude|30**'])(
+      'should remove the bot %j by its ID without looking it up, so while Zulip cannot list the users too',
+      async (given) => {
+        await command('add Claude');
+        zulipMock.getUsers.mockReset().mockRejectedValue(new Error('Zulip is down'));
+
+        await command(`remove ${given}`);
+        await send('@**Immich** rss-list', fromClaudeHere);
+
+        expect(database.commandBots).toEqual([]);
+        expect(zulipMock.getUsers).not.toHaveBeenCalled();
+        expect(contents()).toEqual([ADDED, 'I no longer take the commands of user 30.']);
+      },
+    );
+
+    it('should list the bots in the order they were added, with who added each and when', async () => {
+      listed(30, 'Alice on Zulip (user 12)', '2026-10-07T12:00:00Z');
+      listed(41, 'Bob on Zulip (user 13)', '2026-10-08T09:00:00Z');
+      await sut.init();
+
+      await command('list');
+
+      expect(contents()).toEqual([
+        [
+          'I take the commands of these bots:',
+          '- `Claude` (user 30), added by `Alice on Zulip (user 12)` on 2026-10-07',
+          '- user 41, added by `Bob on Zulip (user 13)` on 2026-10-08',
+        ].join('\n'),
+      ]);
+    });
+
+    it("should keep the Markdown of the adder's name inside its code span", async () => {
+      listed(30, '[Alice](https://example.com) on Zulip (user 12)', '2026-10-07T12:00:00Z');
+      await sut.init();
+
+      await command('list');
+
+      expect(contents()).toEqual([
+        'I take the commands of these bots:\n- `Claude` (user 30), added by `[Alice](https://example.com) on Zulip (user 12)` on 2026-10-07',
+      ]);
+    });
+
+    it('should list the bots by their IDs when Zulip cannot list the users', async () => {
+      listed(30, 'Alice on Zulip (user 12)', '2026-10-07T12:00:00Z');
+      await sut.init();
+      zulipMock.getUsers.mockRejectedValue(new Error('Zulip is down'));
+
+      await command('list');
+
+      expect(contents()).toEqual([
+        'I take the commands of these bots:\n- user 30, added by `Alice on Zulip (user 12)` on 2026-10-07',
+      ]);
+    });
+
+    it('should say how to add a bot when none is listed', async () => {
+      await command('list');
+
+      expect(contents()).toEqual(['I take the commands of no other bot; `command-bots add <bot>` adds one.']);
+      expect(zulipMock.getUsers).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an owner', 100, true],
+      ['an administrator', 200, true],
+      ['a moderator', 300, false],
+      ['a member', 400, false],
+      ['a guest', 600, false],
+    ])('should take it from %s: %s', async (_, role, allowed) => {
+      zulipMock.getUser.mockResolvedValue({ ...ADMIN, role });
+      const add = vitest.spyOn(database, 'addZulipCommandBot');
+      const remove = vitest.spyOn(database, 'removeZulipCommandBot');
+
+      await command('add Claude');
+      await command('list');
+      await command('remove 30');
+
+      if (allowed) {
+        expect(contents()).toEqual([
+          ADDED,
+          expect.stringMatching(/^I take the commands of these bots:\n- `Claude` \(user 30\), added by `Alice/),
+          'I no longer take the commands of user 30.',
+        ]);
+        return;
+      }
+      expect(contents()).toEqual(Array(3).fill(NOT_AN_ADMINISTRATOR));
+      expect(zulipMock.getUsers).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    });
+
+    it.each(['', 'add', 'remove', 'list all', 'promote Claude'])(
+      'should answer command-bots %j with the usage and change nothing',
+      async (given) => {
+        await send(`@**Immich** command-bots ${given}`.trim(), { streamId: 999 });
+
+        expect(contents()).toEqual([USAGE]);
+        expect(zulipMock.getUsers).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should refuse a second change while one runs, and finish the first', async () => {
+      let release: (users: ZulipAccount[]) => void = () => {};
+      zulipMock.getUsers.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+
+      const first = command('add Claude');
+      await flush();
+      await command('add Claude Code');
+      await command('remove 30');
+      release([CLAUDE]);
+      await first;
+
+      expect(contents()).toEqual([RUNNING, RUNNING, ADDED]);
+      expect(database.commandBots.map(({ userId }) => userId)).toEqual([30]);
+    });
+
+    it('should say so when Zulip cannot list the users, and add nothing', async () => {
+      zulipMock.getUsers.mockRejectedValue(new Error('Zulip is down'));
+
+      await command('add Claude');
+
+      expect(contents()).toEqual(['`command-bots` failed: `Zulip is down`']);
+      expect(database.commandBots).toEqual([]);
     });
   });
 });
