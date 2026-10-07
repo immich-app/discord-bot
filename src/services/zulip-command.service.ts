@@ -110,8 +110,12 @@ const countRepositories = (count: number) => `${count} ${count === 1 ? 'reposito
 
 const listRepositories = (repositories: string[]) => repositories.map((repository) => code(repository)).join(', ');
 
+const INSTALLATION_OWNERS = [...Constants.Github.InstallationOwners].map((owner) => `\`${owner}\``).join(' or ');
+
 const bareNumbers = (kind: ExpanderTarget['kind']) =>
-  `A bare \`#1234\` goes to the repository of the ${kind}'s groups whose pull request, issue or discussion of that number I have seen activity on last, which only a GitHub repository of ${[...Constants.Github.InstallationOwners].map((owner) => `\`${owner}\``).join(' or ')} can be; a GitLab project or another repository needs \`name#1234\` or a link.`;
+  `A bare \`#1234\` goes to the repository of the ${kind}'s groups whose pull request, issue or discussion of that number I have seen activity on last, which only a GitHub repository of ${INSTALLATION_OWNERS} can be; a GitLab project or another repository needs \`name#1234\` or a link.`;
+
+const PREFIXES = `\`!1234\` asks for a pull request (a merge request on GitLab) and \`^1234\` for an issue, bare or after a name (\`immich!1234\`), where \`#1234\` takes any kind; \`owner/name!1234\` and \`owner/name^1234\` outside the groups work for ${INSTALLATION_OWNERS} only.`;
 
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -170,6 +174,7 @@ const DIRECT_MESSAGE_HELP = [
   spoiler('How it works', [
     '- `expanders on <group>`, `expanders off [group]` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
     `- ${bareNumbers('conversation')}`,
+    `- ${PREFIXES}`,
     '- Links expand here without a group, unless a guest is in the conversation.',
     '- Everyone in the conversation sees what `expanders` changes; anything else is answered to you alone.',
   ]),
@@ -395,7 +400,7 @@ export class ZulipCommandService {
     },
     expanders: {
       usage: 'expanders <on <group>|off [group]|list>',
-      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${bareNumbers('stream')} GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${bareNumbers('stream')} ${PREFIXES} GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
       subcommands: {
         'on <group>': 'turn that group on here',
         'off [group]': 'turn that group off here, or every group when none is named',

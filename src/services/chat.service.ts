@@ -62,12 +62,27 @@ type GithubLink = {
   repo: GithubRepo | string;
   id: number;
   type?: LinkType;
+  /** What `!` or `^` asked for: GitHub's answer of another kind is dropped. */
+  kind?: ShorthandKind;
   discordThreadId?: string;
 };
 type LinkType = 'issues' | 'pull' | 'discussions';
 
 /** `kind` is unknown for `#123`, which may be an issue or a merge request: GitLab numbers them apart. */
 type GitlabLink = { path: string; id: number; kind?: GitlabItemKind };
+
+type ShorthandKind = GithubItemKind.PullRequest | GithubItemKind.Issue;
+
+/** `#` asks for any kind. */
+const PREFIX_KINDS: Partial<Record<string, ShorthandKind>> = {
+  '!': GithubItemKind.PullRequest,
+  '^': GithubItemKind.Issue,
+};
+
+const KIND_REQUESTS: Record<ShorthandKind, { github: LinkType; gitlab: GitlabItemKind }> = {
+  [GithubItemKind.PullRequest]: { github: 'pull', gitlab: 'merge_requests' },
+  [GithubItemKind.Issue]: { github: 'issues', gitlab: 'issues' },
+};
 
 type GithubCodeSnippet = {
   lines: string[];
@@ -107,12 +122,13 @@ const GITHUB_QUICK_REF_REGEX = /(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(?<
 const MAX_GITHUB_NUMBER = 2_147_483_647;
 const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_QUICK_REF_REGEX.source})`, 'g');
 /**
- * `#123` with nothing joined to it: on the left not part of a word or a path (though `#12/#13` is two), `&#91;`,
- * `<#123>` or `\#5`, and on the right not a word, `%`, a decimal, a time or a range. Its path is a name, `owner/name`
- * or a longer GitLab path.
+ * `#123`, `!123` or `^123` with nothing joined to it: on the left not part of a word or a path (though `#12/#13` is
+ * two), `&#91;`, `<#123>`, `\#5`, a `[^1]` footnote, an exponent like `(n-1)^2` or a quoted version range like `"^5"`,
+ * and on the right not a word, `%`, a decimal, a version like `5.x`, a time or a range. Its path is a name,
+ * `owner/name` or a longer GitLab path.
  */
 const ZULIP_SHORTHAND_REGEX =
-  /(?<![\w.!#&<@=?$\\-])(?<!(?<!#\d+)\/)(?<path>\w[\w.-]*(?:\/[\w.-]+)*)?#(?<num>[1-9]\d*)(?![\w%]|[.,:/\-–—]\d)/;
+  /(?<![\w.!#^&<@=?$\\-])(?<!(?<![#!^]\d+)\/)(?<path>\w[\w.-]*(?:\/[\w.-]+)*)?(?<prefix>[#!]|(?<![[\])}|"'])\^)(?<num>[1-9]\d*)(?![\w%]|[.,:/\-–—]\d|\.(?:[Xx]\b|\*))/;
 /**
  * A GitHub page link or any other link, matched whole so that nothing in its path, query or fragment is shorthand, or
  * shorthand.
@@ -191,9 +207,12 @@ const zulipTextOutsideCode = (content: string, { skipQuotes = false } = {}) => {
     .join('\n');
 };
 
-/** A GitHub link names its repository and kind; shorthand has at most a path, which the place's repositories resolve. */
+/**
+ * A GitHub link names its repository and kind; shorthand has at most a path, which the place's repositories resolve,
+ * and the kind its prefix asks for.
+ */
 type ZulipThreadReference =
-  { owner: string; name: string; category: LinkType; id: number } | { path?: string; id: number };
+  { owner: string; name: string; category: LinkType; id: number } | { path?: string; kind?: ShorthandKind; id: number };
 
 /** The GitHub links and the shorthand of Zulip text, in order. */
 export const zulipThreadReferences = (text: string) =>
@@ -209,15 +228,18 @@ export const zulipThreadReferences = (text: string) =>
       ];
     }
 
-    return groups.num === undefined ? [] : [{ path: groups.path, id: Number(groups.num) }];
+    return groups.num === undefined
+      ? []
+      : [{ path: groups.path, kind: PREFIX_KINDS[groups.prefix], id: Number(groups.num) }];
   });
 
 /**
  * The repository shorthand's path names, a leading `github.com/` left out: one of the place's, by the end of its name;
- * else `owner/name` on GitHub when the owner can be a GitHub login. A name alone, or a longer path, which only a GitLab
- * project has, names one of the place's or nothing.
+ * else `owner/name` on GitHub when the owner can be a GitHub login, or, after `!` or `^`, is one of
+ * `Constants.Github.InstallationOwners`, so that a git ref like `origin/main^2` asks GitHub nothing. A name alone, or
+ * a longer path, which only a GitLab project has, names one of the place's or nothing.
  */
-const shorthandRepository = ({ repositories }: ExpanderScope, path: string) => {
+const shorthandRepository = ({ repositories }: ExpanderScope, path: string, kind?: ShorthandKind) => {
   const wanted = path.replace(/^github\.com\//i, '');
   const found = findRepository(repositories, wanted);
   if (found) {
@@ -225,7 +247,13 @@ const shorthandRepository = ({ repositories }: ExpanderScope, path: string) => {
   }
 
   const segments = wanted.split('/');
-  return segments.length === 2 && GITHUB_LOGIN_REGEX.test(segments[0]) ? wanted : undefined;
+  if (segments.length !== 2) {
+    return;
+  }
+
+  const [owner] = segments;
+  const isOwner = kind ? Constants.Github.InstallationOwners.has(owner.toLowerCase()) : GITHUB_LOGIN_REGEX.test(owner);
+  return isOwner ? wanted : undefined;
 };
 
 /** The images `Constants.Zulip.EmojiImages` names for the emoji a message uses outside code, each once. */
@@ -728,41 +756,40 @@ export class ChatService {
       }
     }
 
-    const keys = new Set<string>();
-    const requests: GithubLink[] = [];
-
-    for (const { id, org, repo, type, discordThreadId } of links) {
-      const key = id + org + repo;
-      if (keys.has(key)) {
-        continue;
-      }
-
-      requests.push({ id, org, repo, type, discordThreadId });
-      keys.add(key);
-    }
+    const requests = [...Map.groupBy(links, ({ id, org, repo }) => `${id}${org}${repo}`).values()].map((group) => {
+      // A `#` or a link keeps its own type, and with it a discussion; two prefixes show it whatever its kind.
+      const base = group.find(({ kind }) => kind === undefined) ?? group[0];
+      return group.every(({ kind }) => kind === base.kind) ? base : { ...base, kind: undefined };
+    });
 
     const results = await Promise.all(
-      requests.map(async ({ org, repo, id, type, discordThreadId }): Promise<IssueOrPullRequestMessage | undefined> => {
-        const getDiscussion = async () => {
-          const message = await this.github.getDiscussionMessage(org, repo, id, isPrivileged);
-          return message === undefined ? undefined : { message };
-        };
+      requests.map(
+        async ({ org, repo, id, type, kind, discordThreadId }): Promise<IssueOrPullRequestMessage | undefined> => {
+          const getDiscussion = async () => {
+            const message = await this.github.getDiscussionMessage(org, repo, id, isPrivileged);
+            return message === undefined ? undefined : { message };
+          };
 
-        switch (type) {
-          case 'issues':
-          case 'pull':
-            return await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged);
+          switch (type) {
+            case 'issues':
+            case 'pull': {
+              const result = await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged);
+              const isAskedFor =
+                kind === undefined || (result?.pullRequest !== undefined) === (kind === GithubItemKind.PullRequest);
+              return isAskedFor ? result : undefined;
+            }
 
-          case 'discussions':
-            return await getDiscussion();
+            case 'discussions':
+              return await getDiscussion();
 
-          default:
-            return (
-              (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged)) ??
-              (await getDiscussion())
-            );
-        }
-      }),
+            default:
+              return (
+                (await this.github.getIssueOrPrMessage(org, repo, id, discordThreadId, isPrivileged)) ??
+                (await getDiscussion())
+              );
+          }
+        },
+      ),
     );
     const pullRequests = _.uniqBy(
       results.map((result) => result?.pullRequest).filter((pullRequest) => pullRequest !== undefined),
@@ -815,13 +842,13 @@ export class ChatService {
   /**
    * Shorthand with a path goes to the repository `shorthandRepository` names; a bare `#123` goes to the place's
    * repository whose item of that number was updated last, whatever its kind and age, the one listed first on a tie, or
-   * nowhere.
+   * nowhere, and a bare `!123` or `^123` likewise among the items of its kind.
    */
   private async resolveScopedReference(
     scope: ExpanderScope,
-    { path, id }: { path?: string; id: number },
+    { path, kind, id }: { path?: string; kind?: ShorthandKind; id: number },
   ): Promise<GithubLink | GitlabLink | undefined> {
-    const named = path === undefined ? undefined : shorthandRepository(scope, path);
+    const named = path === undefined ? undefined : shorthandRepository(scope, path, kind);
     if (path !== undefined && !named) {
       return;
     }
@@ -830,10 +857,12 @@ export class ChatService {
       return;
     }
 
-    const items = await this.database.getGithubItemsByNumber(id);
+    // A prefix decides the type, so a named repository needs no items.
+    const items = named && kind ? [] : await this.database.getGithubItemsByNumber(id);
     const fullName = (item: GithubItem) => `${item.organization}/${item.repository}`;
 
     const [newest] = items
+      .filter((item) => kind === undefined || item.kind === kind)
       .map((item) => ({
         item,
         index: scope.repositories.findIndex((candidate) => sameRepository(candidate, fullName(item))),
@@ -846,10 +875,14 @@ export class ChatService {
     }
 
     if (isGitlabRepository(repository)) {
-      return { path: gitlabPath(repository), id };
+      return { path: gitlabPath(repository), id, kind: kind && KIND_REQUESTS[kind].gitlab };
     }
 
     const [org, repo] = repository.split('/');
+    if (kind) {
+      return { org, repo, id, type: KIND_REQUESTS[kind].github, kind };
+    }
+
     const isPullRequest = items.some(
       (item) => item.kind === GithubItemKind.PullRequest && sameRepository(fullName(item), repository),
     );
