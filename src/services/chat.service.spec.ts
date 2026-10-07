@@ -12,7 +12,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { GithubItem, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
+import { GithubItem, ZulipExpander, ZulipExpanderGroup } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
 import {
   ChatService,
@@ -154,18 +154,14 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   removeMirrorIdentity: vitest.fn(),
   getZulipExpanderGroups: vitest.fn().mockResolvedValue([]),
   getZulipExpanders: vitest.fn(),
-  getZulipExpanderDefaults: vitest.fn().mockResolvedValue([]),
   createZulipExpanderGroup: vitest.fn(),
   updateZulipExpanderGroup: vitest.fn(),
   removeZulipExpanderGroup: vitest.fn(),
   addZulipExpander: vitest.fn(),
   removeZulipExpander: vitest.fn(),
-  setZulipExpanderDefault: vitest.fn(),
   getZulipDmExpanders: vitest.fn().mockResolvedValue([]),
-  getZulipDmExpanderDefaults: vitest.fn().mockResolvedValue([]),
   addZulipDmExpander: vitest.fn(),
   removeZulipDmExpander: vitest.fn(),
-  setZulipDmExpanderDefault: vitest.fn(),
   getZulipEmotes: vitest.fn().mockResolvedValue([]),
   addZulipEmote: vitest.fn(),
   createPullRequestExpansions: vitest.fn(),
@@ -1956,6 +1952,16 @@ describe('Bot test', () => {
     });
   });
 
+  const weeksAgo = (weeks: number) => new Date(Date.now() - weeks * 7 * 24 * 60 * 60 * 1000);
+
+  const item = (
+    organization: string,
+    repository: string,
+    number: number,
+    kind: GithubItemKind,
+    updatedAt: Date,
+  ): GithubItem => ({ organization, repository, number, kind, updatedAt, removed: false });
+
   describe('init', () => {
     afterEach(() => {
       vitest.restoreAllMocks();
@@ -1969,16 +1975,13 @@ describe('Bot test', () => {
 
     it("should subscribe the Zulip expanders to the event loop, without other bots' messages", async () => {
       databaseMock.getZulipExpanderGroups.mockResolvedValue([
-        {
-          name: 'immich',
-          repositories: ['immich-app/immich'],
-          threshold: 1000,
-          createdBy: 'migration',
-          createdAt: new Date(0),
-        },
+        { name: 'immich', repositories: ['immich-app/immich'], createdBy: 'migration', createdAt: new Date(0) },
       ]);
       databaseMock.getZulipExpanders.mockResolvedValue([
         { streamId: 107, groupName: 'immich', createdBy: 'migration', createdAt: new Date(0) },
+      ]);
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('immich-app', 'immich', 4242, GithubItemKind.PullRequest, weeksAgo(1)),
       ]);
       zulipMock.sendMessage.mockResolvedValue({ id: 901 });
       await zulipExpanders.init();
@@ -2024,18 +2027,25 @@ describe('Bot test', () => {
     createdAt: new Date(0),
   });
 
-  const expanderGroup = (name: string, repositories: string[], threshold = 0): ZulipExpanderGroup => ({
+  const expanderGroup = (name: string, repositories: string[]): ZulipExpanderGroup => ({
     name,
     repositories,
-    threshold,
     createdBy: 'migration',
     createdAt: new Date(0),
   });
 
   describe('onZulipMessage', () => {
+    const SEEN = [
+      item('immich-app', 'immich', 4242, GithubItemKind.PullRequest, weeksAgo(1)),
+      item('immich-app', 'immich', 6969, GithubItemKind.Issue, weeksAgo(1)),
+    ];
+
     beforeEach(async () => {
       zulipMock.sendMessage.mockResolvedValue({ id: 901 });
-      databaseMock.getZulipExpanderGroups.mockResolvedValue([expanderGroup('immich', ['immich-app/immich'], 1000)]);
+      databaseMock.getGithubItemsByNumber.mockImplementation((number) =>
+        Promise.resolve(SEEN.filter((seen) => seen.number === number)),
+      );
+      databaseMock.getZulipExpanderGroups.mockResolvedValue([expanderGroup('immich', ['immich-app/immich'])]);
       databaseMock.getZulipExpanders.mockResolvedValue(
         [54, 107, 108, 109, 110, 111, 112, 113, 120].map((streamId) => expanderRow(streamId)),
       );
@@ -2517,9 +2527,12 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should send nothing when there is nothing to expand', async () => {
-      await sut.onZulipMessage(zulipMessage({ content: 'just chatting about #123' }));
+    it('should send nothing for a bare #N when no item of that number was seen', async () => {
+      await sut.onZulipMessage(zulipMessage({ content: 'just chatting about #123 and #5000' }));
 
+      expect(databaseMock.getGithubItemsByNumber.mock.calls).toEqual([[123], [5000]]);
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
@@ -2626,40 +2639,24 @@ describe('Bot test', () => {
 
   describe('onZulipMessage with expander groups', () => {
     const STREAM = 130;
-    const weeksAgo = (weeks: number) => new Date(Date.now() - weeks * 7 * 24 * 60 * 60 * 1000);
-    const item = (
-      organization: string,
-      repository: string,
-      number: number,
-      kind: GithubItemKind,
-      updatedAt: Date,
-    ): GithubItem => ({ organization, repository, number, kind, updatedAt, removed: false });
-    const defaultRow = (streamId: number, repository: string): ZulipExpanderDefault => ({
-      streamId,
-      repository,
-      createdBy: 'migration',
-      createdAt: new Date(0),
-    });
 
-    const setUp = async ({
-      groups,
-      streamGroups,
-      defaults = [],
-    }: {
-      groups: ZulipExpanderGroup[];
-      streamGroups: string[];
-      defaults?: ZulipExpanderDefault[];
-    }) => {
+    const setUp = async ({ groups, streamGroups }: { groups: ZulipExpanderGroup[]; streamGroups: string[] }) => {
       databaseMock.getZulipExpanderGroups.mockResolvedValue(groups);
       databaseMock.getZulipExpanders.mockResolvedValue(streamGroups.map((group) => expanderRow(STREAM, group)));
-      databaseMock.getZulipExpanderDefaults.mockResolvedValue(defaults);
       await zulipExpanders.init();
+    };
+
+    const expectNothingExpanded = () => {
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+      expect(gitlabMock.getItem).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     };
 
     const send = (content: string) => sut.onZulipMessage(zulipMessage({ streamId: STREAM, content }));
 
     const FHS = expanderGroup('fhs', ['futo-org/fhs-core', 'futo-org/fhs-web']);
-    const IMMICH = expanderGroup('immich', ['immich-app/immich'], 1000);
+    const IMMICH = expanderGroup('immich', ['immich-app/immich']);
 
     beforeEach(() => {
       zulipMock.sendMessage.mockResolvedValue({ id: 901 });
@@ -2765,68 +2762,22 @@ describe('Bot test', () => {
       expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(org, repo, 123, undefined, true);
     });
 
-    it("should resolve name#N outside the stream groups to the default repository's owner", async () => {
+    it('should look nothing up for a name#N that names no repository of the stream groups', async () => {
       await setUp({ groups: [FHS], streamGroups: ['fhs'] });
 
       await send('grayjay#12');
 
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'grayjay',
-        12,
-        undefined,
-        true,
-      );
+      expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+      expectNothingExpanded();
     });
 
-    it("should send a bare #N to the first group's first repository when the stream has no default", async () => {
+    it('should expand nothing for a bare #N with no item of that number seen, though the stream groups name repositories', async () => {
       await setUp({ groups: [FHS, IMMICH], streamGroups: ['fhs', 'immich'] });
 
-      await send('#12');
+      await send('#12 #4242');
 
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'fhs-core',
-        12,
-        undefined,
-        true,
-      );
-    });
-
-    it('should send a bare #N to the default chosen for the stream', async () => {
-      await setUp({
-        groups: [FHS, IMMICH],
-        streamGroups: ['fhs', 'immich'],
-        defaults: [defaultRow(STREAM, 'futo-org/fhs-web')],
-      });
-
-      await send('#12');
-
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'fhs-web',
-        12,
-        undefined,
-        true,
-      );
-    });
-
-    it("should fall back to the first group's first repository when the chosen default is no longer in the stream groups", async () => {
-      await setUp({
-        groups: [FHS, IMMICH],
-        streamGroups: ['fhs'],
-        defaults: [defaultRow(STREAM, 'immich-app/immich')],
-      });
-
-      await send('#4242');
-
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'fhs-core',
-        4242,
-        undefined,
-        true,
-      );
+      expect(databaseMock.getGithubItemsByNumber.mock.calls).toEqual([[12], [4242]]);
+      expectNothingExpanded();
     });
 
     it('should send a bare #N to the stream repository whose item of that number was updated last, whatever its kind', async () => {
@@ -2885,7 +2836,7 @@ describe('Bot test', () => {
       );
     });
 
-    it('should send a bare #N to the default when its only items are in other repositories, however recent', async () => {
+    it('should expand nothing for a bare #N whose only items are in other repositories, however recent', async () => {
       await setUp({ groups: [FHS, IMMICH], streamGroups: ['fhs', 'immich'] });
       databaseMock.getGithubItemsByNumber.mockResolvedValue([
         item('octokit', 'rest.js', 1200, GithubItemKind.PullRequest, new Date()),
@@ -2894,26 +2845,10 @@ describe('Bot test', () => {
 
       await send('#1200');
 
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'fhs-core',
-        1200,
-        undefined,
-        true,
-      );
+      expectNothingExpanded();
     });
 
-    it("should drop a bare #N below the default repository's threshold", async () => {
-      await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
-
-      await send('see #123');
-
-      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
-      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
-      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
-    });
-
-    it('should expand a bare #N below the threshold when an item of that number was seen in the stream repositories', async () => {
+    it('should expand a bare #N below 1000 in immich-app/immich once an item of that number was seen there', async () => {
       await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
       databaseMock.getGithubItemsByNumber.mockResolvedValue([
         item('immich-app', 'immich', 123, GithubItemKind.Issue, weeksAgo(52)),
@@ -2930,7 +2865,7 @@ describe('Bot test', () => {
       );
     });
 
-    it('should not apply the threshold to name#N', async () => {
+    it('should resolve name#N among the stream groups with no item of that number seen', async () => {
       await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
 
       await send('immich#123');
@@ -2944,39 +2879,6 @@ describe('Bot test', () => {
       );
     });
 
-    it('should apply the highest threshold of the groups that hold the default repository', async () => {
-      await setUp({
-        groups: [expanderGroup('low', ['immich-app/immich'], 10), expanderGroup('high', ['immich-app/immich'], 500)],
-        streamGroups: ['low', 'high'],
-      });
-
-      await send('#200');
-      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
-
-      await send('#600');
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'immich-app',
-        'immich',
-        600,
-        undefined,
-        true,
-      );
-    });
-
-    it('should expand every bare #N in a group without a threshold', async () => {
-      await setUp({ groups: [FHS], streamGroups: ['fhs'] });
-
-      await send('#3');
-
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'fhs-core',
-        3,
-        undefined,
-        true,
-      );
-    });
-
     it('should treat the reference as a pull request only when a pull request item matches the resolved repository', async () => {
       await setUp({ groups: [FHS], streamGroups: ['fhs'] });
       databaseMock.getGithubItemsByNumber.mockResolvedValue([
@@ -2984,7 +2886,7 @@ describe('Bot test', () => {
       ]);
       githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
 
-      await send('#3');
+      await send('fhs-core#3');
 
       expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
         'futo-org',
@@ -3089,7 +2991,7 @@ describe('Bot test', () => {
         );
       });
 
-      it('should leave a name#N no repository has, and a bare #N with no item seen, without a default', async () => {
+      it('should leave a name#N no repository has, and a bare #N with no item seen', async () => {
         await send('elsewhere#12 #4321');
 
         expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
@@ -3194,7 +3096,7 @@ describe('Bot test', () => {
         { newer: 'merge_requests' as const, title: '[Merge Request] Fix the player' },
         { newer: 'issues' as const, title: '[Issue] The player crashes' },
       ])(
-        'should show the more recently updated of the issue and merge request #N, $newer newer',
+        'should show the more recently updated of the issue and merge request name#N, $newer newer',
         async ({ newer, title }) => {
           await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
           withItems(
@@ -3208,7 +3110,7 @@ describe('Bot test', () => {
             ),
           );
 
-          await send('#7');
+          await send('grayjay#7');
 
           expect(gitlabMock.getItem.mock.calls).toEqual([
             ['videostreaming/grayjay', 'issues', 7],
@@ -3221,11 +3123,11 @@ describe('Bot test', () => {
         },
       );
 
-      it('should show #N when only one kind has that number', async () => {
+      it('should show name#N when only one kind has that number', async () => {
         await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
         withItems(located('merge_requests', 'Fix the player', 'videostreaming/grayjay', 7));
 
-        await send('#7');
+        await send('grayjay#7');
 
         expect(reply()).toEqual([
           '[Merge Request] Fix the player ([videostreaming/grayjay#7](https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/7))',
@@ -3235,20 +3137,30 @@ describe('Bot test', () => {
       it('should post nothing when neither kind has that number', async () => {
         await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
 
-        await send('#7');
+        await send('grayjay#7');
 
         expect(gitlabMock.getItem).toHaveBeenCalledTimes(2);
         expect(zulipMock.sendMessage).not.toHaveBeenCalled();
       });
 
-      it('should drop a bare #N below the threshold of a GitLab default', async () => {
-        await setUp({ groups: [{ ...GRAYJAY, threshold: 100 }], streamGroups: ['grayjay'] });
+      it('should never send a bare #N to a GitLab project, even beside a GitHub item named like it', async () => {
+        await setUp({ groups: [FHS, GRAYJAY], streamGroups: ['fhs', 'grayjay'] });
+        withItems(located('issues', 'The player crashes', 'videostreaming/grayjay', 7));
+        databaseMock.getGithubItemsByNumber.mockResolvedValue([
+          {
+            organization: 'videostreaming',
+            repository: 'grayjay',
+            number: 7,
+            kind: GithubItemKind.Issue,
+            updatedAt: new Date(),
+            removed: false,
+          },
+        ]);
 
-        await send('#5');
-        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+        await send('#7');
 
-        await send('#150');
-        expect(gitlabMock.getItem).toHaveBeenCalledWith('videostreaming/grayjay', 'issues', 150);
+        expect(databaseMock.getGithubItemsByNumber).toHaveBeenCalledExactlyOnceWith(7);
+        expectNothingExpanded();
       });
 
       it.each([
@@ -3311,16 +3223,13 @@ describe('Bot test', () => {
         expect(gitlabMock.getItem).not.toHaveBeenCalled();
       });
 
-      it('should send name#N that matches nothing to that name beside a GitLab default', async () => {
+      it('should look nothing up for a name#N that matches no project of a GitLab group', async () => {
         await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
 
         await send('other#5');
 
-        expect(gitlabMock.getItem.mock.calls).toEqual([
-          ['videostreaming/other', 'issues', 5],
-          ['videostreaming/other', 'merge_requests', 5],
-        ]);
-        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expectNothingExpanded();
       });
 
       const fileAt = (ref: string, file: string, lines: string[]) =>
@@ -3514,7 +3423,7 @@ describe('Bot test', () => {
         expect(snippets).toEqual(Array.from({ length: 7 }, (_, index) => `\`\`\`ts\n${index}.ts\n\`\`\``));
       });
 
-      it('should post an item once when #N and its link both reach it', async () => {
+      it('should post an item once when name#N and its link both reach it', async () => {
         await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
         gitlabMock.getItem.mockImplementation(async (_, kind) =>
           kind === 'issues'
@@ -3527,7 +3436,7 @@ describe('Bot test', () => {
             : undefined,
         );
 
-        await send('#7 https://gitlab.futo.org/videostreaming/grayjay/-/issues/7');
+        await send('grayjay#7 https://gitlab.futo.org/videostreaming/grayjay/-/issues/7');
 
         expect(reply()).toEqual([
           '[Issue] Seven ([videostreaming/grayjay#7](https://gitlab.futo.org/videostreaming/grayjay/-/issues/7))',

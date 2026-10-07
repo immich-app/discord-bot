@@ -8,6 +8,7 @@ import * as emotePadded from 'src/schema/migrations/1791227811814-ZulipEmotePadd
 import * as recheckEmotes from 'src/schema/migrations/1791240072190-RecheckZulipEmotes';
 import * as dmExpanders from 'src/schema/migrations/1791302531964-ZulipDmExpanders';
 import * as githubItems from 'src/schema/migrations/1791390966853-GithubItems';
+import * as removeExpanderDefaults from 'src/schema/migrations/1791396489732-RemoveExpanderDefaults';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -29,9 +30,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     await db.deleteFrom('pull_request_expansion').execute();
     await db.deleteFrom('github_item').execute();
     await db.deleteFrom('zulip_emote').execute();
-    await db.deleteFrom('zulip_expander_default').execute();
     await db.deleteFrom('zulip_expander').execute();
-    await db.deleteFrom('zulip_dm_expander_default').execute();
     await db.deleteFrom('zulip_dm_expander').execute();
     await db.deleteFrom('zulip_expander_group').execute();
     await db.deleteFrom('zulip_command_bot').execute();
@@ -112,17 +111,25 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       const rolledBack = new Error('rolled back');
       await expect(
         db.transaction().execute(async (trx) => {
+          await removeExpanderDefaults.down(trx);
           await dmExpanders.down(trx);
           await groups.down(trx);
           await expanders.down(trx);
           await expanders.up(trx);
           await groups.up(trx);
+          await dmExpanders.up(trx);
+          await removeExpanderDefaults.up(trx);
           const rows = await trx.selectFrom('zulip_expander').selectAll().orderBy('streamId').execute();
           expect(streams(rows)).toEqual([54, 107, 108, 109, 110, 111, 112, 113]);
           expect(new Set(rows.map(({ groupName }) => groupName))).toEqual(new Set(['immich']));
-          expect(
-            await trx.selectFrom('zulip_expander_group').select(['name', 'repositories', 'threshold']).execute(),
-          ).toEqual([{ name: 'immich', repositories: ['immich-app/immich'], threshold: 1000 }]);
+          expect(await trx.selectFrom('zulip_expander_group').selectAll().execute()).toEqual([
+            {
+              name: 'immich',
+              repositories: ['immich-app/immich'],
+              createdBy: 'migration',
+              createdAt: expect.any(Date),
+            },
+          ]);
           throw rolledBack;
         }),
       ).rejects.toBe(rolledBack);
@@ -141,6 +148,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
               { streamId: 54, groupName: 'fhs', createdBy: 'Alice', createdAt: new Date(2000) },
             ])
             .execute();
+          await removeExpanderDefaults.down(trx);
           await dmExpanders.down(trx);
           await groups.down(trx);
           expect(await sql`SELECT "streamId" FROM "zulip_expander"`.execute(trx)).toMatchObject({
@@ -149,6 +157,47 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
           throw rolledBack;
         }),
       ).rejects.toBe(rolledBack);
+    });
+
+    it('should bring the thresholds back, immich at 1000, and the default tables empty when the removal is reverted', async () => {
+      await group('immich');
+      await group('fhs', ['futo-org/fhs-core']);
+      await sut.addZulipExpander(120, 'fhs', 'Alice');
+      const exists = async (trx: Kysely<Database>, table: string) =>
+        (await sql<{ found: string | null }>`SELECT to_regclass(${table}) AS "found"`.execute(trx)).rows[0].found !==
+        null;
+      const rolledBack = new Error('rolled back');
+
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await removeExpanderDefaults.down(trx);
+          expect(
+            await sql`SELECT "name", "threshold" FROM "zulip_expander_group" ORDER BY "name"`.execute(trx),
+          ).toMatchObject({
+            rows: [
+              { name: 'fhs', threshold: 0 },
+              { name: 'immich', threshold: 1000 },
+            ],
+          });
+          expect(await sql`SELECT * FROM "zulip_expander_default"`.execute(trx)).toMatchObject({ rows: [] });
+          expect(await sql`SELECT * FROM "zulip_dm_expander_default"`.execute(trx)).toMatchObject({ rows: [] });
+          await sql`INSERT INTO "zulip_expander_default" ("streamId", "repository", "createdBy")
+VALUES (120, 'futo-org/fhs-core', 'Alice')`.execute(trx);
+          await sql`INSERT INTO "zulip_dm_expander_default" ("conversation", "repository", "createdBy")
+VALUES ('7,12', 'futo-org/fhs-core', 'Alice')`.execute(trx);
+
+          await removeExpanderDefaults.up(trx);
+          expect(await exists(trx, 'zulip_expander_default')).toBe(false);
+          expect(await exists(trx, 'zulip_dm_expander_default')).toBe(false);
+          expect(await trx.selectFrom('zulip_expander_group').select('name').orderBy('name').execute()).toEqual([
+            { name: 'fhs' },
+            { name: 'immich' },
+          ]);
+          expect(await trx.selectFrom('zulip_expander').select('groupName').execute()).toEqual([{ groupName: 'fhs' }]);
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+      expect(await exists(db, 'zulip_expander_default')).toBe(false);
     });
 
     it('should create a group once and list the groups by name', async () => {
@@ -160,14 +209,12 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
         {
           name: 'fhs',
           repositories: ['futo-org/fhs-core', 'futo-org/grayjay'],
-          threshold: 0,
           createdBy: 'Alice',
           createdAt: expect.any(Date),
         },
         {
           name: 'immich',
           repositories: ['immich-app/immich'],
-          threshold: 0,
           createdBy: 'Alice',
           createdAt: expect.any(Date),
         },
@@ -177,13 +224,9 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     it('should update a group, and resolve to whether there was one', async () => {
       await group('fhs', ['futo-org/fhs-core']);
 
-      expect(await sut.updateZulipExpanderGroup('fhs', { repositories: ['futo-org/grayjay'], threshold: 10 })).toBe(
-        true,
-      );
-      expect(await sut.updateZulipExpanderGroup('nope', { threshold: 10 })).toBe(false);
-      expect(await sut.getZulipExpanderGroups()).toMatchObject([
-        { name: 'fhs', repositories: ['futo-org/grayjay'], threshold: 10 },
-      ]);
+      expect(await sut.updateZulipExpanderGroup('fhs', { repositories: ['futo-org/grayjay'] })).toBe(true);
+      expect(await sut.updateZulipExpanderGroup('nope', { repositories: ['futo-org/grayjay'] })).toBe(false);
+      expect(await sut.getZulipExpanderGroups()).toMatchObject([{ name: 'fhs', repositories: ['futo-org/grayjay'] }]);
     });
 
     it('should turn a group on in a stream once, and list by stream then by when it was turned on', async () => {
@@ -206,47 +249,33 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       await expect(sut.addZulipExpander(120, 'nope', 'Alice')).rejects.toThrow('zulip_expander_groupName_fkey');
     });
 
-    it('should turn off one group or every group of a stream, and drop its default with its last group', async () => {
+    it('should turn off one group or every group of a stream', async () => {
       await group('immich');
       await group('fhs', ['futo-org/fhs-core']);
       await sut.addZulipExpander(120, 'immich', 'Alice');
       await sut.addZulipExpander(120, 'fhs', 'Alice');
       await sut.addZulipExpander(121, 'immich', 'Alice');
-      await sut.setZulipExpanderDefault(120, 'futo-org/fhs-core', 'Alice');
-      await sut.setZulipExpanderDefault(121, 'immich-app/immich', 'Alice');
+      await sut.addZulipExpander(121, 'fhs', 'Alice');
 
       expect(await sut.removeZulipExpander(120, 'fhs')).toEqual(['fhs']);
       expect(await sut.removeZulipExpander(120, 'fhs')).toEqual([]);
-      expect(streams(await sut.getZulipExpanderDefaults())).toEqual([120, 121]);
+      expect((await sut.removeZulipExpander(121)).sort()).toEqual(['fhs', 'immich']);
 
-      expect(await sut.removeZulipExpander(121)).toEqual(['immich']);
-      expect(streams(await sut.getZulipExpanders())).toEqual([120]);
-      expect(streams(await sut.getZulipExpanderDefaults())).toEqual([120]);
+      expect(await sut.getZulipExpanders()).toMatchObject([{ streamId: 120, groupName: 'immich' }]);
     });
 
-    it('should set a default once per stream, replacing the one before', async () => {
-      await sut.setZulipExpanderDefault(120, 'immich-app/immich', 'Alice');
-      await sut.setZulipExpanderDefault(120, 'futo-org/fhs-core', 'Bob');
-
-      expect(await sut.getZulipExpanderDefaults()).toEqual([
-        { streamId: 120, repository: 'futo-org/fhs-core', createdBy: 'Bob', createdAt: expect.any(Date) },
-      ]);
-    });
-
-    it('should delete a group, turn it off everywhere and drop the defaults of streams left with none', async () => {
+    it('should delete a group and turn it off everywhere', async () => {
       await group('immich');
       await group('fhs', ['futo-org/fhs-core']);
       await sut.addZulipExpander(120, 'fhs', 'Alice');
       await sut.addZulipExpander(121, 'fhs', 'Alice');
       await sut.addZulipExpander(121, 'immich', 'Alice');
-      await sut.setZulipExpanderDefault(120, 'futo-org/fhs-core', 'Alice');
-      await sut.setZulipExpanderDefault(121, 'immich-app/immich', 'Alice');
 
       expect(await sut.removeZulipExpanderGroup('fhs')).toBe(true);
       expect(await sut.removeZulipExpanderGroup('fhs')).toBe(false);
 
       expect(await sut.getZulipExpanders()).toMatchObject([{ streamId: 121, groupName: 'immich' }]);
-      expect(streams(await sut.getZulipExpanderDefaults())).toEqual([121]);
+      expect(await sut.getZulipExpanderGroups()).toMatchObject([{ name: 'immich' }]);
     });
 
     describe('in direct message conversations', () => {
@@ -269,38 +298,30 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
         expect(await sut.getZulipExpanders()).toEqual([]);
       });
 
-      it('should turn off one group or every group of a conversation, and drop its default with its last group', async () => {
+      it('should turn off one group or every group of a conversation', async () => {
         await group('immich');
         await group('fhs', ['futo-org/fhs-core']);
         await sut.addZulipDmExpander(DM, 'immich', 'Alice');
         await sut.addZulipDmExpander(DM, 'fhs', 'Alice');
-        await sut.setZulipDmExpanderDefault(DM, 'futo-org/fhs-core', 'Alice');
-        await sut.setZulipDmExpanderDefault(DM, 'immich-app/immich', 'Bob');
+        await sut.addZulipDmExpander(OTHER_DM, 'fhs', 'Alice');
 
-        expect(await sut.getZulipDmExpanderDefaults()).toEqual([
-          { conversation: DM, repository: 'immich-app/immich', createdBy: 'Bob', createdAt: expect.any(Date) },
-        ]);
         expect(await sut.removeZulipDmExpander(DM, 'fhs')).toEqual(['fhs']);
-        expect(conversations(await sut.getZulipDmExpanderDefaults())).toEqual([DM]);
-
+        expect(await sut.removeZulipDmExpander(DM, 'fhs')).toEqual([]);
         expect(await sut.removeZulipDmExpander(DM)).toEqual(['immich']);
-        expect(await sut.getZulipDmExpanders()).toEqual([]);
-        expect(await sut.getZulipDmExpanderDefaults()).toEqual([]);
+
+        expect(conversations(await sut.getZulipDmExpanders())).toEqual([OTHER_DM]);
       });
 
-      it('should turn a deleted group off in conversations and drop the defaults of those left with none', async () => {
+      it('should turn a deleted group off in conversations', async () => {
         await group('immich');
         await group('fhs', ['futo-org/fhs-core']);
         await sut.addZulipDmExpander(DM, 'fhs', 'Alice');
         await sut.addZulipDmExpander(OTHER_DM, 'fhs', 'Alice');
         await sut.addZulipDmExpander(OTHER_DM, 'immich', 'Alice');
-        await sut.setZulipDmExpanderDefault(DM, 'futo-org/fhs-core', 'Alice');
-        await sut.setZulipDmExpanderDefault(OTHER_DM, 'immich-app/immich', 'Alice');
 
         expect(await sut.removeZulipExpanderGroup('fhs')).toBe(true);
 
         expect(await sut.getZulipDmExpanders()).toMatchObject([{ conversation: OTHER_DM, groupName: 'immich' }]);
-        expect(conversations(await sut.getZulipDmExpanderDefaults())).toEqual([OTHER_DM]);
       });
 
       it('should refuse turning on a group that does not exist', async () => {

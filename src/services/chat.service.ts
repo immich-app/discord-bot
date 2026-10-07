@@ -214,10 +214,10 @@ export const zulipThreadReferences = (text: string) =>
 
 /**
  * The repository shorthand's path names, a leading `github.com/` left out: one of the place's, by the end of its name;
- * else a name alone beside the default repository, or `owner/name` on GitHub when the owner can be a GitHub login. A
- * longer path, which only a GitLab project has, names one of the place's or nothing.
+ * else `owner/name` on GitHub when the owner can be a GitHub login. A name alone, or a longer path, which only a GitLab
+ * project has, names one of the place's or nothing.
  */
-const shorthandRepository = ({ repositories, defaultRepository }: ExpanderScope, path: string) => {
+const shorthandRepository = ({ repositories }: ExpanderScope, path: string) => {
   const wanted = path.replace(/^github\.com\//i, '');
   const found = findRepository(repositories, wanted);
   if (found) {
@@ -225,10 +225,6 @@ const shorthandRepository = ({ repositories, defaultRepository }: ExpanderScope,
   }
 
   const segments = wanted.split('/');
-  if (segments.length === 1) {
-    return defaultRepository && `${defaultRepository.slice(0, defaultRepository.lastIndexOf('/'))}/${wanted}`;
-  }
-
   return segments.length === 2 && GITHUB_LOGIN_REGEX.test(segments[0]) ? wanted : undefined;
 };
 
@@ -819,7 +815,7 @@ export class ChatService {
   /**
    * Shorthand with a path goes to the repository `shorthandRepository` names; a bare `#123` goes to the place's
    * repository whose item of that number was updated last, whatever its kind and age, the one listed first on a tie, or
-   * else to the place's default repository, below whose threshold it is dropped.
+   * nowhere.
    */
   private async resolveScopedReference(
     scope: ExpanderScope,
@@ -830,31 +826,23 @@ export class ChatService {
       return;
     }
 
-    if (!named && scope.repositories.length === 0 && !scope.defaultRepository) {
+    if (!named && scope.repositories.length === 0) {
       return;
     }
 
     const items = await this.database.getGithubItemsByNumber(id);
     const fullName = (item: GithubItem) => `${item.organization}/${item.repository}`;
 
-    let repository: string;
-    if (named) {
-      repository = named;
-    } else {
-      const [newest] = items
-        .map((item) => ({
-          item,
-          index: scope.repositories.findIndex((candidate) => sameRepository(candidate, fullName(item))),
-        }))
-        .filter(({ index }) => index !== -1)
-        .sort((a, b) => b.item.updatedAt.getTime() - a.item.updatedAt.getTime() || a.index - b.index);
-      if (newest) {
-        repository = scope.repositories[newest.index];
-      } else if (!scope.defaultRepository || id < scope.threshold(scope.defaultRepository)) {
-        return;
-      } else {
-        repository = scope.defaultRepository;
-      }
+    const [newest] = items
+      .map((item) => ({
+        item,
+        index: scope.repositories.findIndex((candidate) => sameRepository(candidate, fullName(item))),
+      }))
+      .filter(({ index }) => index !== -1)
+      .sort((a, b) => b.item.updatedAt.getTime() - a.item.updatedAt.getTime() || a.index - b.index);
+    const repository = named ?? (newest && scope.repositories[newest.index]);
+    if (!repository) {
+      return;
     }
 
     if (isGitlabRepository(repository)) {

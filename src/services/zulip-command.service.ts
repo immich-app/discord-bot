@@ -23,7 +23,6 @@ import {
   ExpanderGroupEmptyError,
   ExpanderPlace,
   ZulipExpanderService,
-  findRepository,
   gitlabPath,
   isGitlabRepository,
   isPattern,
@@ -49,9 +48,6 @@ const ZULIP_ADMINISTRATOR_ROLE = 200;
 const MIRROR = 'change or list the Discord-Zulip mirror';
 
 const EXPANDER_GROUP_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-
-/** `threshold` is a Postgres integer. */
-const MAX_THRESHOLD = 2_147_483_647;
 
 const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
 
@@ -114,9 +110,8 @@ const countRepositories = (count: number) => `${count} ${count === 1 ? 'reposito
 
 const listRepositories = (repositories: string[]) => repositories.map((repository) => code(repository)).join(', ');
 
-const SEEN_ITEM = 'a pull request, issue or discussion I have seen activity on';
-
-const NO_DEFAULT = `No group here names a repository of its own, only patterns, so a bare \`#1234\` expands only for ${SEEN_ITEM}; \`expanders default <repository>\` picks one.`;
+const bareNumbers = (kind: ExpanderTarget['kind']) =>
+  `A bare \`#1234\` goes to the repository of the ${kind}'s groups whose pull request, issue or discussion of that number I have seen activity on last, which only a GitHub repository of ${[...Constants.Github.InstallationOwners].map((owner) => `\`${owner}\``).join(' or ')} can be; a GitLab project or another repository needs \`name#1234\` or a link.`;
 
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -173,7 +168,8 @@ const DIRECT_MESSAGE_HELP = [
     helpLine(['unlink'], 'unlink your Zulip account from your Discord account'),
   ]),
   spoiler('How it works', [
-    '- `expanders on <group>`, `expanders off [group]`, `expanders default <repository>` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+    '- `expanders on <group>`, `expanders off [group]` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+    `- ${bareNumbers('conversation')}`,
     '- Links expand here without a group, unless a guest is in the conversation.',
     '- Everyone in the conversation sees what `expanders` changes; anything else is answered to you alone.',
   ]),
@@ -398,12 +394,11 @@ export class ZulipCommandService {
       run: () => this.mirrorLinks.list('zulip'),
     },
     expanders: {
-      usage: 'expanders <on <group>|off [group]|default <repository>|list>',
-      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. A bare \`#1234\` goes to the one of them whose pull request, issue or discussion of that number I have seen activity on last, else to the default. GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+      usage: 'expanders <on <group>|off [group]|list>',
+      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${bareNumbers('stream')} GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
       subcommands: {
         'on <group>': 'turn that group on here',
         'off [group]': 'turn that group off here, or every group when none is named',
-        'default <repository>': 'choose which of the repositories turned on here a bare `#1234` falls back to',
         list: 'list the streams with groups',
       },
       example: 'expanders on immich',
@@ -416,14 +411,12 @@ export class ZulipCommandService {
       run: (context) => this.expanders(context),
     },
     'expander-group': {
-      usage:
-        'expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list',
-      description: `Create and change the groups of repositories \`expanders on\` turns on. A repository is ${REPOSITORY_FORMS}; URLs work too. A group's default for \`#1234\` is the first repository it names itself, not through a pattern.`,
+      usage: 'expander-group <create|add|remove> <group> <repository>… | delete <group> | info <group> | list',
+      description: `Create and change the groups of repositories \`expanders on\` turns on. A repository is ${REPOSITORY_FORMS}; URLs work too. ${bareNumbers('stream')}`,
       subcommands: {
         'create <group> <repository>…': 'create a group of those repositories',
         'add <group> <repository>…': 'add those repositories to the group',
         'remove <group> <repository>…': 'remove those repositories from the group',
-        'threshold <group> <number>': `have a bare \`#1234\` below the number expand only for ${SEEN_ITEM}`,
         'delete <group>': 'delete the group, which turns it off everywhere',
         'info <group>': "show the group's repositories and streams",
         list: 'list every group',
@@ -977,9 +970,6 @@ export class ZulipCommandService {
     if (action === 'on' && argument !== undefined) {
       return this.expandersOn(message, target, argument.toLowerCase());
     }
-    if (action === 'default' && argument !== undefined) {
-      return this.expandersDefault(message, target, argument);
-    }
     return this.usage('expanders');
   }
 
@@ -990,16 +980,10 @@ export class ZulipCommandService {
     }
     const subscriptions = typeof place === 'number' ? await this.zulip.getSubscriptions() : undefined;
     const added = await this.zulipExpanders.enable(place, name, describeZulipSender(message));
-    const scope = this.zulipExpanders.getScope(place);
     const reply = added
       ? `Turned on the group ${code(name)} (${group.repositories.map((repository) => code(repository)).join(', ')}) in this ${kind}.`
       : `Nothing changed: the group ${code(name)} was already on in this ${kind}.`;
     const lines = [reply];
-    if (scope?.defaultRepository) {
-      lines.push(`A bare ${code('#1234')} falls back to ${code(scope.defaultRepository)} here.`);
-    } else if (scope) {
-      lines.push(NO_DEFAULT);
-    }
     if (subscriptions && !subscriptions.some((subscription) => subscription.streamId === place)) {
       lines.push(NOT_SUBSCRIBED);
     }
@@ -1019,19 +1003,6 @@ export class ZulipCommandService {
       : `Turned off every group in this ${kind} (${groups}): links still expand here, a bare ${code('#1234')} no longer does.`;
   }
 
-  private async expandersDefault(message: ZulipReceivedMessage, { place, kind }: ExpanderTarget, given: string) {
-    const scope = this.zulipExpanders.getScope(place);
-    if (!scope) {
-      return `No group is on in this ${kind}; turn one on with ${code('expanders on <group>')} first.`;
-    }
-    const repository = findRepository(scope.repositories, toRepositoryName(given));
-    if (!repository) {
-      return `${code(given)} is in none of this ${kind}'s groups; the default must be one of ${scope.repositories.map((candidate) => code(candidate)).join(', ')}.`;
-    }
-    await this.zulipExpanders.setDefault(place, repository, describeZulipSender(message));
-    return `A bare ${code('#1234')} now falls back to ${code(repository)} in this ${kind}.`;
-  }
-
   private async expanderList() {
     const streams = this.zulipExpanders.list();
     if (streams.length === 0) {
@@ -1045,11 +1016,7 @@ export class ZulipCommandService {
           .getPlaceGroups(streamId)
           .map((group) => code(group))
           .join(', ');
-        const scope = this.zulipExpanders.getScope(streamId);
-        const target = scope?.defaultRepository
-          ? `; ${code('#1234')} falls back to ${code(scope.defaultRepository)}`
-          : `; a bare ${code('#1234')} falls back to no repository`;
-        return `- ${labels[index]}: ${groupNames}${target}`;
+        return `- ${labels[index]}: ${groupNames}`;
       }),
     ].join('\n');
   }
@@ -1063,9 +1030,7 @@ export class ZulipCommandService {
       'Expander groups:',
       ...groups.map((group) => {
         const streams = this.zulipExpanders.getStreams(group.name).length;
-        const groupDefault = this.zulipExpanders.getGroupDefault(group);
-        const target = groupDefault ? `default ${code(groupDefault)}` : `no default for ${code('#1234')}`;
-        return `- ${code(group.name)}: ${countRepositories(this.zulipExpanders.getRepositories(group).length)}, ${target}; on in ${plural(streams, 'stream')}`;
+        return `- ${code(group.name)}: ${countRepositories(this.zulipExpanders.getRepositories(group).length)}; on in ${plural(streams, 'stream')}`;
       }),
       '',
       `${code('expander-group info <group>')} shows one in full.`,
@@ -1079,12 +1044,6 @@ export class ZulipCommandService {
     }
     const streams = this.zulipExpanders.getStreams(name);
     const labels = await this.describeStreams(streams);
-    const groupDefault = this.zulipExpanders.getGroupDefault(group);
-    const entries = group.repositories.map((entry) =>
-      entry === groupDefault
-        ? `${code(entry)} (the group's default for ${code('#1234')})`
-        : this.describeEntries([entry]),
-    );
     const patterns = group.repositories.filter(isPattern).map((entry) => {
       const repositories = this.zulipExpanders.getPatternRepositories(entry);
       if (repositories === undefined) {
@@ -1096,15 +1055,11 @@ export class ZulipCommandService {
     });
     return [
       `Expander group ${code(name)}:`,
-      `- Repositories: ${entries.join(', ')}`,
+      `- Repositories: ${this.describeEntries(group.repositories)}`,
       ...patterns,
-      group.threshold > 0
-        ? `- A bare ${code('#N')} below ${group.threshold} expands only for ${SEEN_ITEM}.`
-        : `- Every bare ${code('#N')} expands.`,
       streams.length === 0
         ? `- On in no stream; ${code(`expanders on ${name}`)} turns it on in the stream it is given in.`
         : `- On in: ${labels.join(', ')}`,
-      `A stream can send a bare ${code('#1234')} elsewhere with ${code('expanders default <repository>')}; ${code('expanders list')} shows where each one goes.`,
     ].join('\n');
   }
 
@@ -1151,12 +1106,8 @@ export class ZulipCommandService {
             return repositories;
           }
           const created = await this.zulipExpanders.createGroup(name, repositories, describeZulipSender(message));
-          const groupDefault = repositories.find((entry) => !isPattern(entry));
-          const defaultNote = groupDefault
-            ? `${code(groupDefault)} is the default for a bare ${code('#1234')}`
-            : `with only patterns it has no default for a bare ${code('#1234')}, which ${code('expanders default <repository>')} picks for a stream`;
           return created
-            ? `Created the expander group ${code(name)} with ${this.describeEntries(repositories)}; ${defaultNote}. Turn it on in a stream with ${code(`expanders on ${name}`)}.`
+            ? `Created the expander group ${code(name)} with ${this.describeEntries(repositories)}. Turn it on in a stream with ${code(`expanders on ${name}`)}.`
             : `There is already an expander group ${code(name)}; ${code(`expander-group add ${name} <repository>…`)} adds repositories to it.`;
         });
       }
@@ -1202,20 +1153,6 @@ export class ZulipCommandService {
           return removed.length > 0
             ? `Removed ${listRepositories(removed)} from the expander group ${code(name)}.`
             : `Nothing changed: the expander group ${code(name)} has none of ${listRepositories(repositories)}.`;
-        });
-      }
-      case 'threshold': {
-        const threshold = Number(rest[0]);
-        if (rest.length !== 1 || !/^\d+$/.test(rest[0]) || threshold > MAX_THRESHOLD) {
-          break;
-        }
-        return this.underLock(EXPANDER_GROUP, async () => {
-          if (!(await this.zulipExpanders.setThreshold(name, threshold))) {
-            return this.noGroup(name);
-          }
-          return threshold === 0
-            ? `In the expander group ${code(name)}, every bare ${code('#N')} now expands.`
-            : `In the expander group ${code(name)}, a bare ${code('#N')} below ${threshold} now expands only for ${SEEN_ITEM}.`;
         });
       }
       case 'delete': {
