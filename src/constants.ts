@@ -30,6 +30,15 @@ export enum GithubOrg {
   ImmichApp = 'immich-app',
 }
 
+/** The headings the Zulip help lists its commands under, in this order. */
+export enum ZulipHelpSection {
+  Links = 'Issues and links',
+  Schedule = 'Scheduled messages',
+  Rss = 'RSS',
+  Mirror = 'Discord mirror',
+  Team = 'Team tools',
+}
+
 export const IMMICH_REPOSITORY_BASE_OPTIONS = { owner: 'immich-app', repo: 'immich' };
 
 const docs = {
