@@ -106,6 +106,23 @@ const GITHUB_QUICK_REF_REGEX = /(((?<org>[\w\-.,_]*)\/)?(?<repo>[\w\-.,_]+))?(?<
 // Issue and pull request numbers are stored as Postgres integers.
 const MAX_GITHUB_NUMBER = 2_147_483_647;
 const GITHUB_THREAD_REGEX = new RegExp(`(${GITHUB_PAGE_REGEX.source})|(${GITHUB_QUICK_REF_REGEX.source})`, 'g');
+/**
+ * `#123` with nothing joined to it: on the left not part of a word or a path (though `#12/#13` is two), `&#91;`,
+ * `<#123>` or `\#5`, and on the right not a word, `%`, a decimal, a time or a range. Its path is a name, `owner/name`
+ * or a longer GitLab path.
+ */
+const ZULIP_SHORTHAND_REGEX =
+  /(?<![\w.!#&<@=?$\\-])(?<!(?<!#\d+)\/)(?<path>\w[\w.-]*(?:\/[\w.-]+)*)?#(?<num>[1-9]\d*)(?![\w%]|[.,:/\-–—]\d)/;
+/**
+ * A GitHub page link or any other link, matched whole so that nothing in its path, query or fragment is shorthand, or
+ * shorthand.
+ */
+const ZULIP_THREAD_REGEX = new RegExp(
+  `(${GITHUB_PAGE_REGEX.source})[^\\s<>]*|https?:\\/\\/[^\\s<>]+|(${ZULIP_SHORTHAND_REGEX.source})`,
+  'g',
+);
+/** Letters, digits and hyphens, so `example.com/docs#12` names no GitHub repository. */
+const GITHUB_LOGIN_REGEX = /^[\da-z-]+$/i;
 const GITLAB_HOST = Constants.Gitlab.Host.replaceAll('.', '\\.');
 const GITLAB_PAGE_REGEX = new RegExp(
   `https://${GITLAB_HOST}/(?<path>[\\w.-]+(?:/[\\w.-]+)+)/-/(?<kind>issues|work_items|merge_requests)/(?<num>\\d+)`,
@@ -172,6 +189,47 @@ const zulipTextOutsideCode = (content: string, { skipQuotes = false } = {}) => {
     .filter(({ code }) => !code)
     .map(({ text }) => text)
     .join('\n');
+};
+
+/** A GitHub link names its repository and kind; shorthand has at most a path, which the place's repositories resolve. */
+type ZulipThreadReference =
+  { owner: string; name: string; category: LinkType; id: number } | { path?: string; id: number };
+
+/** The GitHub links and the shorthand of Zulip text, in order. */
+export const zulipThreadReferences = (text: string) =>
+  [...text.matchAll(ZULIP_THREAD_REGEX)].flatMap(({ groups = {} }): ZulipThreadReference[] => {
+    if (groups.numPage !== undefined) {
+      return [
+        {
+          owner: groups.orgPage,
+          name: groups.repoPage,
+          category: groups.category as LinkType,
+          id: Number(groups.numPage),
+        },
+      ];
+    }
+
+    return groups.num === undefined ? [] : [{ path: groups.path, id: Number(groups.num) }];
+  });
+
+/**
+ * The repository shorthand's path names, a leading `github.com/` left out: one of the place's, by the end of its name;
+ * else a name alone beside the default repository, or `owner/name` on GitHub when the owner can be a GitHub login. A
+ * longer path, which only a GitLab project has, names one of the place's or nothing.
+ */
+const shorthandRepository = ({ repositories, defaultRepository }: ExpanderScope, path: string) => {
+  const wanted = path.replace(/^github\.com\//i, '');
+  const found = findRepository(repositories, wanted);
+  if (found) {
+    return found;
+  }
+
+  const segments = wanted.split('/');
+  if (segments.length === 1) {
+    return defaultRepository && `${defaultRepository.slice(0, defaultRepository.lastIndexOf('/'))}/${wanted}`;
+  }
+
+  return segments.length === 2 && GITHUB_LOGIN_REGEX.test(segments[0]) ? wanted : undefined;
 };
 
 /** The images `Constants.Zulip.EmojiImages` names for the emoji a message uses outside code, each once. */
@@ -607,59 +665,25 @@ export class ChatService {
     const links: GithubLink[] = [];
     const gitlabLinks: GitlabLink[] = [];
 
-    content = scope ? zulipTextOutsideCode(content, { skipQuotes: true }) : content.replaceAll(/```.*```/gs, '');
+    if (scope) {
+      content = zulipTextOutsideCode(content, { skipQuotes: true });
 
-    const matches = content.matchAll(GITHUB_THREAD_REGEX);
+      for (const reference of zulipThreadReferences(content)) {
+        if (reference.id > MAX_GITHUB_NUMBER) {
+          continue;
+        }
 
-    for (const match of matches) {
-      if (!match || !match.groups) {
-        continue;
-      }
-
-      const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups;
-      const id = Number(num ?? numPage);
-      if (Number.isNaN(id) || id > MAX_GITHUB_NUMBER) {
-        continue;
-      }
-
-      if (scope) {
-        const link = await this.resolveScopedReference(scope, {
-          owner: org || orgPage,
-          name: repo || repoPage,
-          id,
-          category: category as LinkType | undefined,
-          isPage: orgPage !== undefined,
-        });
+        const link =
+          'category' in reference
+            ? { org: reference.owner, repo: reference.name, id: reference.id, type: reference.category }
+            : await this.resolveScopedReference(scope, reference);
         if (link && 'path' in link) {
           gitlabLinks.push(link);
         } else if (link) {
           links.push(link);
         }
-        continue;
       }
 
-      const latestPr = await this.database.getLatestPullRequestByNumber(id, GithubOrg.ImmichApp);
-      const isQuickRef = !org && !orgPage && !repo && !repoPage;
-
-      if (isQuickRef && (!latestPr || latestPr.updatedAt < DateTime.now().minus({ week: 2 }).toJSDate()) && id < 1000) {
-        continue;
-      }
-
-      links.push({
-        id,
-        org: org || orgPage || latestPr?.organization || GithubOrg.ImmichApp,
-        repo: repo || repoPage || latestPr?.repository || GithubRepo.Immich,
-        type: latestPr ? 'pull' : (category as LinkType),
-        discordThreadId:
-          channelParentId === undefined
-            ? undefined
-            : channelParentId === Constants.Discord.Categories.Team
-              ? (latestPr?.discordThreadId ?? undefined)
-              : undefined,
-      });
-    }
-
-    if (scope) {
       for (const { groups } of content.matchAll(GITLAB_PAGE_REGEX)) {
         const id = Number(groups?.num);
         if (groups && id <= MAX_GITHUB_NUMBER) {
@@ -669,6 +693,42 @@ export class ChatService {
             kind: groups.kind === 'merge_requests' ? 'merge_requests' : 'issues',
           });
         }
+      }
+    } else {
+      for (const match of content.replaceAll(/```.*```/gs, '').matchAll(GITHUB_THREAD_REGEX)) {
+        if (!match || !match.groups) {
+          continue;
+        }
+
+        const { org, orgPage, repo, repoPage, category, num, numPage } = match.groups;
+        const id = Number(num ?? numPage);
+        if (Number.isNaN(id) || id > MAX_GITHUB_NUMBER) {
+          continue;
+        }
+
+        const latestPr = await this.database.getLatestPullRequestByNumber(id, GithubOrg.ImmichApp);
+        const isQuickRef = !org && !orgPage && !repo && !repoPage;
+
+        if (
+          isQuickRef &&
+          (!latestPr || latestPr.updatedAt < DateTime.now().minus({ week: 2 }).toJSDate()) &&
+          id < 1000
+        ) {
+          continue;
+        }
+
+        links.push({
+          id,
+          org: org || orgPage || latestPr?.organization || GithubOrg.ImmichApp,
+          repo: repo || repoPage || latestPr?.repository || GithubRepo.Immich,
+          type: latestPr ? 'pull' : (category as LinkType),
+          discordThreadId:
+            channelParentId === undefined
+              ? undefined
+              : channelParentId === Constants.Discord.Categories.Team
+                ? (latestPr?.discordThreadId ?? undefined)
+                : undefined,
+        });
       }
     }
 
@@ -757,42 +817,29 @@ export class ChatService {
   }
 
   /**
-   * GitHub links name their repository. `owner/name#123` and `name#123` are looked up among the stream's
-   * repositories, GitLab projects included, by the end of their name; a bare `#123` goes to the one of them whose item
-   * of that number was updated last, whatever its kind and age, the one listed first on a tie, or else to the stream's
-   * default repository, below whose threshold it is dropped.
+   * Shorthand with a path goes to the repository `shorthandRepository` names; a bare `#123` goes to the place's
+   * repository whose item of that number was updated last, whatever its kind and age, the one listed first on a tie, or
+   * else to the place's default repository, below whose threshold it is dropped.
    */
   private async resolveScopedReference(
     scope: ExpanderScope,
-    {
-      owner,
-      name,
-      id,
-      category,
-      isPage,
-    }: { owner?: string; name?: string; id: number; category?: LinkType; isPage: boolean },
+    { path, id }: { path?: string; id: number },
   ): Promise<GithubLink | GitlabLink | undefined> {
-    if (!(owner && name) && scope.repositories.length === 0 && !scope.defaultRepository) {
+    const named = path === undefined ? undefined : shorthandRepository(scope, path);
+    if (path !== undefined && !named) {
       return;
     }
 
-    const items = isPage ? [] : await this.database.getGithubItemsByNumber(id);
+    if (!named && scope.repositories.length === 0 && !scope.defaultRepository) {
+      return;
+    }
+
+    const items = await this.database.getGithubItemsByNumber(id);
     const fullName = (item: GithubItem) => `${item.organization}/${item.repository}`;
 
     let repository: string;
-    if (owner && name) {
-      repository = isPage
-        ? `${owner}/${name}`
-        : (findRepository(scope.repositories, `${owner}/${name}`) ?? `${owner}/${name}`);
-    } else if (name) {
-      const { defaultRepository } = scope;
-      const found =
-        findRepository(scope.repositories, name) ??
-        (defaultRepository && `${defaultRepository.slice(0, defaultRepository.lastIndexOf('/'))}/${name}`);
-      if (!found) {
-        return;
-      }
-      repository = found;
+    if (named) {
+      repository = named;
     } else {
       const [newest] = items
         .map((item) => ({
@@ -818,7 +865,7 @@ export class ChatService {
     const isPullRequest = items.some(
       (item) => item.kind === GithubItemKind.PullRequest && sameRepository(fullName(item), repository),
     );
-    return { org, repo, id, type: category ?? (isPullRequest ? 'pull' : undefined) };
+    return { org, repo, id, type: isPullRequest ? 'pull' : undefined };
   }
 
   /** `limit` is how many of the message's permalinks are read, every one when it is left out. */

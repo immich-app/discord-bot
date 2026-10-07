@@ -14,7 +14,13 @@ import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.inte
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { GithubItem, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
-import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
+import {
+  ChatService,
+  formatEmoteSyncReport,
+  hasBlacklistedUrl,
+  toZulipEmojiName,
+  zulipThreadReferences,
+} from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
 import { LINKS_ONLY, ZulipExpanderService } from 'src/services/zulip-expander.service';
 import { ZulipMessageHandler, ZulipService } from 'src/services/zulip.service';
@@ -531,6 +537,12 @@ describe('Bot test', () => {
         pullRequests: [],
       });
       expect(databaseMock.getLatestPullRequestByNumber).not.toHaveBeenCalled();
+    });
+
+    it('should read references without the Zulip boundaries when no scope is given, as Discord does', async () => {
+      const { parts } = await sut.handleGithubThreadReferences({ content: 'a/b/c#4242 #4242abc' }, false);
+
+      expect(parts).toEqual(['https://github.com/b/c/pull/4242', 'https://github.com/immich-app/immich/pull/4242']);
     });
 
     it('should resolve a bare reference with the latest pull request of that number when no scope is given, as Discord does', async () => {
@@ -1555,6 +1567,86 @@ describe('Bot test', () => {
       expect(hasBlacklistedUrl([])).toBe(false);
       expect(hasBlacklistedUrl(['https://example.com/https://github.com'])).toBe(false);
       expect(sut.hasBlacklistUrl(['https://immich.app'])).toBe(false);
+    });
+  });
+
+  describe('zulipThreadReferences', () => {
+    it.each([
+      { text: 'see #1234', references: [{ id: 1234 }] },
+      { text: '(#1234)', references: [{ id: 1234 }] },
+      { text: '#12,#13', references: [{ id: 12 }, { id: 13 }] },
+      { text: '#1234.', references: [{ id: 1234 }] },
+      { text: "#1234's", references: [{ id: 1234 }] },
+      { text: 'immich#5', references: [{ path: 'immich', id: 5 }] },
+      { text: 'videostreaming/plugins/kick#7', references: [{ path: 'videostreaming/plugins/kick', id: 7 }] },
+      {
+        text: 'gitlab.futo.org/videostreaming/grayjay#7',
+        references: [{ path: 'gitlab.futo.org/videostreaming/grayjay', id: 7 }],
+      },
+      { text: 'github.com/immich-app/immich#123', references: [{ path: 'github.com/immich-app/immich', id: 123 }] },
+      { text: '#12–#15', references: [{ id: 12 }, { id: 15 }] },
+      { text: '#12-#15', references: [{ id: 12 }] },
+      { text: '#1234/#1235', references: [{ id: 1234 }, { id: 1235 }] },
+      { text: 'immich#5/#6', references: [{ path: 'immich', id: 5 }, { id: 6 }] },
+      { text: '~~#1234~~', references: [{ id: 1234 }] },
+      { text: 'wow#1', references: [{ path: 'wow', id: 1 }] },
+      { text: 'example.com/docs#12', references: [{ path: 'example.com/docs', id: 12 }] },
+      { text: 'a/b/c#5', references: [{ path: 'a/b/c', id: 5 }] },
+    ])('should read the shorthand in $text', ({ text, references }) => {
+      expect(zulipThreadReferences(text)).toEqual(references);
+    });
+
+    it.each([
+      'https://example.com/docs#12',
+      'https://example.com/#12',
+      'https://x/a?b#12',
+      'https://example.com/My%20Doc#3',
+      'https://en.wikipedia.org/wiki/Foo_(bar)#12',
+      'https://example.com/a,b#12',
+      'http://localhost:2283#12',
+      'example.com/#12',
+      'a?b#12',
+      '.#5',
+      '!#5',
+      '##5',
+      '&#91;',
+      '<#1234>',
+      '@#5',
+      '=#5',
+      '$#5',
+      '\\#5',
+      '-#5',
+      '#1234abc',
+      '#5%',
+      '#12:30',
+      '#5.1',
+      '#12,13',
+      '#5/6',
+      '#1-2',
+      '#5–10',
+      '#5—10',
+      '#0',
+    ])('should read no reference in %j', (text) => {
+      expect(zulipThreadReferences(text)).toEqual([]);
+    });
+
+    it('should read GitHub links beside shorthand, in order', () => {
+      expect(zulipThreadReferences('#5 https://github.com/immich-app/immich/pull/6 immich#7')).toEqual([
+        { id: 5 },
+        { owner: 'immich-app', name: 'immich', category: 'pull', id: 6 },
+        { path: 'immich', id: 7 },
+      ]);
+    });
+
+    it.each([
+      'https://github.com/immich-app/immich/pull/7?x=#34',
+      'https://github.com/immich-app/immich/pull/7?x=#34,#35',
+      'https://github.com/immich-app/immich/pull/7?q=(#34)',
+      'https://github.com/immich-app/immich/pull/7?q=%20#34',
+      'https://github.com/immich-app/immich/pull/7.',
+      '(https://github.com/immich-app/immich/pull/7)',
+    ])('should read the GitHub link in %j and nothing after it', (text) => {
+      expect(zulipThreadReferences(text)).toEqual([{ owner: 'immich-app', name: 'immich', category: 'pull', id: 7 }]);
     });
   });
 
@@ -2637,6 +2729,42 @@ describe('Bot test', () => {
       );
     });
 
+    it.each([
+      'example.com/docs#12',
+      'a/b/c#5',
+      'https://example.com/docs#12',
+      'https://x/a?b#12',
+      'https://example.com/My%20Doc#3',
+      'https://en.wikipedia.org/wiki/Foo_(bar)#12',
+      '&#91;',
+      '#1234abc',
+      '#12:30',
+      '#5.1',
+      '#1369628205035688098',
+    ])('should look nothing up for %j, which is no shorthand or names no repository', async (content) => {
+      await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+
+      await send(content);
+
+      expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+      expect(gitlabMock.getItem).not.toHaveBeenCalled();
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { content: 'github.com/immich-app/immich#123', org: 'immich-app', repo: 'immich' },
+      { content: 'GitHub.com/immich-app/immich#123', org: 'immich-app', repo: 'immich' },
+      { content: 'Immich-App/Immich#123', org: 'Immich-App', repo: 'Immich' },
+    ])('should expand $content in a stream with no group on', async ({ content, org, repo }) => {
+      await setUp({ groups: [FHS], streamGroups: [] });
+
+      await send(content);
+
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(org, repo, 123, undefined, true);
+    });
+
     it("should resolve name#N outside the stream groups to the default repository's owner", async () => {
       await setUp({ groups: [FHS], streamGroups: ['fhs'] });
 
@@ -2868,7 +2996,7 @@ describe('Bot test', () => {
       expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-core', 3, true);
     });
 
-    it.each(['#3', 'FHS-Core#3', 'Futo-Org/FHS-Core#3'])(
+    it.each(['#3', 'FHS-Core#3', 'Futo-Org/FHS-Core#3', 'github.com/futo-org/fhs-core#3'])(
       'should not fall back to a discussion for %s when a pull request item matches the resolved repository',
       async (content) => {
         await setUp({ groups: [FHS], streamGroups: ['fhs'] });
@@ -3129,6 +3257,8 @@ describe('Bot test', () => {
         { content: 'VideoStreaming/GrayJay#7', path: 'videostreaming/grayjay' },
         { content: 'plugins/kick#7', path: 'videostreaming/plugins/kick' },
         { content: 'kick#7', path: 'videostreaming/plugins/kick' },
+        { content: 'videostreaming/plugins/kick#7', path: 'videostreaming/plugins/kick' },
+        { content: 'gitlab.futo.org/videostreaming/grayjay#7', path: 'videostreaming/grayjay' },
       ])('should resolve $content to the GitLab project in the stream groups', async ({ content, path }) => {
         await setUp({ groups: [FHS, GRAYJAY], streamGroups: ['fhs', 'grayjay'] });
 
@@ -3138,6 +3268,16 @@ describe('Bot test', () => {
           [path, 'issues', 7],
           [path, 'merge_requests', 7],
         ]);
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      });
+
+      it('should look nothing up for a GitLab path outside the stream groups', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+
+        await send('gitlab.futo.org/harbor/harbor#7');
+
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
         expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
       });
 
