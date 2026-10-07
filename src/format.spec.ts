@@ -1,4 +1,5 @@
 import {
+  DISCORD_MAX_MESSAGE_LENGTH,
   isResolvedTopic,
   mapOutsideCode,
   neutraliseZulipLabel,
@@ -110,6 +111,12 @@ describe('toZulipQuote', () => {
 
   it('should always outrun the longest tilde run inside', () => {
     expect(toZulipQuote('a\n~~~~\nb')).toBe('~~~~~ quote\na\n~~~~\nb\n~~~~~');
+  });
+});
+
+describe('DISCORD_MAX_MESSAGE_LENGTH', () => {
+  it("should be Discord's message limit", () => {
+    expect(DISCORD_MAX_MESSAGE_LENGTH).toBe(2000);
   });
 });
 

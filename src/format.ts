@@ -33,6 +33,8 @@ export const toZulipQuote = (text: string) => {
   return `${fence} quote\n${text}\n${fence}`;
 };
 
+export const DISCORD_MAX_MESSAGE_LENGTH = 2000;
+
 /** Zulip's default `max_message_length`, in code points: the server refuses a longer message. */
 export const ZULIP_MAX_MESSAGE_LENGTH = 10_000;
 

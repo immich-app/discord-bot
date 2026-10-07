@@ -9,10 +9,8 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
-import { shorten } from 'src/format';
+import { DISCORD_MAX_MESSAGE_LENGTH, shorten } from 'src/format';
 import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mirror-link.service';
-
-const DISCORD_MESSAGE_LENGTH = 2000;
 
 const ADMIN_ONLY = {
   defaultMemberPermissions: PermissionFlagsBits.Administrator,
@@ -171,6 +169,9 @@ export class DiscordMirrorCommands {
   }
 
   private edit(interaction: CommandInteraction, content: string) {
-    return interaction.editReply({ content: shorten(content, DISCORD_MESSAGE_LENGTH), allowedMentions: { parse: [] } });
+    return interaction.editReply({
+      content: shorten(content, DISCORD_MAX_MESSAGE_LENGTH),
+      allowedMentions: { parse: [] },
+    });
   }
 }

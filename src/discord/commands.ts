@@ -18,7 +18,7 @@ import {
 } from 'discord.js';
 import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants, DiscordField, DiscordModal } from 'src/constants';
-import { shorten } from 'src/format';
+import { DISCORD_MAX_MESSAGE_LENGTH, shorten } from 'src/format';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
@@ -483,7 +483,7 @@ export class DiscordCommands {
 
     const deferredInteraction = await interaction.deferReply();
     const report = await this.service.syncEmotes(interaction.guildId);
-    await deferredInteraction.edit(shorten(formatEmoteSyncReport(report), 2000));
+    await deferredInteraction.edit(shorten(formatEmoteSyncReport(report), DISCORD_MAX_MESSAGE_LENGTH));
   }
 
   @Slash({ name: 'prune', description: 'Deletes all recent messages of a timed out user' })
@@ -644,6 +644,6 @@ export class DiscordCommands {
     // Discord's command creates on Discord alone; the Zulip command is the one that catches both platforms up.
     const report = await this.webhookService.backfillPullRequests(pullRequests, { discord: true, zulip: false });
 
-    return deferredReply.edit(shorten(formatBackfillReport(report), 2000));
+    return deferredReply.edit(shorten(formatBackfillReport(report), DISCORD_MAX_MESSAGE_LENGTH));
   }
 }

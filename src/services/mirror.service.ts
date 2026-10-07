@@ -2,7 +2,13 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { getConfig } from 'src/config';
 import { Constants } from 'src/constants';
-import { isResolvedTopic, plural, ZULIP_RESOLVED_PREFIX, zulipNarrowLink } from 'src/format';
+import {
+  DISCORD_MAX_MESSAGE_LENGTH,
+  isResolvedTopic,
+  plural,
+  ZULIP_RESOLVED_PREFIX,
+  zulipNarrowLink,
+} from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import {
   DiscordMirrorChannel,
@@ -105,7 +111,6 @@ const ZULIP_ID_BATCH = 100;
 const MAX_FILES = 10;
 const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
 const FILE_TRANSFER_BUDGET_MS = 120_000;
-const DISCORD_MESSAGE_LENGTH = 2000;
 const BACKFILL_PAGE = 100;
 const BACKFILL_PACE_MS = 500;
 const BACKFILL_NOTICE_LOOKBACK = 5;
@@ -364,7 +369,7 @@ const withNotes = (text: string, noteList: Note[]) => {
   if (parts.length === 0) {
     return [notes];
   }
-  if (parts[0].length + notes.length + 1 <= DISCORD_MESSAGE_LENGTH) {
+  if (parts[0].length + notes.length + 1 <= DISCORD_MAX_MESSAGE_LENGTH) {
     return [`${parts[0]}\n${notes}`, ...parts.slice(1)];
   }
   return splitDiscordContent(`${notes}\n${text}`);

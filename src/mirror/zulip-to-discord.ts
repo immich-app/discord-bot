@@ -1,5 +1,5 @@
 import { escapeMarkdown } from 'discord.js';
-import { scanZulipFences, splitOutsideCode, ZulipFence } from 'src/format';
+import { DISCORD_MAX_MESSAGE_LENGTH, scanZulipFences, splitOutsideCode, ZulipFence } from 'src/format';
 
 /** A stream by name, as `#**…**` names it, or by ID, as a narrow link does; `topic` is as Zulip wrote it. */
 export type ZulipChannelRef = { stream: string | number; topic?: string };
@@ -535,7 +535,7 @@ const splitPoint = (chunk: string, room: number, after: number) => {
   return { end, next: end };
 };
 
-export const splitDiscordContent = (text: string, max = 2000, maxParts = 6) => {
+export const splitDiscordContent = (text: string, max = DISCORD_MAX_MESSAGE_LENGTH, maxParts = 6) => {
   const close = '\n```';
   const parts: string[] = [];
   let rest = text;
