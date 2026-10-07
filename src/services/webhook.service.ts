@@ -36,6 +36,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface } from 'src/interfaces/zulip.interface';
 import { FourthwallRepository } from 'src/repositories/fourthwall.repository';
 import { isZulipFailure, isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
+import { ApprovalService } from 'src/services/approval.service';
 import { NotificationService } from 'src/services/notification.service';
 import { makeLicenseFields, makeOrderFields, withErrorLogging } from 'src/util';
 
@@ -249,6 +250,7 @@ export class WebhookService {
     @Inject(IOutlineInterface) private outline: IOutlineInterface,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
     private notifications: NotificationService,
+    private approvals: ApprovalService,
   ) {}
 
   /** Every GitHub event, from the GitHub App's webhook, for each organization the app is installed on. */
@@ -269,6 +271,12 @@ export class WebhookService {
       await this.upsertPullRequest(event.payload);
     }
 
+    // A review would otherwise refresh the Discord thread, which strips its Discussion tag.
+    if (event.name === 'pull_request_review') {
+      this.approvals.handleReview(event.payload);
+      return;
+    }
+
     // Every destination below is Immich's, so another organization's events are recorded, never posted, until it has
     // destinations of its own.
     if (owner !== GithubOrg.ImmichApp) {
@@ -277,7 +285,6 @@ export class WebhookService {
 
     switch (event.name) {
       case 'pull_request':
-      case 'pull_request_review':
       case 'pull_request_review_comment':
       case 'pull_request_review_thread': {
         const { payload } = event;

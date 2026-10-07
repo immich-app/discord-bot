@@ -232,6 +232,7 @@ export const Constants = {
     MonthlyReport: '0 12 19 * *',
     HolidayInfo: '0 22 * * *',
     ExpanderPatterns: '23 * * * *',
+    PruneExpansions: '41 3 * * *',
   },
   Outline: {
     Collections: outlineCollections,
@@ -254,6 +255,8 @@ export const Constants = {
       'we-are-checking': 'https://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg',
     } as Record<string, string>,
   },
+  /** An approval marks the bot's expansion replies of the last `MaxAgeDays` that name the pull request. */
+  Approvals: { Emoji: 'approved2', MaxAgeDays: 30 },
   Mirror: {
     MaxFileBytes: 10 * 1024 * 1024,
     MaxUploadBytes: 25 * 1024 * 1024,

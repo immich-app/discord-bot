@@ -1,3 +1,4 @@
+import { ApprovalService } from 'src/services/approval.service';
 import { ChatService } from 'src/services/chat.service';
 import { DatabaseService } from 'src/services/database.service';
 import { GithubService } from 'src/services/github.service';
@@ -14,6 +15,7 @@ import { ZulipService } from 'src/services/zulip.service';
 
 export const services = [
   //
+  ApprovalService,
   DatabaseService,
   ChatService,
   GithubService,

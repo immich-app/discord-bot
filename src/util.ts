@@ -71,12 +71,21 @@ export const formatCommand = (name: string, ...args: string[]) => {
 
 export const makeLink = (org: string, repo: string, id: number, url: string) => hyperlink(`${org}/${repo}#${id}`, url);
 
+const PULL_REQUEST_LABEL = '[Pull Request]';
+const THREAD_LINK = /, \[Thread\]\(https:\/\/discord\.com\/channels\/[^)]*\)\)$/;
+
 export const makeIssueOrPRMessage = (dto: { type: string; title: string; link: string; discordThreadId?: string }) => {
   const { type, title, link, discordThreadId } = dto;
+  const label = type === 'Issue' ? '[Issue]' : PULL_REQUEST_LABEL;
 
   if (discordThreadId) {
-    return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link}, ${hyperlink('Thread', channelLink(discordThreadId))})`;
+    return `${label} ${title} (${link}, ${hyperlink('Thread', channelLink(discordThreadId))})`;
   }
 
-  return `[${type === 'Issue' ? 'Issue' : 'Pull Request'}] ${title} (${link})`;
+  return `${label} ${title} (${link})`;
 };
+
+/** A title is any GitHub user's text and comes before the link, so only the end of the line is trusted. */
+export const isPullRequestLine = (line: string, url: string) =>
+  line.startsWith(`${PULL_REQUEST_LABEL} `) &&
+  line.replace(THREAD_LINK, ')').toLowerCase().endsWith(`](${url.toLowerCase()}))`);
