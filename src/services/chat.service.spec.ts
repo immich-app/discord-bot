@@ -2102,6 +2102,16 @@ describe('Bot test', () => {
         });
       });
 
+      it('should answer :unsee-juice: with its image', async () => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':unsee-juice:' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: 'https://raw.githubusercontent.com/immich-app/discord-bot/main/images/unsee-juice.png',
+        });
+      });
+
       it.each([
         '`:we-are-checking:`',
         '```\n:we-are-checking:\n```',
