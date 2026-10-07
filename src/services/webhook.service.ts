@@ -11,6 +11,7 @@ import { getConfig } from 'src/config';
 import { Constants, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import {
+  DISCORD_MAX_MESSAGE_LENGTH,
   isResolvedTopic,
   neutraliseZulipLabel,
   neutraliseZulipMentions,
@@ -884,7 +885,7 @@ Read only for Nicholas: ${share.url}
     }
 
     const name = shorten(`#${pull_request.number}: ${pull_request.title}`, 100);
-    const message = shorten(pull_request.body ?? '', 2000) || 'No content';
+    const message = shorten(pull_request.body ?? '', DISCORD_MAX_MESSAGE_LENGTH) || 'No content';
 
     if (!pullRequest.discordThreadId) {
       if (dto.action === 'opened' && dto.sender.type !== 'Bot') {

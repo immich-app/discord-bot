@@ -275,7 +275,7 @@ npm run zulip:types  # Regenerate src/generated/zulip.ts from the pinned Zulip O
 - `src/config.ts` - Environment variable loading
 - `src/repositories/gitlab.repository.ts` - The `gitlab.futo.org` REST client the Zulip expanders and expander groups use
 - `src/constants.ts` - Enums, channel IDs, role IDs, cron expressions, notification route table (`NotificationRoutes`)
-- `src/format.ts` - String helpers with no platform imports (`shorten`, `shortenCodePoints`, `plural`, `asHexColor`, and the Zulip markdown guards `neutraliseZulipMentions`, `neutraliseZulipLabel` and `toZulipQuote`); the only helper module renderers may import
+- `src/format.ts` - String helpers with no platform imports (`shorten`, `shortenCodePoints`, `plural`, `asHexColor`, and the Zulip markdown guards `neutraliseZulipMentions`, `neutraliseZulipLabel` and `toZulipQuote`) and both platforms' message length limits (`DISCORD_MAX_MESSAGE_LENGTH`, `ZULIP_MAX_MESSAGE_LENGTH`), which code uses instead of a literal; the only helper module renderers may import
 - `src/util.ts` - Discord-aware helpers (error reporting to `team.bot`, hyperlinks, report field builders)
 - `src/discord/commands.ts` - All slash commands
 - `src/discord/events.ts` - Discord event handlers
