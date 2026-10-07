@@ -2108,7 +2108,7 @@ describe('Bot test', () => {
         expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
           stream: 121,
           topic: 'thumbnails',
-          content: 'https://raw.githubusercontent.com/immich-app/discord-bot/main/images/unsee-juice.png',
+          content: '![unsee-juice](/user_uploads/2/ed/ngCVicRM4MCEnzYdxl3knd6b/unsee-juice.png)',
         });
       });
 
