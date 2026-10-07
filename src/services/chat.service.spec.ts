@@ -464,6 +464,11 @@ describe('Bot test', () => {
         links: ['https://github.com/immich-app/immich/issues/6969'],
       },
       {
+        name: 'read references in code spans and ~~~ fences, ignoring only ``` blocks',
+        message: '`#4242`\n~~~\n#6969\n~~~',
+        links: ['https://github.com/immich-app/immich/pull/4242', 'https://github.com/immich-app/immich/issues/6969'],
+      },
+      {
         name: 'should support a reference to another immich repo',
         message: 'static-pages#4242',
         links: ['https://github.com/immich-app/static-pages/pull/4242'],
@@ -2426,10 +2431,104 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should send nothing when the reference is only in a code block', async () => {
-      await sut.onZulipMessage(zulipMessage({ content: '```\n#4242\n```' }));
+    describe('references in code', () => {
+      const GITLAB_ISSUE = 'https://gitlab.futo.org/videostreaming/grayjay/-/issues/7';
+      const REFERENCES = [
+        { reference: '#4242', expansion: 'https://github.com/immich-app/immich/pull/4242' },
+        {
+          reference: 'https://github.com/immich-app/immich/pull/4242',
+          expansion: 'https://github.com/immich-app/immich/pull/4242',
+        },
+        { reference: GITLAB_ISSUE, expansion: `[Issue] Bug ([videostreaming/grayjay#7](${GITLAB_ISSUE}))` },
+      ];
 
-      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      beforeEach(() => {
+        databaseMock.getGithubItemsByNumber.mockResolvedValue([
+          {
+            organization: 'immich-app',
+            repository: 'immich',
+            number: 4242,
+            kind: GithubItemKind.PullRequest,
+            updatedAt: new Date(),
+            removed: false,
+          },
+        ]);
+        gitlabMock.getItem.mockResolvedValue({
+          kind: 'issues',
+          title: 'Bug',
+          url: GITLAB_ISSUE,
+          updatedAt: new Date(0),
+        });
+      });
+
+      it.each(
+        REFERENCES.flatMap(({ reference }) => [
+          `\`${reference}\``,
+          `\`\`\`\n${reference}\n\`\`\``,
+          `~~~ python\n${reference}\n~~~`,
+          `\`\`\`\n${reference}`,
+          `look:\n\n    ${reference}`,
+          `- step one\n\nparagraph\n\n    ${reference}`,
+          `- step one\n\`\`\`spoiler Details\n\n    ${reference}\n\`\`\``,
+        ]),
+      )('should look nothing up for %j, which Zulip renders as code', async (content) => {
+        await sut.onZulipMessage(zulipMessage({ content }));
+
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it.each(
+        REFERENCES.flatMap(({ reference, expansion }) => [
+          [`\`\`\`spoiler Details\n${reference}\n\`\`\``, expansion],
+          [`\`code\` ${reference}`, expansion],
+          [`* One \n  * Two\n\n    Two continued\n    ${reference}`, expansion],
+          [`- step one\nmore of it\n\n    see ${reference}`, expansion],
+          [`1. step one\n\n    more\n\n    see ${reference}`, expansion],
+        ]),
+      )('should expand %j, which Zulip renders as text', async (content, expansion) => {
+        await sut.onZulipMessage(zulipMessage({ content }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content: expansion }));
+      });
+    });
+
+    describe('references in a quote', () => {
+      const SAID = '[said](https://chat.futo.org/#narrow/channel/107-immich/topic/thumbnails/near/899)';
+
+      it.each([
+        `@_**Alice|12** ${SAID}:\n\`\`\`quote\nsee #4242\n\`\`\`\nagreed`,
+        `@_**Alice|12** ${SAID}:\n\`\`\`\`quote\nsee #4242\n\`\`\`\nnpm ci\n\`\`\`\n\`\`\`\`\nagreed`,
+        `@_**Immich|7** ${SAID}:\n\`\`\`quote\n[Pull Request] Fix ([immich-app/immich#4242](https://github.com/immich-app/immich/pull/4242))\n\`\`\`\nthanks`,
+        '~~~quoted\nhttps://gitlab.futo.org/videostreaming/grayjay/-/issues/7\n~~~',
+      ])('should look nothing up for %j, whose references are the quoted message’s', async (content) => {
+        await sut.onZulipMessage(zulipMessage({ content }));
+
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+        expect(gitlabMock.getItem).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should expand a reference the reply makes itself', async () => {
+        await sut.onZulipMessage(
+          zulipMessage({
+            content: `@_**Alice|12** ${SAID}:\n\`\`\`quote\nsee #1234\n\`\`\`\nsee https://github.com/immich-app/immich/pull/4242`,
+          }),
+        );
+
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'immich',
+          4242,
+          undefined,
+          true,
+        );
+        expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
+      });
     });
   });
 
