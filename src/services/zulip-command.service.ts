@@ -463,6 +463,9 @@ export class ZulipCommandService {
    */
   async onZulipMessage(message: ZulipReceivedMessage) {
     const { streamId } = message;
+    if (/^notification-bot@/i.test(message.senderEmail)) {
+      return;
+    }
     if (message.type === 'private') {
       if (!isBotSender(message)) {
         await this.onDirectMessage(message);

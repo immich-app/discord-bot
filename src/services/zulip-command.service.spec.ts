@@ -634,6 +634,16 @@ describe('ZulipCommandService', () => {
       },
     );
 
+    it("should ignore Zulip's Notification Bot, whose notices start with a mention of the bot", async () => {
+      await send('@_**Immich** has marked this topic as resolved.', {
+        senderId: 31,
+        senderEmail: 'notification-bot@example.com',
+        senderFullName: 'Notification Bot',
+      });
+
+      expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+    });
+
     it("should ignore another bot's direct message", async () => {
       await send('link ABCD2345', { ...fromBot, type: 'private', streamId: undefined, topic: '' });
 
