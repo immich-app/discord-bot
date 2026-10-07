@@ -253,7 +253,8 @@ export const Constants = {
     TeamStreams: zulipTeamStreams,
     /** A message using one of these emoji, by name, in a stream the bot can see is answered with the image. */
     EmojiImages: {
-      'we-are-checking': 'https://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg',
+      'this-is-fine': 'https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
+      'we-are-checking': 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
     } as Record<string, string>,
   },
   /** An approval marks the bot's expansion replies of the last `MaxAgeDays` that name the pull request. */

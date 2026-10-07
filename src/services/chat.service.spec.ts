@@ -2032,7 +2032,7 @@ describe('Bot test', () => {
         expect(zulipServiceMock.isGuest.mock.calls).toEqual([[12], [13]]);
         expect(zulipMock.sendDirectMessage).toHaveBeenCalledExactlyOnceWith(
           [12, 13],
-          '[Pull Request] Fix (futo-org/fhs-core#7)\nhttps://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg',
+          '[Pull Request] Fix (futo-org/fhs-core#7)\nhttps://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
         );
       });
 
@@ -2086,7 +2086,7 @@ describe('Bot test', () => {
     });
 
     describe('emoji images', () => {
-      const IMAGE = 'https://i.ytimg.com/vi/QY4KKG4TBFo/maxresdefault.jpg';
+      const IMAGE = 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif';
 
       it.each([
         ':we-are-checking:',
