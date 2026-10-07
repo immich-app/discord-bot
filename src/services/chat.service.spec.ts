@@ -2112,6 +2112,16 @@ describe('Bot test', () => {
         });
       });
 
+      it('should answer :we-are-crying: with its image', async () => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':we-are-crying:' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: 'https://media1.tenor.com/m/vjWI_-HHKdgAAAAd/ferrari-cry-ferrari.gif',
+        });
+      });
+
       it.each([
         '`:we-are-checking:`',
         '```\n:we-are-checking:\n```',

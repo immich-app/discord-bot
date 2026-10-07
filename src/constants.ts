@@ -256,6 +256,7 @@ export const Constants = {
       'this-is-fine': 'https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
       'unsee-juice': '![unsee-juice](/user_uploads/2/ed/ngCVicRM4MCEnzYdxl3knd6b/unsee-juice.png)',
       'we-are-checking': 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
+      'we-are-crying': 'https://media1.tenor.com/m/vjWI_-HHKdgAAAAd/ferrari-cry-ferrari.gif',
     } as Record<string, string>,
   },
   /** An approval marks the bot's expansion replies of the last `MaxAgeDays` that name the pull request. */
