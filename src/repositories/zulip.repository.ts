@@ -4,6 +4,7 @@ import type { components, paths } from 'src/generated/zulip';
 import {
   IZulipInterface,
   MessagePayload,
+  ZulipAccount,
   type ZulipConfig,
   ZulipEmoji,
   ZulipEmojiCodes,
@@ -405,6 +406,13 @@ export class ZulipRepository implements IZulipInterface {
       throw new Error(`Zulip returned no role for user ${userId}`);
     }
     return { userId: user.user_id ?? userId, fullName: user.full_name ?? '', role: user.role };
+  }
+
+  async getUsers(): Promise<ZulipAccount[]> {
+    const { data } = await this.bot.GET('/users');
+    return (data!.members ?? []).flatMap(({ user_id, full_name, email }) =>
+      user_id === undefined ? [] : [{ userId: user_id, fullName: full_name ?? '', email: email ?? '' }],
+    );
   }
 
   async getStream(streamId: number): Promise<ZulipStream> {

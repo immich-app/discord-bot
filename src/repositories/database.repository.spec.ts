@@ -15,7 +15,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, zulip_expander*, zulip_dm_expander* and zulip_emote rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, zulip_expander*, zulip_dm_expander*, zulip_emote and zulip_command_bot rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -31,6 +31,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     await db.deleteFrom('zulip_dm_expander_default').execute();
     await db.deleteFrom('zulip_dm_expander').execute();
     await db.deleteFrom('zulip_expander_group').execute();
+    await db.deleteFrom('zulip_command_bot').execute();
   });
 
   afterAll(async () => {
@@ -510,6 +511,25 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       expect(await sut.getZulipEmotes()).toEqual([
         { discordEmoteId: '1', zulipName: 'peepowidehappy', padded: true, createdAt: expect.any(Date) },
       ]);
+    });
+  });
+
+  describe('zulip command bots', () => {
+    it('should add a bot once, and list the bots in the order they were added', async () => {
+      const claude = await sut.addZulipCommandBot(30, 'Alice on Zulip (user 12)');
+      const ci = await sut.addZulipCommandBot(29, 'Bob on Zulip (user 13)');
+
+      expect(claude).toEqual({ userId: 30, createdBy: 'Alice on Zulip (user 12)', createdAt: expect.any(Date) });
+      expect(await sut.addZulipCommandBot(30, 'Bob on Zulip (user 13)')).toBeUndefined();
+      expect(await sut.getZulipCommandBots()).toEqual([claude, ci]);
+    });
+
+    it('should remove a listed bot, and say when there was none', async () => {
+      await sut.addZulipCommandBot(30, 'Alice on Zulip (user 12)');
+
+      expect(await sut.removeZulipCommandBot(30)).toBe(true);
+      expect(await sut.removeZulipCommandBot(30)).toBe(false);
+      expect(await sut.getZulipCommandBots()).toEqual([]);
     });
   });
 });

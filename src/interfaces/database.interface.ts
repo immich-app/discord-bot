@@ -32,6 +32,7 @@ import {
   UpdateRSSFeed,
   UpdateScheduledMessage,
   UpdateZulipExpanderGroup,
+  ZulipCommandBot,
   ZulipDmExpander,
   ZulipDmExpanderDefault,
   ZulipEmote,
@@ -162,4 +163,10 @@ export interface IDatabaseRepository {
   /** The expansions of the pull request created before `before`, oldest first. */
   getPullRequestExpansions(pullRequest: PullRequestReference, before: Date): Promise<PullRequestExpansionWithCount[]>;
   removePullRequestExpansions(before: Date): Promise<void>;
+  /** Oldest first. */
+  getZulipCommandBots(): Promise<ZulipCommandBot[]>;
+  /** Resolves to the new row, `undefined` when the bot was listed already. */
+  addZulipCommandBot(userId: number, createdBy: string): Promise<ZulipCommandBot | undefined>;
+  /** Resolves to whether the bot was listed. */
+  removeZulipCommandBot(userId: number): Promise<boolean>;
 }

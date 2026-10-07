@@ -8,9 +8,11 @@ import {
   shorten,
   shortenCodePoints,
 } from 'src/format';
+import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
-import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { IZulipInterface, ZulipAccount, ZulipReceivedMessage, ZulipUser } from 'src/interfaces/zulip.interface';
 import { topicKey } from 'src/mirror/names';
+import { ZulipCommandBot } from 'src/schema';
 import { ChatService, formatEmoteSyncReport } from 'src/services/chat.service';
 import { GithubService } from 'src/services/github.service';
 import { MirrorActor, MirrorLinkReply, MirrorLinkService } from 'src/services/mirror-link.service';
@@ -28,7 +30,7 @@ import {
   sameRepository,
   toConversationKey,
 } from 'src/services/zulip-expander.service';
-import { ZulipService, isBotSender } from 'src/services/zulip.service';
+import { ZulipService, isBotSender, isZulipBot } from 'src/services/zulip.service';
 import { Arguments, ParseResult, parseCommand, splitArguments, tokenize } from 'src/zulip-command-parser';
 
 const SIMILAR_LOOKBACK = 10;
@@ -64,6 +66,11 @@ const MAX_LISTED_REPOSITORIES = 30;
 
 const EXPANDER_GROUP = 'expander-group';
 
+const COMMAND_BOTS = 'command-bots';
+
+/** `@**Name**` or the silent `@_**Name**`, with Zulip's `|user_id` suffix when the name is not enough. */
+const USER_MENTION = /^@_?\*\*(.+?)(?:\|(\d+))?\*\*$/;
+
 const REPOSITORY_FORMS = `\`owner/repo\` on GitHub or \`${Constants.Gitlab.Host}/namespace/project\`, or \`owner/*\` or \`${Constants.Gitlab.Host}/namespace/*\` for every repository of that owner or group, kept up to date`;
 
 const isWellFormed = (entry: string) => {
@@ -85,6 +92,23 @@ const toRepositoryName = (given: string) =>
 /** Who made a row, for its `createdBy`. */
 const describeZulipSender = (message: ZulipReceivedMessage) =>
   `${message.senderFullName} on Zulip (user ${message.senderId})`;
+
+/** The user a mention with its ID, or a bare ID, names; anything else is a name or an email to look up. */
+const toUserId = (given: string) => {
+  const id = USER_MENTION.exec(given)?.[2] ?? (/^\d+$/.test(given) ? given : undefined);
+  return id === undefined ? undefined : Number(id);
+};
+
+const findUsers = (users: ZulipAccount[], given: string) => {
+  const userId = toUserId(given);
+  if (userId !== undefined) {
+    return users.filter((user) => user.userId === userId);
+  }
+  const name = (USER_MENTION.exec(given)?.[1] ?? given).toLowerCase();
+  return users.filter((user) => user.email.toLowerCase() === name || user.fullName.toLowerCase() === name);
+};
+
+const describeUser = ({ userId, fullName }: ZulipUser) => `${code(fullName)} (user ${userId})`;
 
 const countRepositories = (count: number) => `${count} ${count === 1 ? 'repository' : 'repositories'}`;
 
@@ -135,7 +159,7 @@ const HELP_FINE_PRINT = spoiler('How it works', [
   '- Arguments are positional or `key=value`; quote a value with spaces: `text="two words"`.',
   '- Every reply is posted here, in this topic, for everyone in the stream to see.',
   '- Scheduled messages, RSS feeds and `expanders` act on this stream alone; expander groups are shared by every stream.',
-  '- The team tools are taken in the Immich team streams only, the `mirror-*` commands from organization administrators and owners only.',
+  '- The team tools are taken in the Immich team streams only, the `mirror-*` and `command-bots` commands from organization administrators and owners only.',
 ]);
 
 const DIRECT_MESSAGE_HELP = [
@@ -214,6 +238,7 @@ export class ZulipCommandService {
   private logger = new Logger(ZulipCommandService.name);
   private running = new Set<string>();
   private warnedNoName = false;
+  private listedBots = new Map<number, ZulipCommandBot>();
 
   private commands: Record<string, Command> = {
     help: {
@@ -437,11 +462,28 @@ export class ZulipCommandService {
       options: ['text'],
       run: (context) => this.similar(context),
     },
+    'command-bots': {
+      usage: 'command-bots <add|remove> <bot> | list',
+      description:
+        "Choose the other bots whose commands I take, in every stream, with their role checked as anyone's; every other bot's are ignored, and people's are always taken. A bot is named by its mention, its email, its name or its user ID.",
+      subcommands: {
+        'add <bot>': 'take the commands of that bot',
+        'remove <bot>': 'stop taking the commands of that bot',
+        list: 'list the bots whose commands I take',
+      },
+      example: 'command-bots add Claude',
+      listing: { section: ZulipHelpSection.Bots, summary: 'choose the other bots whose commands I take' },
+      positionals: Number.POSITIVE_INFINITY,
+      options: [],
+      administrators: 'choose the bots whose commands I take',
+      run: (context) => this.commandBots(context),
+    },
   };
 
   constructor(
     @Inject(IZulipInterface) private zulip: IZulipInterface,
     @Inject(IGitlabInterface) private gitlab: IGitlabInterface,
+    @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     private zulipService: ZulipService,
     private chatService: ChatService,
     private githubService: GithubService,
@@ -453,23 +495,31 @@ export class ZulipCommandService {
   ) {}
 
   async init() {
+    await this.loadCommandBots();
     this.zulipService.onMessage((message) => this.onZulipMessage(message), { withBots: true });
+  }
+
+  private async loadCommandBots() {
+    const bots = await this.database.getZulipCommandBots();
+    this.listedBots = new Map(bots.map((bot) => [bot.userId, bot]));
   }
 
   /**
    * Stream membership is the authorisation, so a command outside the team streams is not run; the mirror commands,
-   * whose stream is usually not a team one, check the sender's role instead. Other bots get the commands that mention
-   * the bot, and nothing in a direct message.
+   * whose stream is usually not a team one, check the sender's role instead. Another bot's commands are taken only
+   * once an administrator has listed it with `command-bots`, and never in a direct message.
    */
   async onZulipMessage(message: ZulipReceivedMessage) {
     const { streamId } = message;
+    const bot = isZulipBot(message.senderEmail);
     if (message.type === 'private') {
-      if (!isBotSender(message)) {
+      if (!bot) {
         await this.onDirectMessage(message);
       }
       return;
     }
-    if (streamId === undefined) {
+    // Zulip's Notification Bot starts its notices with a mention of whoever acted, this bot included.
+    if (streamId === undefined || (bot && !this.listedBots.has(message.senderId))) {
       return;
     }
     const botName = this.zulipService.ownUser?.fullName;
@@ -1247,6 +1297,99 @@ export class ZulipCommandService {
     return groups.length === 0
       ? `There is no expander group ${code(name)}; ${code('expander-group create <group> <repository>…')} creates one.`
       : `There is no expander group ${code(name)}; the groups are ${groups.map((group) => code(group.name)).join(', ')}.`;
+  }
+
+  private async commandBots({ message, args }: CommandContext) {
+    const [action, ...rest] = args;
+    // The tokenizer splits a mention of a name with spaces, `@**Claude Code**`, in two.
+    const given = rest.join(' ');
+    switch (action?.toLowerCase()) {
+      case 'list': {
+        if (rest.length > 0) {
+          break;
+        }
+        return this.listCommandBots();
+      }
+      case 'add': {
+        if (!given) {
+          break;
+        }
+        return this.underLock(COMMAND_BOTS, () => this.addCommandBot(message, given));
+      }
+      case 'remove': {
+        if (!given) {
+          break;
+        }
+        return this.underLock(COMMAND_BOTS, () => this.removeCommandBot(given));
+      }
+    }
+    return this.usage(COMMAND_BOTS);
+  }
+
+  /** The one user `given` names, or the reply saying why there is none. */
+  private async findUser(given: string): Promise<ZulipAccount | string> {
+    const found = findUsers(await this.zulip.getUsers(), given);
+    if (found.length === 0) {
+      return `There is no user ${code(shorten(given, ECHO_LENGTH))} in this organization; Zulip's own bots, such as the Notification Bot, are not in it and cannot be added.`;
+    }
+    if (found.length > 1) {
+      return [
+        `${code(shorten(given, ECHO_LENGTH))} names several users; name the bot by its user ID:`,
+        ...found.map((user) => `- ${describeUser(user)}`),
+      ].join('\n');
+    }
+    return found[0];
+  }
+
+  private async addCommandBot(message: StreamMessage, given: string) {
+    const user = await this.findUser(given);
+    if (typeof user === 'string') {
+      return user;
+    }
+    if (user.userId === this.zulipService.ownUser?.userId) {
+      return `${describeUser(user)} is me: my own messages are never commands.`;
+    }
+    if (!isZulipBot(user.email)) {
+      return `${describeUser(user)} is a person, not a bot: people's commands are always taken; only bots are added.`;
+    }
+    const added = await this.database.addZulipCommandBot(user.userId, describeZulipSender(message));
+    if (!added) {
+      // The row can predate the cache: an insert whose answer was lost, or one made by hand.
+      await this.loadCommandBots();
+      return `Nothing changed: I already take the commands of ${describeUser(user)}.`;
+    }
+    this.listedBots.set(added.userId, added);
+    return `I now take the commands of ${describeUser(user)}, with its role checked as anyone's.`;
+  }
+
+  /** A bot named by its ID needs no lookup, so it can be removed while Zulip cannot list the users, or no longer lists it. */
+  private async removeCommandBot(given: string) {
+    const bot = toUserId(given) ?? (await this.findUser(given));
+    if (typeof bot === 'string') {
+      return bot;
+    }
+    const [userId, name] = typeof bot === 'number' ? [bot, `user ${bot}`] : [bot.userId, describeUser(bot)];
+    const removed = await this.database.removeZulipCommandBot(userId);
+    this.listedBots.delete(userId);
+    return removed
+      ? `I no longer take the commands of ${name}.`
+      : `Nothing changed: I did not take the commands of ${name}; ${code('command-bots list')} lists the bots I do.`;
+  }
+
+  private async listCommandBots() {
+    const bots = [...this.listedBots.values()];
+    if (bots.length === 0) {
+      return `I take the commands of no other bot; ${code('command-bots add <bot>')} adds one.`;
+    }
+    const users = await this.zulip.getUsers().catch(() => []);
+    const named = new Map(users.map((user) => [user.userId, user]));
+    return [
+      'I take the commands of these bots:',
+      ...bots.map(({ userId, createdBy, createdAt }) => {
+        const user = named.get(userId);
+        return `- ${user ? describeUser(user) : `user ${userId}`}, added by ${code(createdBy)} on ${createdAt.toISOString().slice(0, 10)}`;
+      }),
+    ].join('\n');
   }
 
   private async similar({ message, args, options }: CommandContext) {

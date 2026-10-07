@@ -43,6 +43,7 @@ import {
   UpdateRSSFeed,
   UpdateScheduledMessage,
   UpdateZulipExpanderGroup,
+  ZulipCommandBot,
   ZulipDmExpander,
   ZulipDmExpanderDefault,
   ZulipEmote,
@@ -733,5 +734,27 @@ export class DatabaseRepository implements IDatabaseRepository {
 
   async removePullRequestExpansions(before: Date): Promise<void> {
     await this.db.deleteFrom('pull_request_expansion').where('createdAt', '<', before).execute();
+  }
+
+  getZulipCommandBots(): Promise<ZulipCommandBot[]> {
+    return this.db.selectFrom('zulip_command_bot').selectAll().orderBy('createdAt').orderBy('userId').execute();
+  }
+
+  addZulipCommandBot(userId: number, createdBy: string): Promise<ZulipCommandBot | undefined> {
+    return this.db
+      .insertInto('zulip_command_bot')
+      .values({ userId, createdBy })
+      .onConflict((oc) => oc.column('userId').doNothing())
+      .returningAll()
+      .executeTakeFirst();
+  }
+
+  async removeZulipCommandBot(userId: number): Promise<boolean> {
+    const removed = await this.db
+      .deleteFrom('zulip_command_bot')
+      .where('userId', '=', userId)
+      .returning('userId')
+      .executeTakeFirst();
+    return removed !== undefined;
   }
 }

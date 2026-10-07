@@ -100,6 +100,7 @@ describe('ZulipRepository', () => {
       { method: 'getSubscriptions', call: () => sut.getSubscriptions() },
       { method: 'getOwnUser', call: () => sut.getOwnUser() },
       { method: 'getUser', call: () => sut.getUser(12) },
+      { method: 'getUsers', call: () => sut.getUsers() },
       { method: 'getStream', call: () => sut.getStream(120) },
       { method: 'sendDirectMessage', call: () => sut.sendDirectMessage([12], 'hi') },
       { method: 'getMessages', call: () => sut.getMessages({ stream: 107, topic: 'deploy', numBefore: 10 }) },
@@ -447,6 +448,33 @@ describe('ZulipRepository', () => {
       fetchMock.mockResolvedValue(json({ result: 'success', msg: '', user: { user_id: 12, full_name: 'Alex' } }));
 
       await expect(sut.getUser(12)).rejects.toThrow('Zulip returned no role for user 12');
+    });
+  });
+
+  describe('getUsers', () => {
+    beforeEach(async () => {
+      await sut.init(config);
+    });
+
+    it('should list the users of the organization with their API email', async () => {
+      fetchMock.mockResolvedValue(
+        json({
+          result: 'success',
+          msg: '',
+          members: [
+            { user_id: 12, full_name: 'Alex', email: 'user12@zulip.example.com', is_bot: false, role: 200 },
+            { user_id: 30, full_name: 'Claude', email: 'claude-bot@zulip.example.com', is_bot: true, role: 400 },
+            { full_name: 'Nobody', email: 'nobody@zulip.example.com', is_bot: false },
+          ],
+        }),
+      );
+
+      await expect(sut.getUsers()).resolves.toEqual([
+        { userId: 12, fullName: 'Alex', email: 'user12@zulip.example.com' },
+        { userId: 30, fullName: 'Claude', email: 'claude-bot@zulip.example.com' },
+      ]);
+      expect(request(0).method).toBe('GET');
+      expect(request(0).url).toBe('https://zulip.example.com/api/v1/users');
     });
   });
 

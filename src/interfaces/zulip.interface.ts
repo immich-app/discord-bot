@@ -46,6 +46,9 @@ export type ZulipUser = { userId: number; fullName: string };
 /** Zulip's roles: 100 owner, 200 administrator, 300 moderator, 400 member, 600 guest. */
 export type ZulipUserDetails = ZulipUser & { role: number };
 
+/** `email` is the API email: a bot's real one, a person's possibly the placeholder the realm shows in its place. */
+export type ZulipAccount = ZulipUser & { email: string };
+
 export type ZulipStream = { streamId: number; name: string; inviteOnly: boolean };
 
 export type ZulipMessagesQuery = { stream: number; topic: string; numBefore: number };
@@ -156,6 +159,8 @@ export interface IZulipInterface {
   getSubscriptions(): Promise<ZulipSubscription[]>;
   getOwnUser(): Promise<ZulipUser>;
   getUser(userId: number): Promise<ZulipUserDetails>;
+  /** Every user of the organization, deactivated ones and bots included; never Zulip's system bots, cross-realm bots of Zulip's internal realm. */
+  getUsers(): Promise<ZulipAccount[]>;
   /** Rejects when the stream does not exist or the bot cannot see it. */
   getStream(streamId: number): Promise<ZulipStream>;
   getMessages(query: ZulipMessagesQuery): Promise<ZulipReceivedMessage[]>;
