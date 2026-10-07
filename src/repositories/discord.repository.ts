@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import {
+  APIMessage,
   ChannelType,
   DiscordAPIError,
   FetchMessagesOptions,
@@ -12,6 +13,7 @@ import {
   Partials,
   PermissionsString,
   RESTJSONErrorCodes,
+  RESTPatchAPIChannelMessageJSONBody,
   Routes,
   TextBasedChannel,
   ThreadAutoArchiveDuration,
@@ -673,6 +675,27 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       if (hasCode(error, RESTJSONErrorCodes.UnknownMessage)) {
         return undefined;
       }
+      throw toMirrorError(error);
+    }
+  }
+
+  async getBotMessageContent(channelId: string, messageId: string) {
+    try {
+      const message = (await bot.rest.get(Routes.channelMessage(channelId, messageId))) as APIMessage;
+      return message.content;
+    } catch (error) {
+      if (hasCode(error, RESTJSONErrorCodes.UnknownMessage)) {
+        return undefined;
+      }
+      throw toMirrorError(error);
+    }
+  }
+
+  async editBotMessage(channelId: string, messageId: string, content: string) {
+    const body: RESTPatchAPIChannelMessageJSONBody = { content, allowed_mentions: { parse: [] } };
+    try {
+      await bot.rest.patch(Routes.channelMessage(channelId, messageId), { body });
+    } catch (error) {
       throw toMirrorError(error);
     }
   }

@@ -1,5 +1,7 @@
 import { Logger } from '@nestjs/common';
+import { Constants } from 'src/constants';
 import { IDatabaseRepository, PullRequestExpansionWithCount } from 'src/interfaces/database.interface';
+import { DiscordMirrorError, IDiscordMirrorInterface } from 'src/interfaces/discord-mirror.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { ApprovalService, markPullRequestLines, PullRequestReviewEvent } from 'src/services/approval.service';
@@ -12,6 +14,15 @@ const newDatabaseMock = (): Mocked<
   createPullRequestExpansions: vitest.fn(),
   getPullRequestExpansions: vitest.fn().mockResolvedValue([]),
   removePullRequestExpansions: vitest.fn(),
+});
+
+const newDiscordMock = (): Mocked<
+  Pick<IDiscordMirrorInterface, 'isReady' | 'getEmotes' | 'getBotMessageContent' | 'editBotMessage'>
+> => ({
+  isReady: vitest.fn().mockReturnValue(true),
+  getEmotes: vitest.fn(),
+  getBotMessageContent: vitest.fn(),
+  editBotMessage: vitest.fn(),
 });
 
 const newZulipMock = (): Mocked<IZulipInterface> => ({
@@ -104,6 +115,21 @@ const zulipMessage = (id: number, content: string): ZulipReceivedMessage => ({
 
 const APPROVED2 = { id: '77', name: 'approved2', deactivated: false };
 
+const THREAD = '200000000000000001';
+const EMOTE = '1300000000000000077';
+
+const discordExpansion = (messageId: string, overrides: Partial<PullRequestExpansionWithCount> = {}) =>
+  expansion(messageId, { service: 'discord', channelId: THREAD, ...overrides });
+
+const emote = (overrides: { id?: string; name?: string | null; identifier?: string; animated?: boolean } = {}) => ({
+  id: EMOTE,
+  identifier: `APPROVED:${EMOTE}`,
+  name: 'APPROVED',
+  url: `https://cdn.discordapp.com/emojis/${EMOTE}.png`,
+  animated: false,
+  ...overrides,
+});
+
 describe('markPullRequestLines', () => {
   it('should leave a line shaped like the pull request inside a code snippet as written, and mark the real one', () => {
     const content = ['```ts', pullRequestLine(1234), '```', pullRequestLine(1234)].join('\n');
@@ -161,7 +187,9 @@ describe(ApprovalService.name, () => {
   let sut: ApprovalService;
   let databaseMock: ReturnType<typeof newDatabaseMock>;
   let zulipMock: Mocked<IZulipInterface>;
+  let discordMock: ReturnType<typeof newDiscordMock>;
   let messages: Map<number, string>;
+  let discordMessages: Map<string, string>;
 
   const approve = async (event = reviewEvent()) => {
     sut.handleReview(event);
@@ -180,7 +208,21 @@ describe(ApprovalService.name, () => {
       return Promise.resolve();
     });
     zulipMock.listEmoji.mockResolvedValue([{ id: '76', name: 'approved', deactivated: false }, APPROVED2]);
-    sut = new ApprovalService(databaseMock as unknown as IDatabaseRepository, zulipMock);
+    discordMock = newDiscordMock();
+    discordMessages = new Map();
+    discordMock.getBotMessageContent.mockImplementation((channelId, messageId) =>
+      Promise.resolve(discordMessages.get(`${channelId}/${messageId}`)),
+    );
+    discordMock.editBotMessage.mockImplementation((channelId, messageId, content) => {
+      discordMessages.set(`${channelId}/${messageId}`, content);
+      return Promise.resolve();
+    });
+    discordMock.getEmotes.mockResolvedValue([emote({ id: '1300000000000000076', name: 'approved' }), emote()]);
+    sut = new ApprovalService(
+      databaseMock as unknown as IDatabaseRepository,
+      zulipMock,
+      discordMock as unknown as IDiscordMirrorInterface,
+    );
     for (const level of ['debug', 'warn', 'error'] as const) {
       vitest.spyOn(Logger.prototype, level).mockImplementation(() => {});
     }
@@ -495,6 +537,224 @@ describe(ApprovalService.name, () => {
       await approve();
 
       expect(zulipMock.listEmoji).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('on Discord', () => {
+    it.each([
+      { what: 'a static emote', emote: emote(), mark: `<:APPROVED:${EMOTE}>` },
+      {
+        what: 'an animated emote',
+        emote: emote({ identifier: `a:APPROVED:${EMOTE}`, animated: true }),
+        mark: `<a:APPROVED:${EMOTE}>`,
+      },
+    ])('should mark the line of the pull request in each reply in its channel with $what', async ({ emote, mark }) => {
+      const other = [issueLine, nitterLine].join('\n');
+      discordMessages.set(`${THREAD}/300000000000000001`, `${pullRequestLine(1234)}\n${other}`);
+      discordMessages.set(`100000000000000001/300000000000000002`, `${other}\n${pullRequestLine(1234)}`);
+      discordMock.getEmotes.mockResolvedValue([emote]);
+      databaseMock.getPullRequestExpansions.mockResolvedValue([
+        discordExpansion('300000000000000001'),
+        expansion('901'),
+        discordExpansion('300000000000000002', { channelId: '100000000000000001' }),
+      ]);
+
+      await approve();
+
+      expect(discordMock.getEmotes).toHaveBeenCalledExactlyOnceWith(Constants.Discord.EmoteSyncServer.id);
+      expect(discordMock.getBotMessageContent.mock.calls).toEqual([
+        [THREAD, '300000000000000001'],
+        ['100000000000000001', '300000000000000002'],
+      ]);
+      expect(discordMock.editBotMessage.mock.calls).toEqual([
+        [THREAD, '300000000000000001', `${mark} ${pullRequestLine(1234)}\n${other}`],
+        ['100000000000000001', '300000000000000002', `${other}\n${mark} ${pullRequestLine(1234)}`],
+      ]);
+      expect(Logger.prototype.error).not.toHaveBeenCalled();
+    });
+
+    it('should mark with the emote named exactly APPROVED, not one only differing in case', async () => {
+      discordMessages.set(`${THREAD}/300000000000000001`, pullRequestLine(1234));
+      discordMock.getEmotes.mockResolvedValue([emote({ id: '1300000000000000076', name: 'Approved' }), emote()]);
+      databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+      await approve();
+
+      expect(discordMock.getEmotes).toHaveBeenCalledExactlyOnceWith('979116623879368755');
+      expect(discordMessages.get(`${THREAD}/300000000000000001`)).toBe(`<:APPROVED:${EMOTE}> ${pullRequestLine(1234)}`);
+      expect(Logger.prototype.warn).not.toHaveBeenCalled();
+    });
+
+    it('should not edit a reply whose line is marked already', async () => {
+      discordMessages.set(`${THREAD}/300000000000000001`, `<:APPROVED:${EMOTE}> ${pullRequestLine(1234)}`);
+      databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+      await approve();
+
+      expect(discordMock.editBotMessage).not.toHaveBeenCalled();
+    });
+
+    it('should mark both pull requests of one reply when both are approved', async () => {
+      discordMessages.set(`${THREAD}/300000000000000001`, [pullRequestLine(1234), pullRequestLine(5678)].join('\n'));
+      databaseMock.getPullRequestExpansions
+        .mockResolvedValueOnce([discordExpansion('300000000000000001')])
+        .mockResolvedValueOnce([discordExpansion('300000000000000001', { number: 5678 })]);
+
+      sut.handleReview(reviewEvent());
+      await approve(reviewEvent({ number: 5678 }));
+
+      expect(discordMessages.get(`${THREAD}/300000000000000001`)).toBe(
+        [`<:APPROVED:${EMOTE}> ${pullRequestLine(1234)}`, `<:APPROVED:${EMOTE}> ${pullRequestLine(5678)}`].join('\n'),
+      );
+    });
+
+    it.each([
+      { outcome: 'leave', length: 2001, edited: false },
+      { outcome: 'edit', length: 2000, edited: true },
+    ])('should $outcome a reply that would be $length characters long once marked', async ({ length, edited }) => {
+      const mark = `<:APPROVED:${EMOTE}> `;
+      const filler = 'a'.repeat(length - pullRequestLine(1234).length - 1 - mark.length);
+      discordMessages.set(`${THREAD}/300000000000000001`, `${pullRequestLine(1234)}\n${filler}`);
+      databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+      await approve();
+
+      expect(discordMock.editBotMessage.mock.calls.map(([, , content]) => content.length)).toEqual(
+        edited ? [length] : [],
+      );
+      expect(Logger.prototype.error).not.toHaveBeenCalled();
+    });
+
+    it('should only note a reply that is gone', async () => {
+      databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+      await approve();
+
+      expect(discordMock.editBotMessage).not.toHaveBeenCalled();
+      expect(Logger.prototype.debug).toHaveBeenCalledWith(
+        `Discord message 300000000000000001 in channel ${THREAD} is gone, so immich-app/immich#1234 is not marked there`,
+      );
+      expect(Logger.prototype.error).not.toHaveBeenCalled();
+    });
+
+    it.each(['unknown-message', 'unknown-channel', 'archived', 'locked'] as const)(
+      'should only note a reply that cannot be marked (%s)',
+      async (kind) => {
+        discordMessages.set(`${THREAD}/300000000000000001`, pullRequestLine(1234));
+        discordMock.editBotMessage.mockRejectedValue(new DiscordMirrorError(kind));
+        databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+        await approve();
+
+        expect(Logger.prototype.debug).toHaveBeenCalledWith(
+          `Discord message 300000000000000001 in channel ${THREAD} cannot be marked (${kind}), so immich-app/immich#1234 is not marked there`,
+        );
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['forbidden', 'other'] as const)(
+      'should log a reply that fails otherwise (%s) as an error and still mark the next one',
+      async (kind) => {
+        const failure = new DiscordMirrorError(kind);
+        discordMessages.set(`${THREAD}/300000000000000001`, pullRequestLine(1234));
+        discordMessages.set(`${THREAD}/300000000000000002`, pullRequestLine(1234));
+        discordMock.getBotMessageContent.mockRejectedValueOnce(failure);
+        databaseMock.getPullRequestExpansions.mockResolvedValue([
+          discordExpansion('300000000000000001'),
+          discordExpansion('300000000000000002'),
+        ]);
+
+        await approve();
+
+        expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+          `Could not mark immich-app/immich#1234 as approved in Discord message 300000000000000001 in channel ${THREAD}`,
+          failure,
+        );
+        expect(discordMessages.get(`${THREAD}/300000000000000002`)).toBe(
+          `<:APPROVED:${EMOTE}> ${pullRequestLine(1234)}`,
+        );
+      },
+    );
+
+    it.each([
+      { what: 'the Immich server has no emote named APPROVED', emotes: [emote({ name: 'approved' })] },
+      { what: 'the bot cannot see the Immich server', emotes: undefined },
+    ])('should mark nothing on Discord, with a warning, when $what', async ({ emotes }) => {
+      discordMessages.set(`${THREAD}/300000000000000001`, pullRequestLine(1234));
+      discordMock.getEmotes.mockResolvedValue(emotes);
+      databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+      await approve();
+
+      expect(discordMock.getBotMessageContent).not.toHaveBeenCalled();
+      expect(Logger.prototype.warn).toHaveBeenCalledExactlyOnceWith(
+        'The Immich Discord server has no emote APPROVED, so approvals are not marked on Discord',
+      );
+    });
+
+    it('should ask Discord nothing while it is not ready', async () => {
+      discordMock.isReady.mockReturnValue(false);
+      databaseMock.getPullRequestExpansions.mockResolvedValue([discordExpansion('300000000000000001')]);
+
+      await approve();
+
+      expect(discordMock.getEmotes).not.toHaveBeenCalled();
+      expect(discordMock.getBotMessageContent).not.toHaveBeenCalled();
+    });
+
+    it('should ask Discord nothing when no Discord reply names the pull request', async () => {
+      databaseMock.getPullRequestExpansions.mockResolvedValue([expansion('901')]);
+
+      await approve();
+
+      expect(discordMock.getEmotes).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('on both platforms', () => {
+    beforeEach(() => {
+      messages.set(901, pullRequestLine(1234));
+      discordMessages.set(`${THREAD}/300000000000000001`, pullRequestLine(1234));
+      databaseMock.getPullRequestExpansions.mockResolvedValue([
+        expansion('901'),
+        discordExpansion('300000000000000001'),
+      ]);
+    });
+
+    it('should mark the Discord replies when the Zulip emoji cannot be listed', async () => {
+      zulipMock.listEmoji.mockRejectedValue(new Error('fetch failed'));
+
+      await approve();
+
+      expect(discordMessages.get(`${THREAD}/300000000000000001`)).toBe(`<:APPROVED:${EMOTE}> ${pullRequestLine(1234)}`);
+    });
+
+    it('should mark the Zulip replies when the Discord emote cannot be found', async () => {
+      const failure = new Error('gateway down');
+      discordMock.getEmotes.mockRejectedValue(failure);
+
+      await approve();
+
+      expect(messages.get(901)).toBe(`:approved2: ${pullRequestLine(1234)}`);
+      expect(discordMock.getBotMessageContent).not.toHaveBeenCalled();
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        'Could not find the Discord emote of the approval, so it is not marked on Discord',
+        failure,
+      );
+    });
+
+    it('should mark the Zulip replies when a Discord edit fails', async () => {
+      const failure = new DiscordMirrorError('other');
+      discordMock.editBotMessage.mockRejectedValue(failure);
+
+      await approve();
+
+      expect(messages.get(901)).toBe(`:approved2: ${pullRequestLine(1234)}`);
+      expect(Logger.prototype.error).toHaveBeenCalledExactlyOnceWith(
+        `Could not mark immich-app/immich#1234 as approved in Discord message 300000000000000001 in channel ${THREAD}`,
+        failure,
+      );
     });
   });
 

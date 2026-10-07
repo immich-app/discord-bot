@@ -322,6 +322,8 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
     getMirrorReactions: vitest.fn().mockResolvedValue([]),
     addMirrorReaction: vitest.fn().mockResolvedValue(undefined),
     removeMirrorReaction: vitest.fn().mockResolvedValue(undefined),
+    getBotMessageContent: vitest.fn(),
+    editBotMessage: vitest.fn(),
   };
 };
 

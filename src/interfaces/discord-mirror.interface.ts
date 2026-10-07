@@ -160,4 +160,8 @@ export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmo
   fetchMirrorMessagesBefore(channelId: string, beforeId: string | undefined, limit: number): Promise<DiscordMirrorPage>;
   /** The oldest messages after `afterId`; `channelId` may be a thread. */
   fetchMirrorMessagesAfter(channelId: string, afterId: string, limit: number): Promise<DiscordMirrorForwardPage>;
+  /** Read afresh, never from the cache, which the bot's own edit leaves stale; `undefined` when there is none. */
+  getBotMessageContent(channelId: string, messageId: string): Promise<string | undefined>;
+  /** The content alone, as the bot and pinging nobody; the message keeps its flags. */
+  editBotMessage(channelId: string, messageId: string, content: string): Promise<void>;
 }
