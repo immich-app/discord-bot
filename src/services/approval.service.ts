@@ -1,10 +1,16 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
+import { formatEmoji } from 'discord.js';
 import { DateTime } from 'luxon';
 import { Constants } from 'src/constants';
-import { scanZulipFences, ZULIP_MAX_MESSAGE_LENGTH } from 'src/format';
+import { DISCORD_MAX_MESSAGE_LENGTH, scanZulipFences, ZULIP_MAX_MESSAGE_LENGTH } from 'src/format';
 import { IDatabaseRepository, PullRequestExpansionWithCount } from 'src/interfaces/database.interface';
+import {
+  DiscordMirrorError,
+  DiscordMirrorErrorKind,
+  IDiscordMirrorInterface,
+} from 'src/interfaces/discord-mirror.interface';
 import { IZulipInterface, ZulipEmoji } from 'src/interfaces/zulip.interface';
 import { SerialQueue } from 'src/mirror/queue';
 import { isZulipMessageGone, isZulipRefusal, ZulipApiError } from 'src/repositories/zulip.client';
@@ -14,6 +20,14 @@ import { isPullRequestLine } from 'src/util';
 export type PullRequestReviewEvent = EmitterWebhookEvent<'pull_request_review'>['payload'];
 
 type ExpansionReply = Pick<NewPullRequestExpansion, 'service' | 'messageId' | 'channelId'>;
+
+/** A reply that is gone, or that Discord will not edit in its archived or locked thread, is left as it is: no thread is reopened. */
+const UNMARKABLE_DISCORD_REPLY = new Set<DiscordMirrorErrorKind>([
+  'unknown-message',
+  'unknown-channel',
+  'archived',
+  'locked',
+]);
 
 const toPullRequestUrl = ({ organization, repository, number }: PullRequestReference) =>
   `https://github.com/${organization}/${repository}/pull/${number}`;
@@ -43,6 +57,7 @@ export class ApprovalService {
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
     @Inject(IZulipInterface) private zulip: IZulipInterface,
+    @Inject(IDiscordMirrorInterface) private discord: IDiscordMirrorInterface,
   ) {}
 
   async track(reply: ExpansionReply, pullRequests: PullRequestReference[]) {
@@ -99,10 +114,9 @@ export class ApprovalService {
 
   private async markApproved(pullRequest: PullRequestReference, submittedAt: Date) {
     const expansions = await this.database.getPullRequestExpansions(pullRequest, submittedAt);
-    await this.markOnZulip(
-      expansions.filter(({ service }) => service === 'zulip'),
-      pullRequest,
-    );
+    const on = (platform: PullRequestExpansionWithCount['service']) =>
+      expansions.filter(({ service }) => service === platform);
+    await Promise.all([this.markOnZulip(on('zulip'), pullRequest), this.markOnDiscord(on('discord'), pullRequest)]);
   }
 
   private async markOnZulip(expansions: PullRequestExpansionWithCount[], pullRequest: PullRequestReference) {
@@ -197,5 +211,73 @@ export class ApprovalService {
         throw error;
       }
     }
+  }
+
+  private async markOnDiscord(expansions: PullRequestExpansionWithCount[], pullRequest: PullRequestReference) {
+    if (expansions.length === 0 || !this.discord.isReady()) {
+      return;
+    }
+
+    const mark = await this.getDiscordMark();
+    if (!mark) {
+      return;
+    }
+
+    const approval = { name: toPullRequestName(pullRequest), url: toPullRequestUrl(pullRequest), mark };
+    for (const expansion of expansions) {
+      const where = `Discord message ${expansion.messageId} in channel ${expansion.channelId}`;
+      try {
+        await this.markDiscordReply(expansion, where, approval);
+      } catch (error) {
+        if (error instanceof DiscordMirrorError && UNMARKABLE_DISCORD_REPLY.has(error.kind)) {
+          this.logger.debug(`${where} cannot be marked (${error.kind}), so ${approval.name} is not marked there`);
+          continue;
+        }
+
+        this.logger.error(`Could not mark ${approval.name} as approved in ${where}`, error);
+      }
+    }
+  }
+
+  private async getDiscordMark() {
+    try {
+      const emotes = await this.discord.getEmotes(Constants.Discord.EmoteSyncServer.id);
+      const emote = emotes?.find(({ name }) => name === Constants.Approvals.DiscordEmote);
+      if (!emote) {
+        this.logger.warn(
+          `The ${Constants.Discord.EmoteSyncServer.name} Discord server has no emote ${Constants.Approvals.DiscordEmote}, so approvals are not marked on Discord`,
+        );
+        return;
+      }
+
+      return formatEmoji({ id: emote.id, name: emote.name ?? undefined, animated: emote.animated });
+    } catch (error) {
+      this.logger.error('Could not find the Discord emote of the approval, so it is not marked on Discord', error);
+    }
+  }
+
+  private async markDiscordReply(
+    { channelId, messageId }: PullRequestExpansionWithCount,
+    where: string,
+    { name, url, mark }: { name: string; url: string; mark: string },
+  ) {
+    const content = await this.discord.getBotMessageContent(channelId!, messageId);
+    if (content === undefined) {
+      this.logger.debug(`${where} is gone, so ${name} is not marked there`);
+      return;
+    }
+
+    const marked = markPullRequestLines(content, url, mark);
+    if (marked === undefined) {
+      this.logger.debug(`${where} has no line of ${name} left to mark`);
+      return;
+    }
+
+    if (marked.length > DISCORD_MAX_MESSAGE_LENGTH) {
+      this.logger.debug(`Marking ${name} would make ${where} too long, so it is not marked`);
+      return;
+    }
+
+    await this.discord.editBotMessage(channelId!, messageId, marked);
   }
 }

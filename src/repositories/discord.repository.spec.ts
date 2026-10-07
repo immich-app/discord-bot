@@ -24,7 +24,7 @@ const bot = vitest.hoisted(() => ({
   user: null as { id: string; displayAvatarURL: (options: unknown) => string } | null,
   channels: { fetch: vitest.fn() },
   guilds: { cache: new Map<string, unknown>() },
-  rest: { put: vitest.fn(), delete: vitest.fn() },
+  rest: { get: vitest.fn(), patch: vitest.fn(), put: vitest.fn(), delete: vitest.fn() },
 }));
 
 const webhookClients = vitest.hoisted(() => new Map<string, object>());
@@ -707,6 +707,43 @@ describe(DiscordRepository.name, () => {
       await expect(sut.addMirrorReaction(target(), { id: null, name: '❤', animated: false })).rejects.toMatchObject({
         kind: 'unknown-emoji',
         code: 10_014,
+      });
+    });
+  });
+
+  describe('bot messages', () => {
+    it('should read the content through the REST API, never the cache', async () => {
+      bot.rest.get.mockResolvedValue({ id: '300000000000000001', content: '[Pull Request] Fix' });
+
+      await expect(sut.getBotMessageContent(threadId, '300000000000000001')).resolves.toBe('[Pull Request] Fix');
+      expect(bot.rest.get).toHaveBeenCalledExactlyOnceWith(`/channels/${threadId}/messages/300000000000000001`);
+      expect(bot.channels.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should find no content for a message that is gone, and map other errors', async () => {
+      bot.rest.get.mockRejectedValueOnce(apiError(10_008, 404));
+      await expect(sut.getBotMessageContent(threadId, '300000000000000001')).resolves.toBeUndefined();
+
+      bot.rest.get.mockRejectedValueOnce(apiError(50_001, 403));
+      await expect(sut.getBotMessageContent(threadId, '300000000000000001')).rejects.toMatchObject({
+        kind: 'forbidden',
+      });
+    });
+
+    it('should edit the content alone, pinging nobody', async () => {
+      await sut.editBotMessage(threadId, '300000000000000001', ':approved2: [Pull Request] Fix');
+
+      expect(bot.rest.patch).toHaveBeenCalledExactlyOnceWith(`/channels/${threadId}/messages/300000000000000001`, {
+        body: { content: ':approved2: [Pull Request] Fix', allowed_mentions: { parse: [] } },
+      });
+    });
+
+    it('should map an edit in an archived thread', async () => {
+      bot.rest.patch.mockRejectedValue(apiError(50_083));
+
+      await expect(sut.editBotMessage(threadId, '300000000000000001', 'content')).rejects.toMatchObject({
+        kind: 'archived',
+        code: 50_083,
       });
     });
   });

@@ -256,7 +256,8 @@ export const Constants = {
     } as Record<string, string>,
   },
   /** An approval marks the bot's expansion replies of the last `MaxAgeDays` that name the pull request. */
-  Approvals: { Emoji: 'approved2', MaxAgeDays: 30 },
+  /** `Emoji` is the Zulip realm emoji; `DiscordEmote` the Immich Discord server's emote. */
+  Approvals: { Emoji: 'approved2', DiscordEmote: 'APPROVED', MaxAgeDays: 30 },
   Mirror: {
     MaxFileBytes: 10 * 1024 * 1024,
     MaxUploadBytes: 25 * 1024 * 1024,

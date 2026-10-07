@@ -3,6 +3,7 @@ import { MessageFlags, ThreadChannel } from 'discord.js';
 import { ArgsOf, Discord, On, Once, RestArgsOf } from 'discordx';
 import _ from 'lodash';
 import { Constants } from 'src/constants';
+import { ApprovalService } from 'src/services/approval.service';
 import { ChatService } from 'src/services/chat.service';
 
 const shorten = (message: string | null) => {
@@ -18,7 +19,10 @@ const shorten = (message: string | null) => {
 export class DiscordEvents {
   private logger = new Logger(DiscordEvents.name);
 
-  constructor(private service: ChatService) {}
+  constructor(
+    private service: ChatService,
+    private approvals: ApprovalService,
+  ) {}
 
   @On.rest({ event: 'restDebug' })
   onDebug([message]: RestArgsOf<'restDebug'>) {
@@ -47,7 +51,7 @@ export class DiscordEvents {
 
     const isPrivileged = message.member?.roles.cache.has(Constants.Discord.Roles.Team) ?? false;
 
-    const [{ parts }, twitterLinks] = await Promise.all([
+    const [{ parts, pullRequests }, twitterLinks] = await Promise.all([
       this.service.handleGithubReferences(
         { content: message.content, channelParentId: message.channel.parentId },
         isPrivileged,
@@ -56,19 +60,28 @@ export class DiscordEvents {
       this.service.handleTaggingOfPullRequestThreads(message),
     ]);
 
-    if (parts.length !== 0) {
-      await message.reply({
-        content: parts.join('\n'),
-        flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
-      });
-    }
-
-    if (twitterLinks.length !== 0) {
-      await message.reply({
-        content: twitterLinks.join('\n'),
-        flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
-      });
-    }
+    // Neither reply waits on the other, so the GitHub reply or its tracking failing cannot cost the nitter reply.
+    await Promise.all([
+      parts.length === 0
+        ? undefined
+        : message
+            .reply({
+              content: parts.join('\n'),
+              flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
+            })
+            .then((reply) =>
+              this.approvals.track(
+                { service: 'discord', channelId: reply.channelId, messageId: reply.id },
+                pullRequests,
+              ),
+            ),
+      twitterLinks.length === 0
+        ? undefined
+        : message.reply({
+            content: twitterLinks.join('\n'),
+            flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
+          }),
+    ]);
   }
 
   @On({ event: 'messageUpdate' })
