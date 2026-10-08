@@ -2122,6 +2122,16 @@ describe('Bot test', () => {
         });
       });
 
+      it('should answer :oh-god-the-emails: with its image', async () => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':oh-god-the-emails:' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: 'https://zuclaude.exe.xyz/stickers/oh-god-the-emails.png',
+        });
+      });
+
       it('should answer :we-are-crying: with its image', async () => {
         await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':we-are-crying:' }));
 
