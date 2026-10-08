@@ -30,6 +30,12 @@ export enum GithubOrg {
   ImmichApp = 'immich-app',
 }
 
+export enum GithubItemKind {
+  PullRequest = 'pull_request',
+  Issue = 'issue',
+  Discussion = 'discussion',
+}
+
 /** The headings the Zulip help lists its commands under, in this order. */
 export enum ZulipHelpSection {
   Links = 'Issues and links',

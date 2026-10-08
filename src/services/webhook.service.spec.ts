@@ -3,7 +3,7 @@ import type { EmitterWebhookEvent } from '@octokit/webhooks';
 import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
 import { CommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import _ from 'lodash';
-import { Constants, ReleaseMessages } from 'src/constants';
+import { Constants, GithubItemKind, ReleaseMessages } from 'src/constants';
 import { DiscordCommands } from 'src/discord/commands';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
@@ -75,6 +75,8 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  upsertGithubItem: vitest.fn(),
+  removeGithubItem: vitest.fn(),
   getPullRequestsByNumber: vitest.fn().mockResolvedValue([]),
   getMirrorConversation: vitest.fn(),
   getMirrorConversationByDiscord: vitest.fn(),
@@ -246,6 +248,7 @@ const issue = {
   title: 'Bug: thumbnails missing',
   html_url: 'https://github.com/immich-app/immich/issues/42',
   body: 'Steps to reproduce: open the timeline.',
+  updated_at: '2026-01-02T00:00:00Z',
 };
 
 const discussion = {
@@ -253,6 +256,7 @@ const discussion = {
   title: 'Feature: nicer timeline',
   html_url: 'https://github.com/immich-app/immich/discussions/7',
   body: 'It would be nice if the timeline were nicer.',
+  updated_at: '2026-01-03T00:00:00Z',
 };
 
 const makeRelease = (overrides: Record<string, unknown> = {}) => ({
@@ -931,13 +935,18 @@ describe(WebhookService.name, () => {
           repository: 'grayjay',
           updatedAt: '2026-01-01T00:00:00Z',
         });
+        expect(databaseMock.upsertGithubItem).toHaveBeenCalledExactlyOnceWith({
+          organization: 'futo-org',
+          repository: 'grayjay',
+          number: 1234,
+          kind: GithubItemKind.PullRequest,
+          updatedAt: '2026-01-01T00:00:00Z',
+        });
         expect(sent()).toEqual({ discord: [], zulip: [] });
       },
     );
 
     it.each([
-      { name: 'issues', payload: { action: 'opened', issue } },
-      { name: 'discussion', payload: { action: 'created', discussion } },
       { name: 'release', payload: { action: 'published', release: makeRelease() } },
       { name: 'workflow_run', payload: { action: 'completed', workflow_run: workflowRun } },
     ] as const)(
@@ -946,6 +955,8 @@ describe(WebhookService.name, () => {
         await sut.onGithub(githubEvent(name, { ...payload, sender, repository: futoRepo }), 'github-slug');
 
         expect(databaseMock.upsertPullRequest).not.toHaveBeenCalled();
+        expect(databaseMock.upsertGithubItem).not.toHaveBeenCalled();
+        expect(databaseMock.removeGithubItem).not.toHaveBeenCalled();
         expect(githubMock.getCheckSuiteTriggerCommit).not.toHaveBeenCalled();
         expect(sent()).toEqual({ discord: [], zulip: [] });
       },
@@ -963,6 +974,7 @@ describe(WebhookService.name, () => {
       );
 
       expect(databaseMock.upsertPullRequest).not.toHaveBeenCalled();
+      expect(databaseMock.upsertGithubItem).not.toHaveBeenCalled();
       expect(sent()).toEqual({ discord: [], zulip: [] });
     });
 
@@ -983,6 +995,111 @@ describe(WebhookService.name, () => {
         organization: 'immich-app',
         repository: 'immich',
         updatedAt: '2026-01-01T00:00:00Z',
+      });
+      expect(databaseMock.upsertGithubItem).toHaveBeenCalledExactlyOnceWith({
+        organization: 'immich-app',
+        repository: 'immich',
+        number: 1234,
+        kind: GithubItemKind.PullRequest,
+        updatedAt: '2026-01-01T00:00:00Z',
+      });
+    });
+
+    describe('items', () => {
+      const comment = { id: 1, body: 'Same here.' };
+      const pullRequestIssue = {
+        ...issue,
+        pull_request: { url: 'https://api.github.com/repos/immich-app/immich-private/pulls/42' },
+      };
+      const issueItem = { organization: 'immich-app', repository: 'immich-private', number: 42 };
+
+      it.each([immichRepo, immichPrivateRepo, futoRepo])('should record an issue of $full_name', async (repository) => {
+        await sut.onGithub(githubEvent('issues', { action: 'opened', sender, repository, issue }), 'github-slug');
+
+        expect(databaseMock.upsertGithubItem).toHaveBeenCalledExactlyOnceWith({
+          organization: repository.owner.login,
+          repository: repository.name,
+          number: 42,
+          kind: GithubItemKind.Issue,
+          updatedAt: '2026-01-02T00:00:00Z',
+        });
+      });
+
+      it.each([
+        { name: 'issues', payload: { action: 'labeled', issue }, kind: GithubItemKind.Issue },
+        { name: 'issue_comment', payload: { action: 'created', issue, comment }, kind: GithubItemKind.Issue },
+        {
+          name: 'issue_comment',
+          payload: { action: 'created', issue: pullRequestIssue, comment },
+          kind: GithubItemKind.PullRequest,
+        },
+        { name: 'issue_comment', payload: { action: 'deleted', issue, comment }, kind: GithubItemKind.Issue },
+      ] as const)('should record a $kind from a $name $payload.action event', async ({ name, payload, kind }) => {
+        await sut.onGithub(githubEvent(name, { ...payload, sender, repository: immichPrivateRepo }), 'github-slug');
+
+        expect(databaseMock.upsertGithubItem).toHaveBeenCalledExactlyOnceWith({
+          ...issueItem,
+          kind,
+          updatedAt: '2026-01-02T00:00:00Z',
+        });
+        expect(databaseMock.removeGithubItem).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { name: 'discussion', payload: { action: 'category_changed', discussion } },
+        { name: 'discussion_comment', payload: { action: 'created', discussion, comment } },
+        { name: 'discussion_comment', payload: { action: 'deleted', discussion, comment } },
+      ] as const)('should record a discussion from a $name $payload.action event', async ({ name, payload }) => {
+        await sut.onGithub(githubEvent(name, { ...payload, sender, repository: immichPrivateRepo }), 'github-slug');
+
+        expect(databaseMock.upsertGithubItem).toHaveBeenCalledExactlyOnceWith({
+          organization: 'immich-app',
+          repository: 'immich-private',
+          number: 7,
+          kind: GithubItemKind.Discussion,
+          updatedAt: '2026-01-03T00:00:00Z',
+        });
+        expect(databaseMock.removeGithubItem).not.toHaveBeenCalled();
+      });
+
+      const removedIssue = { number: 42, kind: GithubItemKind.Issue, updatedAt: '2026-01-02T00:00:00Z' };
+      const removedDiscussion = { number: 7, kind: GithubItemKind.Discussion, updatedAt: '2026-01-03T00:00:00Z' };
+
+      it.each([
+        { name: 'issues', payload: { action: 'deleted', issue }, item: removedIssue },
+        { name: 'issues', payload: { action: 'transferred', issue }, item: removedIssue },
+        { name: 'discussion', payload: { action: 'deleted', discussion }, item: removedDiscussion },
+        { name: 'discussion', payload: { action: 'transferred', discussion }, item: removedDiscussion },
+      ] as const)('should remove the item of a $name $payload.action event', async ({ name, payload, item }) => {
+        await sut.onGithub(githubEvent(name, { ...payload, sender, repository: immichPrivateRepo }), 'github-slug');
+
+        expect(databaseMock.removeGithubItem).toHaveBeenCalledExactlyOnceWith({
+          organization: 'immich-app',
+          repository: 'immich-private',
+          ...item,
+        });
+        expect(databaseMock.upsertGithubItem).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { name: 'issues', payload: { action: 'opened', issue } },
+        { name: 'discussion', payload: { action: 'created', discussion } },
+      ] as const)("should record another allowed organization's $name and post nothing", async ({ name, payload }) => {
+        await sut.onGithub(githubEvent(name, { ...payload, sender, repository: futoRepo }), 'github-slug');
+
+        expect(databaseMock.upsertGithubItem).toHaveBeenCalledOnce();
+        expect(sent()).toEqual({ discord: [], zulip: [] });
+      });
+
+      it('should record an issue of immich-app before posting it', async () => {
+        await sut.onGithub(
+          githubEvent('issues', { action: 'opened', sender, repository: immichRepo, issue }),
+          'github-slug',
+        );
+
+        expect(databaseMock.upsertGithubItem.mock.invocationCallOrder[0]).toBeLessThan(
+          discordMock.sendMessage.mock.invocationCallOrder[0],
+        );
       });
     });
 

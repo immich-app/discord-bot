@@ -1,11 +1,21 @@
 import { Logger } from '@nestjs/common';
-import { Insertable, Kysely, PostgresDialect, sql, Updateable } from 'kysely';
+import {
+  ExpressionBuilder,
+  Insertable,
+  Kysely,
+  OnConflictDatabase,
+  OnConflictTables,
+  PostgresDialect,
+  sql,
+  Updateable,
+} from 'kysely';
 import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { getConfig } from 'src/config';
+import { GithubItemKind } from 'src/constants';
 import {
   IDatabaseRepository,
   MirrorIdentityOwner,
@@ -18,6 +28,7 @@ import {
   DiscordLink,
   DiscordLinkUpdate,
   DiscordMessage,
+  GithubItemEvent,
   MirrorConversation,
   MirrorIdentity,
   MirrorLink,
@@ -52,6 +63,11 @@ import {
   ZulipExpanderGroup,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
+
+/** An issue converted to a discussion keeps its number, and a discussion never turns back into an issue. */
+const isGithubItemConversion = (
+  eb: ExpressionBuilder<OnConflictDatabase<Database, 'github_item'>, OnConflictTables<'github_item'>>,
+) => eb.and([eb('github_item.kind', '=', GithubItemKind.Issue), eb('excluded.kind', '=', GithubItemKind.Discussion)]);
 
 export class DatabaseRepository implements IDatabaseRepository {
   private logger = new Logger(DatabaseRepository.name);
@@ -311,6 +327,59 @@ export class DatabaseRepository implements IDatabaseRepository {
       .where('organization', '=', organization)
       .orderBy('updatedAt', 'desc')
       .executeTakeFirst();
+  }
+
+  async upsertGithubItem({ organization, repository, ...item }: GithubItemEvent): Promise<void> {
+    await this.db
+      .insertInto('github_item')
+      .values({ organization: organization.toLowerCase(), repository: repository.toLowerCase(), ...item })
+      .onConflict((oc) =>
+        oc
+          .columns(['organization', 'repository', 'number'])
+          .doUpdateSet((eb) => ({
+            kind: eb.ref('excluded.kind'),
+            updatedAt: eb.ref('excluded.updatedAt'),
+            removed: false,
+          }))
+          .where((eb) =>
+            eb.or([
+              isGithubItemConversion(eb),
+              eb.and([
+                eb('github_item.kind', '=', eb.ref('excluded.kind')),
+                eb.or([
+                  eb('github_item.updatedAt', '<', eb.ref('excluded.updatedAt')),
+                  eb.and([
+                    eb('github_item.updatedAt', '=', eb.ref('excluded.updatedAt')),
+                    eb('github_item.removed', '=', false),
+                  ]),
+                ]),
+              ]),
+            ]),
+          ),
+      )
+      .execute();
+  }
+
+  async removeGithubItem({ organization, repository, ...item }: GithubItemEvent): Promise<void> {
+    await this.db
+      .insertInto('github_item')
+      .values({
+        organization: organization.toLowerCase(),
+        repository: repository.toLowerCase(),
+        ...item,
+        removed: true,
+      })
+      .onConflict((oc) =>
+        oc
+          .columns(['organization', 'repository', 'number'])
+          .doUpdateSet((eb) => ({
+            kind: eb.ref('excluded.kind'),
+            updatedAt: eb.fn<Date>('greatest', [eb.ref('github_item.updatedAt'), eb.ref('excluded.updatedAt')]),
+            removed: true,
+          }))
+          .where((eb) => eb.or([eb('github_item.kind', '=', eb.ref('excluded.kind')), isGithubItemConversion(eb)])),
+      )
+      .execute();
   }
 
   getMirrorConversation(id: string): Promise<MirrorConversation | undefined> {

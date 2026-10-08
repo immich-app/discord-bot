@@ -1,4 +1,5 @@
 import { Kysely, sql } from 'kysely';
+import { GithubItemKind } from 'src/constants';
 import { DatabaseRepository } from 'src/repositories/database.repository';
 import { Database } from 'src/schema';
 import * as expanders from 'src/schema/migrations/1790263846796-ZulipExpanders';
@@ -6,6 +7,7 @@ import * as groups from 'src/schema/migrations/1790852102345-ZulipExpanderGroups
 import * as emotePadded from 'src/schema/migrations/1791227811814-ZulipEmotePadded';
 import * as recheckEmotes from 'src/schema/migrations/1791240072190-RecheckZulipEmotes';
 import * as dmExpanders from 'src/schema/migrations/1791302531964-ZulipDmExpanders';
+import * as githubItems from 'src/schema/migrations/1791390966853-GithubItems';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -15,7 +17,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, zulip_expander*, zulip_dm_expander*, zulip_emote and zulip_command_bot rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, github_item, zulip_expander*, zulip_dm_expander*, zulip_emote and zulip_command_bot rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -25,6 +27,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     await db.deleteFrom('mirror_identity').execute();
     await db.deleteFrom('pull_request').execute();
     await db.deleteFrom('pull_request_expansion').execute();
+    await db.deleteFrom('github_item').execute();
     await db.deleteFrom('zulip_emote').execute();
     await db.deleteFrom('zulip_expander_default').execute();
     await db.deleteFrom('zulip_expander').execute();
@@ -379,6 +382,196 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       expect(await sut.getLatestPullRequestByNumber(4242, 'immich-app')).toMatchObject({ nodeId: 'PR_immich_newer' });
       expect(await sut.getLatestPullRequestByNumber(4242, 'futo-org')).toMatchObject({ nodeId: 'PR_futo' });
       expect(await sut.getLatestPullRequestByNumber(4242, 'someone-else')).toBeUndefined();
+    });
+  });
+
+  describe('github items', () => {
+    const ITEM = { organization: 'immich-app', repository: 'immich', number: 4242 };
+    const items = () =>
+      db.selectFrom('github_item').selectAll().orderBy(['organization', 'repository', 'number']).execute();
+
+    const event = (kind: GithubItemKind, updatedAt: string) => ({ ...ITEM, kind, updatedAt });
+    const row = (kind: GithubItemKind, updatedAt: string, removed = false) => ({
+      ...ITEM,
+      kind,
+      updatedAt: new Date(updatedAt),
+      removed,
+    });
+    const record = (removed: boolean, kind: GithubItemKind, updatedAt: string) =>
+      removed ? sut.removeGithubItem(event(kind, updatedAt)) : sut.upsertGithubItem(event(kind, updatedAt));
+
+    it.each([
+      { event: 'a newer', updatedAt: '2026-10-02T00:00:00Z' },
+      { event: 'an equally recent', updatedAt: '2026-10-01T00:00:00Z' },
+    ])('should keep one row per item, lowercased, and take the time of $event event', async ({ updatedAt }) => {
+      await sut.upsertGithubItem({
+        organization: 'Immich-App',
+        repository: 'Immich',
+        number: 4242,
+        kind: GithubItemKind.Issue,
+        updatedAt: new Date('2026-10-01T00:00:00Z'),
+      });
+
+      await sut.upsertGithubItem(event(GithubItemKind.Issue, updatedAt));
+
+      expect(await items()).toEqual([row(GithubItemKind.Issue, updatedAt)]);
+    });
+
+    it('should leave an item as it is for an older event of its kind', async () => {
+      await sut.upsertGithubItem(event(GithubItemKind.Issue, '2026-10-02T00:00:00Z'));
+
+      await sut.upsertGithubItem(event(GithubItemKind.Issue, '2026-10-01T00:00:00Z'));
+
+      expect(await items()).toEqual([row(GithubItemKind.Issue, '2026-10-02T00:00:00Z')]);
+    });
+
+    it.each([
+      { issue: 'an', removed: false, event: 'an older', updatedAt: '2026-10-01T00:00:00Z' },
+      { issue: 'an', removed: false, event: 'a newer', updatedAt: '2026-10-03T00:00:00Z' },
+      { issue: 'a removed', removed: true, event: 'an older', updatedAt: '2026-10-01T00:00:00Z' },
+      { issue: 'a removed', removed: true, event: 'an equally recent', updatedAt: '2026-10-02T00:00:00Z' },
+    ])('should turn $issue issue into a discussion for $event discussion event', async ({ removed, updatedAt }) => {
+      await record(removed, GithubItemKind.Issue, '2026-10-02T00:00:00Z');
+
+      await sut.upsertGithubItem(event(GithubItemKind.Discussion, updatedAt));
+
+      expect(await items()).toEqual([row(GithubItemKind.Discussion, updatedAt)]);
+    });
+
+    it.each([
+      { discussion: 'a', removed: false, event: 'a newer', updatedAt: '2026-10-03T00:00:00Z' },
+      { discussion: 'a', removed: false, event: 'an equally recent', updatedAt: '2026-10-02T00:00:00Z' },
+      { discussion: 'a removed', removed: true, event: 'a newer', updatedAt: '2026-10-03T00:00:00Z' },
+    ])('should leave $discussion discussion as it is for $event issue event', async ({ removed, updatedAt }) => {
+      await record(removed, GithubItemKind.Discussion, '2026-10-02T00:00:00Z');
+
+      await sut.upsertGithubItem(event(GithubItemKind.Issue, updatedAt));
+
+      expect(await items()).toEqual([row(GithubItemKind.Discussion, '2026-10-02T00:00:00Z', removed)]);
+    });
+
+    it('should mark only that item removed, as of the removal, and leave a discussion as it is for an issue removal', async () => {
+      const updatedAt = new Date('2026-10-01T00:00:00Z');
+      await sut.upsertGithubItem({ ...ITEM, kind: GithubItemKind.Issue, updatedAt });
+      await sut.upsertGithubItem({ ...ITEM, number: 4243, kind: GithubItemKind.Issue, updatedAt });
+      await sut.upsertGithubItem({ ...ITEM, repository: 'static-pages', kind: GithubItemKind.Issue, updatedAt });
+      await sut.upsertGithubItem({ ...ITEM, organization: 'futo-org', kind: GithubItemKind.Discussion, updatedAt });
+
+      await sut.removeGithubItem({
+        ...ITEM,
+        organization: 'Immich-App',
+        repository: 'Immich',
+        kind: GithubItemKind.Issue,
+        updatedAt: '2026-10-02T00:00:00Z',
+      });
+      await sut.removeGithubItem({
+        ...ITEM,
+        organization: 'futo-org',
+        kind: GithubItemKind.Issue,
+        updatedAt: '2026-10-02T00:00:00Z',
+      });
+
+      expect(
+        (await items()).map(
+          ({ organization, repository, number, updatedAt, removed }) =>
+            `${organization}/${repository}#${number} ${updatedAt.toISOString()} ${removed}`,
+        ),
+      ).toEqual([
+        'futo-org/immich#4242 2026-10-01T00:00:00.000Z false',
+        'immich-app/immich#4242 2026-10-02T00:00:00.000Z true',
+        'immich-app/immich#4243 2026-10-01T00:00:00.000Z false',
+        'immich-app/static-pages#4242 2026-10-01T00:00:00.000Z false',
+      ]);
+    });
+
+    it.each([
+      { event: 'an older', updatedAt: '2026-10-01T00:00:00Z', removedAt: '2026-10-02T00:00:00Z' },
+      { event: 'an equally recent', updatedAt: '2026-10-02T00:00:00Z', removedAt: '2026-10-02T00:00:00Z' },
+      { event: 'a newer', updatedAt: '2026-10-03T00:00:00Z', removedAt: '2026-10-03T00:00:00Z' },
+    ])(
+      'should mark an item removed as of its newest event for $event removal of its kind',
+      async ({ updatedAt, removedAt }) => {
+        await sut.upsertGithubItem(event(GithubItemKind.Issue, '2026-10-02T00:00:00Z'));
+
+        await sut.removeGithubItem(event(GithubItemKind.Issue, updatedAt));
+
+        expect(await items()).toEqual([row(GithubItemKind.Issue, removedAt, true)]);
+      },
+    );
+
+    it.each([
+      { issue: 'an', removed: false },
+      { issue: 'a removed', removed: true },
+    ])(
+      'should mark $issue issue removed as a discussion for a discussion removal, and keep it removed for an older event',
+      async ({ removed }) => {
+        await record(removed, GithubItemKind.Issue, '2026-10-01T00:00:00Z');
+        await sut.removeGithubItem(event(GithubItemKind.Discussion, '2026-10-03T00:00:00Z'));
+
+        await sut.upsertGithubItem(event(GithubItemKind.Discussion, '2026-10-02T00:00:00Z'));
+
+        expect(await items()).toEqual([row(GithubItemKind.Discussion, '2026-10-03T00:00:00Z', true)]);
+      },
+    );
+
+    it.each([
+      { item: 'a seen', seen: true, event: 'an older', updatedAt: '2026-09-30T00:00:00Z' },
+      { item: 'a seen', seen: true, event: 'an equally recent', updatedAt: '2026-10-01T00:00:00Z' },
+      { item: 'an unseen', seen: false, event: 'an older', updatedAt: '2026-09-30T00:00:00Z' },
+      { item: 'an unseen', seen: false, event: 'an equally recent', updatedAt: '2026-10-01T00:00:00Z' },
+    ])(
+      'should keep $item item removed for $event event of its kind delivered after the removal',
+      async ({ seen, updatedAt }) => {
+        if (seen) {
+          await sut.upsertGithubItem(event(GithubItemKind.Issue, '2026-09-29T00:00:00Z'));
+        }
+        await sut.removeGithubItem(event(GithubItemKind.Issue, '2026-10-01T00:00:00Z'));
+
+        await sut.upsertGithubItem(event(GithubItemKind.Issue, updatedAt));
+
+        expect(await items()).toEqual([row(GithubItemKind.Issue, '2026-10-01T00:00:00Z', true)]);
+      },
+    );
+
+    it('should bring a removed item back for a newer event of its kind', async () => {
+      await sut.removeGithubItem(event(GithubItemKind.Issue, '2026-10-01T00:00:00Z'));
+
+      await sut.upsertGithubItem(event(GithubItemKind.Issue, '2026-10-02T00:00:00Z'));
+
+      expect(await items()).toEqual([row(GithubItemKind.Issue, '2026-10-02T00:00:00Z')]);
+    });
+
+    it('should record every pull request as an item, lowercased and as of its latest update', async () => {
+      const pullRequest = (
+        nodeId: string,
+        organization: string,
+        repository: string,
+        number: number,
+        updatedAt: string,
+      ) => sut.upsertPullRequest({ nodeId, organization, repository, number, updatedAt: new Date(updatedAt) });
+      await pullRequest('PR_immich_older', 'Immich-App', 'Immich', 4242, '2026-10-01T00:00:00Z');
+      await pullRequest('PR_immich_newer', 'immich-app', 'immich', 4242, '2026-10-03T00:00:00Z');
+      await pullRequest('PR_futo', 'futo-org', 'grayjay', 7, '2026-09-01T00:00:00Z');
+      const rolledBack = new Error('rolled back');
+
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await githubItems.down(trx);
+          await githubItems.up(trx);
+          expect(await trx.selectFrom('github_item').selectAll().orderBy('organization').execute()).toEqual([
+            {
+              organization: 'futo-org',
+              repository: 'grayjay',
+              number: 7,
+              kind: GithubItemKind.PullRequest,
+              updatedAt: new Date('2026-09-01T00:00:00Z'),
+              removed: false,
+            },
+            { ...ITEM, kind: GithubItemKind.PullRequest, updatedAt: new Date('2026-10-03T00:00:00Z'), removed: false },
+          ]);
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
     });
   });
 

@@ -117,6 +117,8 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  upsertGithubItem: vitest.fn(),
+  removeGithubItem: vitest.fn(),
   getPullRequestsByNumber: vitest.fn().mockResolvedValue([]),
   getMirrorConversation: vitest.fn(),
   getMirrorConversationByDiscord: vitest.fn(),

@@ -3,6 +3,7 @@ import { Insertable, Selectable, Updateable } from 'kysely';
 import { DiscordLinkTable } from 'src/schema/tables/discord-links.table';
 import { DiscordMessageTable } from 'src/schema/tables/discord-messages.table';
 import { FourthwallOrderTable } from 'src/schema/tables/fourthwall-orders.table';
+import { GithubItemTable } from 'src/schema/tables/github-item.table';
 import { MirrorConversationTable } from 'src/schema/tables/mirror-conversation.table';
 import { MirrorIdentityTable } from 'src/schema/tables/mirror-identity.table';
 import { MirrorLinkTable } from 'src/schema/tables/mirror-link.table';
@@ -45,6 +46,7 @@ export class DiscordBotDatabase {
     ZulipEmoteTable,
     PullRequestExpansionTable,
     ZulipCommandBotTable,
+    GithubItemTable,
   ];
 }
 
@@ -79,6 +81,9 @@ export type NewPullRequest = Insertable<PullRequestTable>;
 export type PullRequestReference = Pick<PullRequest, 'organization' | 'repository' | 'number'>;
 export type PullRequestExpansion = Selectable<PullRequestExpansionTable>;
 export type NewPullRequestExpansion = Insertable<PullRequestExpansionTable>;
+
+export type GithubItem = Selectable<GithubItemTable>;
+export type GithubItemEvent = Omit<Insertable<GithubItemTable>, 'removed'>;
 
 export type MirrorConversation = Selectable<MirrorConversationTable>;
 export type NewMirrorConversation = Insertable<MirrorConversationTable>;
@@ -127,4 +132,5 @@ export interface Database {
   zulip_emote: ZulipEmoteTable;
   pull_request_expansion: PullRequestExpansionTable;
   zulip_command_bot: ZulipCommandBotTable;
+  github_item: GithubItemTable;
 }

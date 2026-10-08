@@ -4,6 +4,7 @@ import {
   DiscordLink,
   DiscordLinkUpdate,
   DiscordMessage,
+  GithubItemEvent,
   MirrorConversation,
   MirrorIdentity,
   MirrorLink,
@@ -91,6 +92,16 @@ export interface IDatabaseRepository {
   getPullRequestsByNumber(number: number): Promise<PullRequest[]>;
   /** The pull request of that number in the organization updated last. */
   getLatestPullRequestByNumber(number: number, organization: string): Promise<PullRequest | undefined>;
+  /**
+   * Lowercases the organization and repository. A discussion takes an issue's row whatever their times; any other row
+   * of another kind is left as it is, and so is one of that kind updated after `updatedAt` or removed at `updatedAt`.
+   */
+  upsertGithubItem(item: GithubItemEvent): Promise<void>;
+  /**
+   * Marks the row removed as of the later of its `updatedAt` and the event's, recording it if there is none, only while
+   * it is of that kind, or an issue for a discussion's removal.
+   */
+  removeGithubItem(item: GithubItemEvent): Promise<void>;
   getMirrorConversation(id: string): Promise<MirrorConversation | undefined>;
   getMirrorConversationByDiscord(
     discordChannelId: string,
