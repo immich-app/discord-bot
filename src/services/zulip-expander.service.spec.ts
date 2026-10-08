@@ -2,13 +2,7 @@ import { Logger } from '@nestjs/common';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { IGithubInterface } from 'src/interfaces/github.interface';
 import { IGitlabInterface } from 'src/interfaces/gitlab.interface';
-import {
-  ZulipDmExpander,
-  ZulipDmExpanderDefault,
-  ZulipExpander,
-  ZulipExpanderDefault,
-  ZulipExpanderGroup,
-} from 'src/schema';
+import { ZulipDmExpander, ZulipExpander, ZulipExpanderGroup } from 'src/schema';
 import {
   ExpanderGroupEmptyError,
   ZulipExpanderService,
@@ -22,15 +16,12 @@ import { beforeEach, describe, expect, it, vitest } from 'vitest';
 type Tables = {
   groups: ZulipExpanderGroup[];
   streams: ZulipExpander[];
-  defaults: ZulipExpanderDefault[];
   conversations?: ZulipDmExpander[];
-  conversationDefaults?: ZulipDmExpanderDefault[];
 };
 
-const group = (name: string, repositories: string[], threshold = 0): ZulipExpanderGroup => ({
+const group = (name: string, repositories: string[]): ZulipExpanderGroup => ({
   name,
   repositories,
-  threshold,
   createdBy: 'Alice',
   createdAt: new Date(0),
 });
@@ -42,19 +33,12 @@ const stream = (streamId: number, groupName: string): ZulipExpander => ({
   createdAt: new Date(0),
 });
 
-/** Keeps the rules the tables keep: a cascade from groups, and no default without a group. */
+/** Keeps the rule the tables keep: a cascade from groups. */
 const fakeDatabase = (tables: Tables) => {
-  const dms = { conversations: tables.conversations ?? [], defaults: tables.conversationDefaults ?? [] };
-  const dropOrphanDefaults = () => {
-    tables.defaults = tables.defaults.filter((row) => tables.streams.some((other) => other.streamId === row.streamId));
-    dms.defaults = dms.defaults.filter((row) =>
-      dms.conversations.some((other) => other.conversation === row.conversation),
-    );
-  };
+  const dms = { conversations: tables.conversations ?? [] };
   return {
     getZulipExpanderGroups: vitest.fn(async () => structuredClone(tables.groups)),
     getZulipExpanders: vitest.fn(async () => structuredClone(tables.streams)),
-    getZulipExpanderDefaults: vitest.fn(async () => structuredClone(tables.defaults)),
     createZulipExpanderGroup: vitest.fn(async ({ name, repositories, createdBy }) => {
       if (tables.groups.some((row) => row.name === name)) {
         return false;
@@ -75,7 +59,6 @@ const fakeDatabase = (tables: Tables) => {
       tables.groups = tables.groups.filter((row) => row.name !== name);
       tables.streams = tables.streams.filter((row) => row.groupName !== name);
       dms.conversations = dms.conversations.filter((row) => row.groupName !== name);
-      dropOrphanDefaults();
       return tables.groups.length !== before;
     }),
     addZulipExpander: vitest.fn(async (streamId, groupName) => {
@@ -90,15 +73,9 @@ const fakeDatabase = (tables: Tables) => {
         (row) => row.streamId === streamId && (groupName === undefined || row.groupName === groupName),
       );
       tables.streams = tables.streams.filter((row) => !removed.includes(row));
-      dropOrphanDefaults();
       return removed.map((row) => row.groupName);
     }),
-    setZulipExpanderDefault: vitest.fn(async (streamId, repository, createdBy) => {
-      tables.defaults = tables.defaults.filter((row) => row.streamId !== streamId);
-      tables.defaults.push({ streamId, repository, createdBy, createdAt: new Date(0) });
-    }),
     getZulipDmExpanders: vitest.fn(async () => structuredClone(dms.conversations)),
-    getZulipDmExpanderDefaults: vitest.fn(async () => structuredClone(dms.defaults)),
     addZulipDmExpander: vitest.fn(async (conversation: string, groupName: string, createdBy: string) => {
       if (dms.conversations.some((row) => row.conversation === conversation && row.groupName === groupName)) {
         return false;
@@ -111,12 +88,7 @@ const fakeDatabase = (tables: Tables) => {
         (row) => row.conversation === conversation && (groupName === undefined || row.groupName === groupName),
       );
       dms.conversations = dms.conversations.filter((row) => !removed.includes(row));
-      dropOrphanDefaults();
       return removed.map((row) => row.groupName);
-    }),
-    setZulipDmExpanderDefault: vitest.fn(async (conversation: string, repository: string, createdBy: string) => {
-      dms.defaults = dms.defaults.filter((row) => row.conversation !== conversation);
-      dms.defaults.push({ conversation, repository, createdBy, createdAt: new Date(0) });
     }),
   } satisfies Partial<Record<keyof IDatabaseRepository, unknown>>;
 };
@@ -170,12 +142,11 @@ describe(ZulipExpanderService.name, () => {
   beforeEach(async () => {
     tables = {
       groups: [
-        group('immich', ['immich-app/immich'], 1000),
+        group('immich', ['immich-app/immich']),
         group('fhs', ['futo-org/fhs-core', 'futo-org/grayjay']),
-        group('apps', ['futo-org/grayjay', 'immich-app/immich'], 50),
+        group('apps', ['futo-org/grayjay', 'immich-app/immich']),
       ],
       streams: [stream(107, 'immich'), stream(54, 'immich'), stream(54, 'fhs')],
-      defaults: [],
     };
     database = fakeDatabase(tables);
     github = { getOwnerRepositories: vitest.fn() };
@@ -209,7 +180,7 @@ describe(ZulipExpanderService.name, () => {
     expect(sut.getStreams('immich')).toEqual([54, 107]);
     expect(database.getZulipExpanderGroups).toHaveBeenCalledOnce();
     expect(database.getZulipExpanders).toHaveBeenCalledOnce();
-    expect(database.getZulipExpanderDefaults).toHaveBeenCalledOnce();
+    expect(database.getZulipDmExpanders).toHaveBeenCalledOnce();
   });
 
   describe('getScope', () => {
@@ -217,38 +188,12 @@ describe(ZulipExpanderService.name, () => {
       expect(sut.getScope(999)).toBeUndefined();
     });
 
-    it("should list the stream's repositories once each, in the order its groups were turned on", async () => {
+    it("should give the stream's repositories alone, once each, in the order its groups were turned on", async () => {
       await sut.enable(54, 'apps', 'Alice');
 
-      expect(sut.getScope(54)?.repositories).toEqual(['immich-app/immich', 'futo-org/fhs-core', 'futo-org/grayjay']);
-    });
-
-    it("should default to the first group's first repository", () => {
-      expect(sut.getScope(54)?.defaultRepository).toBe('immich-app/immich');
-    });
-
-    it('should default to the repository chosen for the stream, while one of its groups has it', async () => {
-      await sut.setDefault(54, 'futo-org/grayjay', 'Alice');
-      expect(sut.getScope(54)?.defaultRepository).toBe('futo-org/grayjay');
-
-      await sut.disable(54, 'fhs');
-      expect(sut.getScope(54)?.defaultRepository).toBe('immich-app/immich');
-    });
-
-    it('should match the chosen default without regard to case, and answer with the group spelling', async () => {
-      await sut.setDefault(54, 'FUTO-org/GrayJay', 'Alice');
-
-      expect(sut.getScope(54)?.defaultRepository).toBe('futo-org/grayjay');
-    });
-
-    it('should take the highest threshold of the groups that have the repository, and 0 for others', async () => {
-      await sut.enable(54, 'apps', 'Alice');
-      const scope = sut.getScope(54)!;
-
-      expect(scope.threshold('immich-app/immich')).toBe(1000);
-      expect(scope.threshold('Futo-Org/Grayjay')).toBe(50);
-      expect(scope.threshold('futo-org/fhs-core')).toBe(0);
-      expect(scope.threshold('someone/else')).toBe(0);
+      expect(sut.getScope(54)).toEqual({
+        repositories: ['immich-app/immich', 'futo-org/fhs-core', 'futo-org/grayjay'],
+      });
     });
   });
 
@@ -261,7 +206,7 @@ describe(ZulipExpanderService.name, () => {
       repositories: ['owner/repo'],
       createdBy: 'Alice on Zulip (user 12)',
     });
-    expect(sut.getGroup('new')).toEqual({ name: 'new', repositories: ['owner/repo'], threshold: 0 });
+    expect(sut.getGroup('new')).toEqual({ name: 'new', repositories: ['owner/repo'] });
   });
 
   it('should add only the repositories a group lacks, without regard to case', async () => {
@@ -289,13 +234,6 @@ describe(ZulipExpanderService.name, () => {
     expect(tables.groups.find(({ name }) => name === 'fhs')?.repositories).toEqual(['futo-org/grayjay']);
   });
 
-  it('should set a threshold, resolving to whether there is such a group', async () => {
-    expect(await sut.setThreshold('fhs', 25)).toBe(true);
-    expect(await sut.setThreshold('nope', 25)).toBe(false);
-
-    expect(sut.getGroup('fhs')?.threshold).toBe(25);
-  });
-
   it('should delete a group and turn it off in every stream', async () => {
     expect(await sut.deleteGroup('immich')).toBe(true);
     expect(await sut.deleteGroup('immich')).toBe(false);
@@ -303,7 +241,7 @@ describe(ZulipExpanderService.name, () => {
     expect(sut.getGroup('immich')).toBeUndefined();
     expect(sut.isEnabled(107)).toBe(false);
     expect(sut.getPlaceGroups(54)).toEqual(['fhs']);
-    expect(sut.getScope(54)?.defaultRepository).toBe('futo-org/fhs-core');
+    expect(sut.getScope(54)).toEqual({ repositories: ['futo-org/fhs-core', 'futo-org/grayjay'] });
   });
 
   it('should turn a group on, resolving to whether it was off', async () => {
@@ -315,15 +253,13 @@ describe(ZulipExpanderService.name, () => {
   });
 
   it('should turn off one group or every group, resolving to the groups turned off', async () => {
-    await sut.setDefault(54, 'futo-org/grayjay', 'Alice');
-
     expect(await sut.disable(54, 'fhs')).toEqual(['fhs']);
     expect(await sut.disable(54, 'fhs')).toEqual([]);
     expect(sut.getPlaceGroups(54)).toEqual(['immich']);
 
     expect(await sut.disable(54)).toEqual(['immich']);
     expect(sut.isEnabled(54)).toBe(false);
-    expect(sut.getDefault(54)).toBeUndefined();
+    expect(sut.getScope(54)).toBeUndefined();
   });
 
   describe('direct message conversations', () => {
@@ -335,25 +271,18 @@ describe(ZulipExpanderService.name, () => {
 
       expect(database.addZulipDmExpander).toHaveBeenCalledWith(DM, 'fhs', 'Alice on Zulip (user 12)');
       expect(database.addZulipExpander).not.toHaveBeenCalled();
-      expect(sut.getScope(DM)).toMatchObject({
-        repositories: ['futo-org/fhs-core', 'futo-org/grayjay'],
-        defaultRepository: 'futo-org/fhs-core',
-      });
+      expect(sut.getScope(DM)).toEqual({ repositories: ['futo-org/fhs-core', 'futo-org/grayjay'] });
       expect(sut.list()).toEqual([54, 107]);
       expect(sut.getStreams('fhs')).toEqual([54]);
     });
 
-    it('should set a default and turn groups off in a conversation, dropping its default with its last group', async () => {
+    it('should turn every group off in a conversation', async () => {
       await sut.enable(DM, 'fhs', 'Alice');
-      await sut.setDefault(DM, 'futo-org/grayjay', 'Alice');
-
-      expect(database.setZulipDmExpanderDefault).toHaveBeenCalledWith(DM, 'futo-org/grayjay', 'Alice');
-      expect(sut.getScope(DM)?.defaultRepository).toBe('futo-org/grayjay');
 
       expect(await sut.disable(DM)).toEqual(['fhs']);
       expect(database.removeZulipDmExpander).toHaveBeenCalledWith(DM, undefined);
+      expect(database.removeZulipExpander).not.toHaveBeenCalled();
       expect(sut.isEnabled(DM)).toBe(false);
-      expect(sut.getDefault(DM)).toBeUndefined();
     });
 
     it('should load conversations at init, and turn a deleted group off in them', async () => {
@@ -416,32 +345,23 @@ describe(ZulipExpanderService.name, () => {
     expect(sut.getPlaceGroups(120)).toEqual(['fhs']);
 
     failRead();
-    await sut.setDefault(120, 'futo-org/grayjay', 'Alice');
-    expect(sut.getScope(120)?.defaultRepository).toBe('futo-org/grayjay');
-
-    failRead();
     expect(await sut.addRepositories('fhs', ['futo-org/polycentric'])).toEqual(['futo-org/polycentric']);
     expect(sut.getGroup('fhs')?.repositories).toContain('futo-org/polycentric');
 
     failRead();
-    expect(await sut.setThreshold('fhs', 5)).toBe(true);
-    expect(sut.getGroup('fhs')?.threshold).toBe(5);
-
-    failRead();
     expect(await sut.createGroup('new', ['owner/repo'], 'Alice')).toBe(true);
-    expect(sut.getGroup('new')).toEqual({ name: 'new', repositories: ['owner/repo'], threshold: 0 });
+    expect(sut.getGroup('new')).toEqual({ name: 'new', repositories: ['owner/repo'] });
 
     failRead();
     expect(await sut.disable(120)).toEqual(['fhs']);
     expect(sut.isEnabled(120)).toBe(false);
-    expect(sut.getDefault(120)).toBeUndefined();
 
     failRead();
     expect(await sut.deleteGroup('immich')).toBe(true);
     expect(sut.getPlaceGroups(54)).toEqual(['fhs']);
     expect(sut.isEnabled(107)).toBe(false);
 
-    expect(Logger.prototype.warn).toHaveBeenCalledTimes(7);
+    expect(Logger.prototype.warn).toHaveBeenCalledTimes(5);
     expect(Logger.prototype.warn).toHaveBeenCalledWith(
       'Could not read the Zulip expanders back, so the change is cached as the write reported it',
       expect.any(Error),
@@ -453,7 +373,7 @@ describe(ZulipExpanderService.name, () => {
 
     const withPatterns = async () => {
       tables.groups.push(
-        group('everything', ['immich-app/*', 'gitlab.futo.org/videostreaming/*', 'futo-org/fhs-core'], 20),
+        group('everything', ['immich-app/*', 'gitlab.futo.org/videostreaming/*', 'futo-org/fhs-core']),
         group('only', ['immich-app/*']),
       );
       tables.streams.push(stream(130, 'everything'), stream(140, 'only'));
@@ -482,7 +402,7 @@ describe(ZulipExpanderService.name, () => {
       expect(gitlab.getGroupProjects).not.toHaveBeenCalled();
     });
 
-    it('should expand a group, without duplicates, its default the first repository it names itself', async () => {
+    it('should expand a group, without duplicates', async () => {
       await withPatterns();
       const everything = sut.getGroup('everything')!;
 
@@ -492,18 +412,8 @@ describe(ZulipExpanderService.name, () => {
         'gitlab.futo.org/videostreaming/plugins/kick',
         'futo-org/fhs-core',
       ]);
-      expect(sut.getGroupDefault(everything)).toBe('futo-org/fhs-core');
-      expect(sut.getScope(130)).toMatchObject({ defaultRepository: 'futo-org/fhs-core' });
-      expect(sut.getScope(130)?.threshold('immich-app/devtools')).toBe(20);
-    });
-
-    it('should give a stream of patterns only no default, unless it chose one', async () => {
-      await withPatterns();
-
-      expect(sut.getScope(140)).toMatchObject({ repositories: IMMICH_APP, defaultRepository: undefined });
-
-      await sut.setDefault(140, 'Immich-App/Immich', 'Alice');
-      expect(sut.getScope(140)?.defaultRepository).toBe('immich-app/immich');
+      expect(sut.getScope(130)).toEqual({ repositories: sut.getRepositories(everything) });
+      expect(sut.getScope(140)).toEqual({ repositories: IMMICH_APP });
     });
 
     it('should read a pattern as GitHub or GitLab spells it, or not at all when there is no such owner', async () => {

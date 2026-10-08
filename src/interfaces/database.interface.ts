@@ -36,10 +36,8 @@ import {
   UpdateZulipExpanderGroup,
   ZulipCommandBot,
   ZulipDmExpander,
-  ZulipDmExpanderDefault,
   ZulipEmote,
   ZulipExpander,
-  ZulipExpanderDefault,
   ZulipExpanderGroup,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
@@ -149,7 +147,6 @@ export interface IDatabaseRepository {
   removeMirrorIdentity(owner: MirrorIdentityOwner): Promise<MirrorIdentity | undefined>;
   getZulipExpanderGroups(): Promise<ZulipExpanderGroup[]>;
   getZulipExpanders(): Promise<ZulipExpander[]>;
-  getZulipExpanderDefaults(): Promise<ZulipExpanderDefault[]>;
   /** Resolves to whether it was created, `false` when the name is taken. */
   createZulipExpanderGroup(group: NewZulipExpanderGroup): Promise<boolean>;
   /** Resolves to whether there was a group of that name. */
@@ -160,14 +157,11 @@ export interface IDatabaseRepository {
   addZulipExpander(streamId: number, groupName: string, createdBy: string): Promise<boolean>;
   /** Every group of the stream when none is named; resolves to the groups it turned off. */
   removeZulipExpander(streamId: number, groupName?: string): Promise<string[]>;
-  setZulipExpanderDefault(streamId: number, repository: string, createdBy: string): Promise<void>;
   getZulipDmExpanders(): Promise<ZulipDmExpander[]>;
-  getZulipDmExpanderDefaults(): Promise<ZulipDmExpanderDefault[]>;
   /** As `addZulipExpander`, in a direct message conversation. */
   addZulipDmExpander(conversation: string, groupName: string, createdBy: string): Promise<boolean>;
   /** As `removeZulipExpander`, in a direct message conversation. */
   removeZulipDmExpander(conversation: string, groupName?: string): Promise<string[]>;
-  setZulipDmExpanderDefault(conversation: string, repository: string, createdBy: string): Promise<void>;
   /** The Discord emotes the emote sync uploaded to Zulip or checked there. */
   getZulipEmotes(): Promise<ZulipEmote[]>;
   /** Records the emote as padded under that Zulip name. */

@@ -17,9 +17,7 @@ import {
   UpdateZulipExpanderGroup,
   ZulipCommandBot,
   ZulipDmExpander,
-  ZulipDmExpanderDefault,
   ZulipExpander,
-  ZulipExpanderDefault,
   ZulipExpanderGroup,
 } from 'src/schema';
 import { ChatService, EmoteSyncReport } from 'src/services/chat.service';
@@ -145,18 +143,8 @@ const newFakeDatabase = () => {
   const feeds: RSSFeed[] = [];
   const groups: ZulipExpanderGroup[] = [];
   const expanders: ZulipExpander[] = [];
-  const defaults: ZulipExpanderDefault[] = [];
   const conversations: ZulipDmExpander[] = [];
-  const conversationDefaults: ZulipDmExpanderDefault[] = [];
   const commandBots: ZulipCommandBot[] = [];
-  const dropOrphanDefaults = () => {
-    const kept = defaults.filter(({ streamId }) => expanders.some((row) => row.streamId === streamId));
-    defaults.splice(0, defaults.length, ...kept);
-    const keptDm = conversationDefaults.filter(({ conversation }) =>
-      conversations.some((row) => row.conversation === conversation),
-    );
-    conversationDefaults.splice(0, conversationDefaults.length, ...keptDm);
-  };
   const findFeed = (url: string, channelId: string, service: RSSFeed['service']) =>
     feeds.findIndex((feed) => feed.url === url && feed.channelId === channelId && feed.service === service);
   return {
@@ -164,9 +152,7 @@ const newFakeDatabase = () => {
     feeds,
     groups,
     expanders,
-    defaults,
     conversations,
-    conversationDefaults,
     commandBots,
     getZulipCommandBots: () => Promise.resolve(commandBots.map((row) => ({ ...row }))),
     addZulipCommandBot: (userId: number, createdBy: string) => {
@@ -191,18 +177,11 @@ const newFakeDatabase = () => {
           .sort((x, y) => x.name.localeCompare(y.name)),
       ),
     getZulipExpanders: () => Promise.resolve(expanders.map((row) => ({ ...row }))),
-    getZulipExpanderDefaults: () => Promise.resolve(defaults.map((row) => ({ ...row }))),
-    createZulipExpanderGroup: ({ name, repositories, threshold, createdBy }: NewZulipExpanderGroup) => {
+    createZulipExpanderGroup: ({ name, repositories, createdBy }: NewZulipExpanderGroup) => {
       if (groups.some((group) => group.name === name)) {
         return Promise.resolve(false);
       }
-      groups.push({
-        name,
-        repositories: [...repositories],
-        threshold: threshold ?? 0,
-        createdBy,
-        createdAt: new Date(),
-      });
+      groups.push({ name, repositories: [...repositories], createdBy, createdAt: new Date() });
       return Promise.resolve(true);
     },
     updateZulipExpanderGroup: (name: string, update: UpdateZulipExpanderGroup) => {
@@ -220,7 +199,6 @@ const newFakeDatabase = () => {
         expanders.splice(0, expanders.length, ...kept);
         const keptDm = conversations.filter((row) => row.groupName !== name);
         conversations.splice(0, conversations.length, ...keptDm);
-        dropOrphanDefaults();
       }
       return Promise.resolve(index !== -1);
     },
@@ -237,20 +215,9 @@ const newFakeDatabase = () => {
       const removed = expanders.filter((row) => matches(row)).map((row) => row.groupName);
       const kept = expanders.filter((row) => !matches(row));
       expanders.splice(0, expanders.length, ...kept);
-      dropOrphanDefaults();
       return Promise.resolve(removed);
     },
-    setZulipExpanderDefault: (streamId: number, repository: string, createdBy: string) => {
-      const row = defaults.find((candidate) => candidate.streamId === streamId);
-      if (row) {
-        Object.assign(row, { repository, createdBy });
-      } else {
-        defaults.push({ streamId, repository, createdBy, createdAt: new Date() });
-      }
-      return Promise.resolve();
-    },
     getZulipDmExpanders: () => Promise.resolve(conversations.map((row) => ({ ...row }))),
-    getZulipDmExpanderDefaults: () => Promise.resolve(conversationDefaults.map((row) => ({ ...row }))),
     addZulipDmExpander: (conversation: string, groupName: string, createdBy: string) => {
       if (conversations.some((row) => row.conversation === conversation && row.groupName === groupName)) {
         return Promise.resolve(false);
@@ -264,17 +231,7 @@ const newFakeDatabase = () => {
       const removed = conversations.filter((row) => matches(row)).map((row) => row.groupName);
       const kept = conversations.filter((row) => !matches(row));
       conversations.splice(0, conversations.length, ...kept);
-      dropOrphanDefaults();
       return Promise.resolve(removed);
-    },
-    setZulipDmExpanderDefault: (conversation: string, repository: string, createdBy: string) => {
-      const row = conversationDefaults.find((candidate) => candidate.conversation === conversation);
-      if (row) {
-        Object.assign(row, { repository, createdBy });
-      } else {
-        conversationDefaults.push({ conversation, repository, createdBy, createdAt: new Date() });
-      }
-      return Promise.resolve();
     },
     getScheduledMessages: (service?: ScheduledMessage['service']) =>
       Promise.resolve(scheduled.filter((row) => service === undefined || row.service === service)),
@@ -428,6 +385,11 @@ const HELP_FOR_EVERYONE = [
   HELP_FINE_PRINT,
 ].join('\n');
 
+const bareNumbers = (kind: string) =>
+  `A bare \`#1234\` goes to the repository of the ${kind}'s groups whose pull request, issue or discussion of that number I have seen activity on last, which only a GitHub repository of \`immich-app\` or \`futo-org\` can be; a GitLab project or another repository needs \`name#1234\` or a link.`;
+
+const BARE_NUMBERS = bareNumbers('stream');
+
 const DIRECT_MESSAGE_HELP = [
   '**In a direct message**, send me one of these; in a group conversation, mention me first.',
   '',
@@ -439,7 +401,8 @@ const DIRECT_MESSAGE_HELP = [
   '- `unlink`: unlink your Zulip account from your Discord account',
   '',
   '```spoiler How it works',
-  '- `expanders on <group>`, `expanders off [group]`, `expanders default <repository>` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+  '- `expanders on <group>`, `expanders off [group]` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+  `- ${bareNumbers('conversation')}`,
   '- Links expand here without a group, unless a guest is in the conversation.',
   '- Everyone in the conversation sees what `expanders` changes; anything else is answered to you alone.',
   '```',
@@ -1048,16 +1011,26 @@ describe('ZulipCommandService', () => {
 
       expect(contents()).toEqual([
         [
-          '`expanders <on <group>|off [group]|default <repository>|list>`',
-          'Choose the groups of repositories a bare `#1234` and `name#1234` look among in this stream. A bare `#1234` goes to the one of them whose pull request, issue or discussion of that number I have seen activity on last, else to the default. GitHub and `gitlab.futo.org` issue, pull request, merge request and discussion links, file permalinks and `owner/name#1234` expand in every subscribed stream, with or without a group, and `x.com` links are mirrored on `nitter.net`.',
+          '`expanders <on <group>|off [group]|list>`',
+          `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${BARE_NUMBERS} GitHub and \`gitlab.futo.org\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
           '- `on <group>`: turn that group on here',
           '- `off [group]`: turn that group off here, or every group when none is named',
-          '- `default <repository>`: choose which of the repositories turned on here a bare `#1234` falls back to',
           '- `list`: list the streams with groups',
           '- Taken in any stream.',
           '- Example: `expanders on immich`',
         ].join('\n'),
       ]);
+    });
+
+    it('should say which repositories a bare number reaches in the expander groups help too', async () => {
+      await send('@**Immich** help expander-group');
+
+      expect(lines(contents()[0]).slice(0, 2)).toEqual([
+        '`expander-group <create|add|remove> <group> <repository>… | delete <group> | info <group> | list`',
+        'Create and change the groups of repositories `expanders on` turns on. A repository is `owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date; URLs work too. ' +
+          BARE_NUMBERS,
+      ]);
+      expect(contents()[0]).not.toMatch(/threshold|default/);
     });
 
     it.each([
@@ -2426,7 +2399,7 @@ describe('ZulipCommandService', () => {
       '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
     const NOT_SUBSCRIBED_MARK = ' (⚠ I am not subscribed, so nothing reaches me there)';
     const HEADER = 'Groups are on in:';
-    const USAGE = 'Usage: `expanders <on <group>|off [group]|default <repository>|list>`';
+    const USAGE = 'Usage: `expanders <on <group>|off [group]|list>`';
     const NO_GROUP = (name: string) => `There is no expander group \`${name}\`; the groups are \`fhs\`, \`immich\`.`;
     const GITHUB: Record<string, string> = {
       'immich-app/immich': 'immich-app/immich',
@@ -2439,10 +2412,9 @@ describe('ZulipCommandService', () => {
       'videostreaming/grayjay': 'videostreaming/Grayjay',
       'videostreaming/plugins/kick': 'videostreaming/plugins/kick',
     };
-    const group = (name: string, repositories: string[], threshold = 0): ZulipExpanderGroup => ({
+    const group = (name: string, repositories: string[]): ZulipExpanderGroup => ({
       name,
       repositories,
-      threshold,
       createdBy: 'migration',
       createdAt: new Date(0),
     });
@@ -2458,7 +2430,6 @@ describe('ZulipCommandService', () => {
     const reset = async () => {
       database.groups.splice(0);
       database.expanders.splice(0);
-      database.defaults.splice(0);
       await zulipExpanders.init();
     };
 
@@ -2470,7 +2441,7 @@ describe('ZulipCommandService', () => {
       );
       gitlabMock.getProjectPath.mockImplementation((path) => Promise.resolve(GITLAB[path.toLowerCase()]));
       database.groups.push(
-        group('immich', ['immich-app/immich'], 1000),
+        group('immich', ['immich-app/immich']),
         group('fhs', ['futo-org/fhs-core', 'futo-org/fhs-web']),
       );
       database.expanders.push(row(107));
@@ -2491,10 +2462,7 @@ describe('ZulipCommandService', () => {
         expect(stored()).toEqual(['107:immich']);
         expect(zulipMock.getSubscriptions).not.toHaveBeenCalled();
         expect(answers()).toEqual([
-          [
-            [12],
-            'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` falls back to `futo-org/fhs-core` here.',
-          ],
+          [[12], 'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.'],
         ]);
       });
 
@@ -2503,7 +2471,7 @@ describe('ZulipCommandService', () => {
         expect(conversations()).toEqual([]);
 
         await direct('@**Immich** expanders on fhs', [12, BOT.userId, 13]);
-        await direct('@**Immich** expanders default fhs-web', [13, BOT.userId, 12]);
+        await direct('@**Immich** expanders off immich', [13, BOT.userId, 12]);
         await direct('@**Immich** expanders off', [12, BOT.userId, 13]);
 
         expect(answers().map(([recipients]) => recipients)).toEqual([
@@ -2512,12 +2480,11 @@ describe('ZulipCommandService', () => {
           [12, 13],
         ]);
         expect(answers().map(([, content]) => content)).toEqual([
-          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` falls back to `futo-org/fhs-core` here.',
-          'A bare `#1234` now falls back to `futo-org/fhs-web` in this conversation.',
+          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.',
+          'Nothing changed: the group `immich` was not on in this conversation.',
           'Turned off every group in this conversation (`fhs`): links still expand here, a bare `#1234` no longer does.',
         ]);
         expect(conversations()).toEqual([]);
-        expect(database.conversationDefaults).toEqual([]);
       });
 
       it('should answer the usage, and change nothing, for expanders given too many arguments', async () => {
@@ -2527,9 +2494,7 @@ describe('ZulipCommandService', () => {
         await direct('expanders off fhs immich', [12, BOT.userId]);
 
         expect(conversations()).toEqual(['7,12:fhs']);
-        expect(answers()).toEqual([
-          [[12], expect.stringContaining('expanders <on <group>|off [group]|default <repository>|list>')],
-        ]);
+        expect(answers()).toEqual([[[12], expect.stringContaining('expanders <on <group>|off [group]|list>')]]);
       });
 
       it.each([
@@ -2554,8 +2519,7 @@ describe('ZulipCommandService', () => {
           {
             stream: 120,
             topic: 'setup',
-            content:
-              'Turned on the group `immich` (`immich-app/immich`) in this stream.\nA bare `#1234` falls back to `immich-app/immich` here.',
+            content: 'Turned on the group `immich` (`immich-app/immich`) in this stream.',
           },
         ]);
         expect(database.expanders).toEqual([
@@ -2565,11 +2529,11 @@ describe('ZulipCommandService', () => {
         expect(zulipExpanders.isEnabled(120)).toBe(true);
       });
 
-      it('should add a second group, whatever its case, and keep the first group default', async () => {
+      it('should add a second group, whatever its case, after the first', async () => {
         await send('@**Immich** expanders on FHS');
 
         expect(contents()).toEqual([
-          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` falls back to `immich-app/immich` here.',
+          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.',
         ]);
         expect(stored()).toEqual(['107:fhs', '107:immich']);
         expect(zulipExpanders.getPlaceGroups(107)).toEqual(['immich', 'fhs']);
@@ -2578,9 +2542,7 @@ describe('ZulipCommandService', () => {
       it('should say when the group was already on, whatever the case of the command', async () => {
         await send('@**Immich** EXPANDERS ON Immich');
 
-        expect(contents()).toEqual([
-          'Nothing changed: the group `immich` was already on in this stream.\nA bare `#1234` falls back to `immich-app/immich` here.',
-        ]);
+        expect(contents()).toEqual(['Nothing changed: the group `immich` was already on in this stream.']);
         expect(stored()).toEqual(['107:immich']);
       });
 
@@ -2609,8 +2571,8 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders off', { streamId: 130 });
 
         expect(contents()).toEqual([
-          `Turned on the group \`immich\` (\`immich-app/immich\`) in this stream.\nA bare \`#1234\` falls back to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
-          `Nothing changed: the group \`immich\` was already on in this stream.\nA bare \`#1234\` falls back to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
+          `Turned on the group \`immich\` (\`immich-app/immich\`) in this stream.\n${NOT_SUBSCRIBED}`,
+          `Nothing changed: the group \`immich\` was already on in this stream.\n${NOT_SUBSCRIBED}`,
           'Turned off every group in this stream (`immich`): links still expand here, a bare `#1234` no longer does.',
         ]);
         expect(zulipMock.getSubscriptions).toHaveBeenCalledTimes(2);
@@ -2676,82 +2638,6 @@ describe('ZulipCommandService', () => {
         expect(zulipExpanders.list()).toEqual([120]);
         expect(stored()).toEqual(['120:immich']);
       });
-
-      it('should forget the default of a stream it turns off', async () => {
-        await send('@**Immich** expanders on fhs');
-        await send('@**Immich** expanders default fhs-core');
-        await send('@**Immich** expanders off');
-
-        expect(database.defaults).toEqual([]);
-        expect(zulipExpanders.getDefault(107)).toBeUndefined();
-      });
-    });
-
-    describe('default', () => {
-      it('should refuse a stream with no group on', async () => {
-        await send('@**Immich** expanders default immich-app/immich', { streamId: 120 });
-
-        expect(contents()).toEqual(['No group is on in this stream; turn one on with `expanders on <group>` first.']);
-        expect(database.defaults).toEqual([]);
-      });
-
-      it("should refuse a repository in none of the stream's groups", async () => {
-        await send('@**Immich** expanders default futo-org/fhs-core');
-
-        expect(contents()).toEqual([
-          "`futo-org/fhs-core` is in none of this stream's groups; the default must be one of `immich-app/immich`.",
-        ]);
-        expect(database.defaults).toEqual([]);
-      });
-
-      it.each([
-        ['owner/repo in another case', 'FUTO-org/FHS-core', 'futo-org/fhs-core'],
-        ['the bare name', 'fhs-web', 'futo-org/fhs-web'],
-        ['the GitHub URL', 'https://github.com/futo-org/fhs-web', 'futo-org/fhs-web'],
-      ])('should take %s and store the name as the group spells it', async (_, given, expected) => {
-        await send('@**Immich** expanders on fhs');
-        await send(`@**Immich** expanders default ${given}`);
-
-        expect(contents()[1]).toBe(`A bare \`#1234\` now falls back to \`${expected}\` in this stream.`);
-        expect(database.defaults).toEqual([
-          { streamId: 107, repository: expected, createdBy: ALICE, createdAt: expect.any(Date) },
-        ]);
-        expect(zulipExpanders.getScope(107)?.defaultRepository).toBe(expected);
-      });
-
-      it.each([
-        ['the full name', 'gitlab.futo.org/videostreaming/grayjay'],
-        ['the URL', 'https://gitlab.futo.org/videostreaming/Grayjay'],
-        ['the path without the host', 'videostreaming/grayjay'],
-        ['the project name alone', 'Grayjay'],
-      ])('should take a GitLab project by %s', async (_, given) => {
-        database.groups.push(group('apps', ['immich-app/static-pages', 'gitlab.futo.org/videostreaming/Grayjay']));
-        await zulipExpanders.init();
-        await send('@**Immich** expanders on apps');
-        await send(`@**Immich** expanders default ${given}`);
-
-        expect(contents()[1]).toBe(
-          'A bare `#1234` now falls back to `gitlab.futo.org/videostreaming/Grayjay` in this stream.',
-        );
-        expect(database.defaults).toEqual([
-          {
-            streamId: 107,
-            repository: 'gitlab.futo.org/videostreaming/Grayjay',
-            createdBy: ALICE,
-            createdAt: expect.any(Date),
-          },
-        ]);
-      });
-
-      it('should replace an earlier default', async () => {
-        await send('@**Immich** expanders on fhs');
-        await send('@**Immich** expanders default fhs-web');
-        await send('@**Immich** expanders default immich');
-
-        expect(database.defaults).toEqual([
-          { streamId: 107, repository: 'immich-app/immich', createdBy: ALICE, createdAt: expect.any(Date) },
-        ]);
-      });
     });
 
     describe('list', () => {
@@ -2763,14 +2649,8 @@ describe('ZulipCommandService', () => {
         expect(zulipMock.getStream).not.toHaveBeenCalled();
       });
 
-      it('should list every stream by name and ID with its groups and default, and mark one the bot is not subscribed to', async () => {
+      it('should list every stream by name and ID with its groups, and mark one the bot is not subscribed to', async () => {
         database.expanders.push(row(54), row(130, 'fhs'), row(140), row(107, 'fhs'));
-        database.defaults.push({
-          streamId: 107,
-          repository: 'futo-org/fhs-web',
-          createdBy: 'x',
-          createdAt: new Date(0),
-        });
         await zulipExpanders.init();
         const names: Record<number, string> = { 54: 'Immich', 107: 'immich-general', 130: '@**all** news' };
         zulipMock.getStream.mockImplementation((streamId) =>
@@ -2785,10 +2665,10 @@ describe('ZulipCommandService', () => {
         expect(contents()).toEqual([
           [
             HEADER,
-            '- **#Immich** (54): `immich`; `#1234` falls back to `immich-app/immich`',
-            '- **#immich-general** (107): `immich`, `fhs`; `#1234` falls back to `futo-org/fhs-web`',
-            '- **#@​**all** news** (130)' + NOT_SUBSCRIBED_MARK + ': `fhs`; `#1234` falls back to `futo-org/fhs-core`',
-            `- stream 140${NOT_SUBSCRIBED_MARK}: \`immich\`; \`#1234\` falls back to \`immich-app/immich\``,
+            '- **#Immich** (54): `immich`',
+            '- **#immich-general** (107): `immich`, `fhs`',
+            '- **#@​**all** news** (130)' + NOT_SUBSCRIBED_MARK + ': `fhs`',
+            `- stream 140${NOT_SUBSCRIBED_MARK}: \`immich\``,
           ].join('\n'),
         ]);
       });
@@ -2799,9 +2679,7 @@ describe('ZulipCommandService', () => {
 
         await send('@**Immich** expanders list');
 
-        expect(contents()).toEqual([
-          [HEADER, '- **#immich-general** (107): `immich`; `#1234` falls back to `immich-app/immich`'].join('\n'),
-        ]);
+        expect(contents()).toEqual([[HEADER, '- **#immich-general** (107): `immich`'].join('\n')]);
       });
     });
 
@@ -2828,6 +2706,7 @@ describe('ZulipCommandService', () => {
       '@**Immich** expanders toggle',
       '@**Immich** expanders on',
       '@**Immich** expanders default',
+      '@**Immich** expanders default fhs-core',
       '@**Immich** expanders list all',
       '@**Immich** expanders on immich fhs',
       '@**Immich** expanders off immich fhs',
@@ -2843,7 +2722,7 @@ describe('ZulipCommandService', () => {
       const REPOSITORY_FORMS =
         '`owner/repo` on GitHub or `gitlab.futo.org/namespace/project`, or `owner/*` or `gitlab.futo.org/namespace/*` for every repository of that owner or group, kept up to date';
       const GROUP_USAGE =
-        'Usage: `expander-group <create|add|remove> <group> <repository>… | threshold <group> <number> | delete <group> | info <group> | list`';
+        'Usage: `expander-group <create|add|remove> <group> <repository>… | delete <group> | info <group> | list`';
 
       describe('create', () => {
         it('should create a group with the names GitHub spells, from names and URLs, without duplicates', async () => {
@@ -2852,19 +2731,17 @@ describe('ZulipCommandService', () => {
           );
 
           expect(contents()).toEqual([
-            'Created the expander group `apps` with `futo-org/Grayjay`, `immich-app/static-pages`; `futo-org/Grayjay` is the default for a bare `#1234`. Turn it on in a stream with `expanders on apps`.',
+            'Created the expander group `apps` with `futo-org/Grayjay`, `immich-app/static-pages`. Turn it on in a stream with `expanders on apps`.',
           ]);
           expect(database.groups.find(({ name }) => name === 'apps')).toEqual({
             name: 'apps',
             repositories: ['futo-org/Grayjay', 'immich-app/static-pages'],
-            threshold: 0,
             createdBy: ALICE,
             createdAt: expect.any(Date),
           });
           expect(zulipExpanders.getGroup('apps')).toEqual({
             name: 'apps',
             repositories: ['futo-org/Grayjay', 'immich-app/static-pages'],
-            threshold: 0,
           });
         });
 
@@ -2888,7 +2765,7 @@ describe('ZulipCommandService', () => {
           expect(gitlabMock.getProjectPath).toHaveBeenCalledExactlyOnceWith('videostreaming/grayjay');
           expect(githubServiceMock.getRepositoryName).not.toHaveBeenCalled();
           expect(contents()).toEqual([
-            'Created the expander group `apps` with `gitlab.futo.org/videostreaming/Grayjay`; `gitlab.futo.org/videostreaming/Grayjay` is the default for a bare `#1234`. Turn it on in a stream with `expanders on apps`.',
+            'Created the expander group `apps` with `gitlab.futo.org/videostreaming/Grayjay`. Turn it on in a stream with `expanders on apps`.',
           ]);
           expect(repositoriesOf('apps')).toEqual(['gitlab.futo.org/videostreaming/Grayjay']);
         });
@@ -3062,41 +2939,6 @@ describe('ZulipCommandService', () => {
         });
       });
 
-      describe('threshold', () => {
-        it('should set the threshold', async () => {
-          await send('@**Immich** expander-group threshold FHS 500');
-
-          expect(contents()).toEqual([
-            'In the expander group `fhs`, a bare `#N` below 500 now expands only for a pull request, issue or discussion I have seen activity on.',
-          ]);
-          expect(database.groups.find(({ name }) => name === 'fhs')?.threshold).toBe(500);
-          expect(zulipExpanders.getGroup('fhs')?.threshold).toBe(500);
-        });
-
-        it('should say every bare number expands at 0', async () => {
-          await send('@**Immich** expander-group threshold immich 0');
-
-          expect(contents()).toEqual(['In the expander group `immich`, every bare `#N` now expands.']);
-          expect(zulipExpanders.getGroup('immich')?.threshold).toBe(0);
-        });
-
-        it('should refuse an unknown group', async () => {
-          await send('@**Immich** expander-group threshold nope 5');
-
-          expect(contents()).toEqual([NO_GROUP('nope')]);
-        });
-
-        it.each(['-1', '1.5', 'abc', '1e3', '""', '5 6', '2147483648', '99999999999999999999'])(
-          'should answer the threshold %s with the usage',
-          async (value) => {
-            await send(`@**Immich** expander-group threshold fhs ${value}`);
-
-            expect(contents()).toEqual([GROUP_USAGE]);
-            expect(zulipExpanders.getGroup('fhs')?.threshold).toBe(0);
-          },
-        );
-      });
-
       describe('patterns', () => {
         const IMMICH_APP = Array.from(
           { length: 33 },
@@ -3124,14 +2966,14 @@ describe('ZulipCommandService', () => {
           );
         });
 
-        it('should create a group of patterns, as GitHub and GitLab spell them, and say it has no default', async () => {
+        it('should create a group of patterns, as GitHub and GitLab spell them', async () => {
           await sendAndFinish(
             '@**Immich** expander-group create orgs IMMICH-APP/* https://gitlab.futo.org/videostreaming/*',
           );
 
           expect(contents()).toEqual([
             ACK('`IMMICH-APP/*`, `gitlab.futo.org/videostreaming/*`'),
-            'Created the expander group `orgs` with `immich-app/*` (33 repositories), `gitlab.futo.org/videostreaming/*` (1 repository); with only patterns it has no default for a bare `#1234`, which `expanders default <repository>` picks for a stream. Turn it on in a stream with `expanders on orgs`.',
+            'Created the expander group `orgs` with `immich-app/*` (33 repositories), `gitlab.futo.org/videostreaming/*` (1 repository). Turn it on in a stream with `expanders on orgs`.',
           ]);
           expect(database.groups.find(({ name }) => name === 'orgs')?.repositories).toEqual([
             'immich-app/*',
@@ -3186,7 +3028,7 @@ describe('ZulipCommandService', () => {
 
           expect(contents()[2].split('\n').slice(0, 3)).toEqual([
             'Expander group `immich`:',
-            "- Repositories: `immich-app/immich` (the group's default for `#1234`), `immich-app/*` (33 repositories)",
+            '- Repositories: `immich-app/immich`, `immich-app/*` (33 repositories)',
             `- \`immich-app/*\`: ${IMMICH_APP.slice(0, 30)
               .map((repository) => `\`${repository}\``)
               .join(', ')} and 3 more`,
@@ -3197,7 +3039,6 @@ describe('ZulipCommandService', () => {
           database.groups.push({
             name: 'unread',
             repositories: ['gitlab.futo.org/elsewhere/*'],
-            threshold: 0,
             createdBy: 'x',
             createdAt: new Date(0),
           });
@@ -3211,37 +3052,22 @@ describe('ZulipCommandService', () => {
           );
         });
 
-        it('should count the repositories a pattern stands for, and a group of patterns has no default', async () => {
+        it('should count the repositories a pattern stands for', async () => {
           await sendAndFinish('@**Immich** expander-group create orgs immich-app/*');
           await send('@**Immich** expander-group list');
 
-          expect(contents()[2].split('\n')).toContain(
-            '- `orgs`: 33 repositories, no default for `#1234`; on in 0 streams',
-          );
+          expect(contents()[2].split('\n')).toContain('- `orgs`: 33 repositories; on in 0 streams');
         });
 
-        it('should say a stream of patterns only has no default for a bare #1234', async () => {
+        it('should turn a group of patterns on and list it as any other', async () => {
           await sendAndFinish('@**Immich** expander-group create orgs immich-app/*');
           zulipMock.getSubscriptions.mockResolvedValue([{ streamId: 120 }]);
           zulipMock.getStream.mockResolvedValue({ streamId: 120, name: 'orgs', inviteOnly: false });
           await send('@**Immich** expanders on orgs', { streamId: 120 });
           await send('@**Immich** expanders list', { streamId: 120 });
 
-          expect(contents()[2]).toBe(
-            [
-              'Turned on the group `orgs` (`immich-app/*`) in this stream.',
-              'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request, issue or discussion I have seen activity on; `expanders default <repository>` picks one.',
-            ].join('\n'),
-          );
-          expect(contents()[3]).toContain('- **#orgs** (120): `orgs`; a bare `#1234` falls back to no repository');
-        });
-
-        it("should take a pattern's repository as a stream's default", async () => {
-          await sendAndFinish('@**Immich** expander-group create orgs immich-app/*');
-          await send('@**Immich** expanders on orgs', { streamId: 120 });
-          await send('@**Immich** expanders default repo-07', { streamId: 120 });
-
-          expect(contents()[3]).toBe('A bare `#1234` now falls back to `immich-app/repo-07` in this stream.');
+          expect(contents()[2]).toBe('Turned on the group `orgs` (`immich-app/*`) in this stream.');
+          expect(contents()[3].split('\n')).toContain('- **#orgs** (120): `orgs`');
         });
 
         it('should refuse another change of the groups while a pattern is read', async () => {
@@ -3278,7 +3104,7 @@ describe('ZulipCommandService', () => {
           ]);
         });
 
-        it('should list every group with its size, its default and how many streams it is on in', async () => {
+        it('should list every group with its size and how many streams it is on in', async () => {
           database.expanders.push(row(54));
           await zulipExpanders.init();
 
@@ -3287,8 +3113,8 @@ describe('ZulipCommandService', () => {
           expect(contents()).toEqual([
             [
               'Expander groups:',
-              '- `fhs`: 2 repositories, default `futo-org/fhs-core`; on in 0 streams',
-              '- `immich`: 1 repository, default `immich-app/immich`; on in 2 streams',
+              '- `fhs`: 2 repositories; on in 0 streams',
+              '- `immich`: 1 repository; on in 2 streams',
               '',
               '`expander-group info <group>` shows one in full.',
             ].join('\n'),
@@ -3298,7 +3124,7 @@ describe('ZulipCommandService', () => {
       });
 
       describe('info', () => {
-        it('should show every repository, the threshold and the streams by name', async () => {
+        it('should show every repository and the streams by name', async () => {
           database.expanders.push(row(140));
           await zulipExpanders.init();
           zulipMock.getStream.mockImplementation((streamId) =>
@@ -3313,24 +3139,20 @@ describe('ZulipCommandService', () => {
           expect(contents()).toEqual([
             [
               'Expander group `immich`:',
-              "- Repositories: `immich-app/immich` (the group's default for `#1234`)",
-              '- A bare `#N` below 1000 expands only for a pull request, issue or discussion I have seen activity on.',
+              '- Repositories: `immich-app/immich`',
               `- On in: **#immich-general** (107), stream 140${NOT_SUBSCRIBED_MARK}`,
-              'A stream can send a bare `#1234` elsewhere with `expanders default <repository>`; `expanders list` shows where each one goes.',
             ].join('\n'),
           ]);
         });
 
-        it('should say when a group expands every bare #N and is on in no stream', async () => {
+        it('should say when a group is on in no stream', async () => {
           await send('@**Immich** expander-group info fhs');
 
           expect(contents()).toEqual([
             [
               'Expander group `fhs`:',
-              "- Repositories: `futo-org/fhs-core` (the group's default for `#1234`), `futo-org/fhs-web`",
-              '- Every bare `#N` expands.',
+              '- Repositories: `futo-org/fhs-core`, `futo-org/fhs-web`',
               '- On in no stream; `expanders on fhs` turns it on in the stream it is given in.',
-              'A stream can send a bare `#1234` elsewhere with `expanders default <repository>`; `expanders list` shows where each one goes.',
             ].join('\n'),
           ]);
           expect(zulipMock.getStream).not.toHaveBeenCalled();
@@ -3344,14 +3166,8 @@ describe('ZulipCommandService', () => {
       });
 
       describe('delete', () => {
-        it('should delete a group, turn it off in every stream and forget the defaults that go with it', async () => {
+        it('should delete a group and turn it off in every stream', async () => {
           database.expanders.push(row(107, 'fhs'), row(120, 'fhs'));
-          database.defaults.push({
-            streamId: 120,
-            repository: 'futo-org/fhs-core',
-            createdBy: 'x',
-            createdAt: new Date(0),
-          });
           await zulipExpanders.init();
 
           await send('@**Immich** expander-group delete FHS');
@@ -3359,7 +3175,6 @@ describe('ZulipCommandService', () => {
           expect(contents()).toEqual(['Deleted the expander group `fhs` and turned it off in 2 streams.']);
           expect(database.groups.map(({ name }) => name)).toEqual(['immich']);
           expect(stored()).toEqual(['107:immich']);
-          expect(database.defaults).toEqual([]);
           expect(zulipExpanders.getGroup('fhs')).toBeUndefined();
           expect(zulipExpanders.isEnabled(120)).toBe(false);
           expect(zulipExpanders.getPlaceGroups(107)).toEqual(['immich']);
@@ -3392,6 +3207,7 @@ describe('ZulipCommandService', () => {
         '@**Immich** expander-group add fhs',
         '@**Immich** expander-group remove fhs',
         '@**Immich** expander-group threshold fhs',
+        '@**Immich** expander-group threshold fhs 5',
         '@**Immich** expander-group delete fhs extra',
         '@**Immich** expander-group rename fhs apps',
         '@**Immich** expander-group info',

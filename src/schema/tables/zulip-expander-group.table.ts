@@ -6,13 +6,9 @@ export class ZulipExpanderGroupTable {
   @PrimaryColumn()
   name!: string;
 
-  /** `owner/name` as GitHub spells it; the first is the default repository for `#123`. */
+  /** `owner/name` as GitHub spells it. */
   @Column({ array: true })
   repositories!: string[];
-
-  /** A bare `#123` below this expands only when a stream repository has that item in `github_item`. */
-  @Column({ type: 'integer', default: 0 })
-  threshold!: Generated<number>;
 
   @Column()
   createdBy!: string;

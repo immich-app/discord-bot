@@ -108,12 +108,7 @@ describe('ZulipService', () => {
   let expanderDatabase: Mocked<
     Pick<
       IDatabaseRepository,
-      | 'getZulipExpanderGroups'
-      | 'getZulipExpanders'
-      | 'getZulipExpanderDefaults'
-      | 'getZulipDmExpanders'
-      | 'getZulipDmExpanderDefaults'
-      | 'addZulipExpander'
+      'getZulipExpanderGroups' | 'getZulipExpanders' | 'getZulipDmExpanders' | 'addZulipExpander'
     >
   >;
   let expanders: ZulipExpanderService;
@@ -134,15 +129,12 @@ describe('ZulipService', () => {
         {
           name: 'immich',
           repositories: ['immich-app/immich'],
-          threshold: 1000,
           createdBy: 'migration',
           createdAt: new Date(0),
         },
       ]),
       getZulipExpanders: vitest.fn().mockResolvedValue(SEEDED_EXPANDERS),
-      getZulipExpanderDefaults: vitest.fn().mockResolvedValue([]),
       getZulipDmExpanders: vitest.fn().mockResolvedValue([]),
-      getZulipDmExpanderDefaults: vitest.fn().mockResolvedValue([]),
       addZulipExpander: vitest.fn(),
     };
     expanders = new ZulipExpanderService(
