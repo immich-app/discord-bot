@@ -2132,6 +2132,16 @@ describe('Bot test', () => {
         });
       });
 
+      it('should answer :stamppers: with its image', async () => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':stamppers:' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: 'https://zuclaude.exe.xyz/stickers/stamppers.gif',
+        });
+      });
+
       it('should answer :we-are-crying: with its image', async () => {
         await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':we-are-crying:' }));
 
