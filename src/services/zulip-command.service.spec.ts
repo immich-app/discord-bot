@@ -390,6 +390,9 @@ const bareNumbers = (kind: string) =>
 
 const BARE_NUMBERS = bareNumbers('stream');
 
+const PREFIXES =
+  '`!1234` asks for a pull request (a merge request on GitLab) and `^1234` for an issue, bare or after a name (`immich!1234`), where `#1234` takes any kind; `owner/name!1234` and `owner/name^1234` outside the groups work for `immich-app` or `futo-org` only.';
+
 const DIRECT_MESSAGE_HELP = [
   '**In a direct message**, send me one of these; in a group conversation, mention me first.',
   '',
@@ -403,6 +406,7 @@ const DIRECT_MESSAGE_HELP = [
   '```spoiler How it works',
   '- `expanders on <group>`, `expanders off [group]` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
   `- ${bareNumbers('conversation')}`,
+  `- ${PREFIXES}`,
   '- Links expand here without a group, unless a guest is in the conversation.',
   '- Everyone in the conversation sees what `expanders` changes; anything else is answered to you alone.',
   '```',
@@ -1012,7 +1016,7 @@ describe('ZulipCommandService', () => {
       expect(contents()).toEqual([
         [
           '`expanders <on <group>|off [group]|list>`',
-          `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${BARE_NUMBERS} GitHub and \`gitlab.futo.org\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+          `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${BARE_NUMBERS} ${PREFIXES} GitHub and \`gitlab.futo.org\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
           '- `on <group>`: turn that group on here',
           '- `off [group]`: turn that group off here, or every group when none is named',
           '- `list`: list the streams with groups',

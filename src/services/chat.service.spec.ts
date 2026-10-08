@@ -527,6 +527,7 @@ describe('Bot test', () => {
     it.each([
       { name: 'a Discord channel mention', message: 'see <#1369628205035688098>' },
       { name: 'a number too large for an issue', message: '#1369628205035688098' },
+      { name: 'the pull request and issue prefixes, which only Zulip reads', message: '!4242 ^4242 immich!4242' },
     ])('should not look up $name', async ({ message }) => {
       await expect(sut.handleGithubThreadReferences({ content: message }, false)).resolves.toEqual({
         parts: [],
@@ -1588,6 +1589,33 @@ describe('Bot test', () => {
       { text: 'wow#1', references: [{ path: 'wow', id: 1 }] },
       { text: 'example.com/docs#12', references: [{ path: 'example.com/docs', id: 12 }] },
       { text: 'a/b/c#5', references: [{ path: 'a/b/c', id: 5 }] },
+      { text: 'see !5', references: [{ kind: GithubItemKind.PullRequest, id: 5 }] },
+      { text: 'see ^5', references: [{ kind: GithubItemKind.Issue, id: 5 }] },
+      { text: '(!5)', references: [{ kind: GithubItemKind.PullRequest, id: 5 }] },
+      { text: 'immich!5', references: [{ path: 'immich', kind: GithubItemKind.PullRequest, id: 5 }] },
+      { text: 'immich^5', references: [{ path: 'immich', kind: GithubItemKind.Issue, id: 5 }] },
+      {
+        text: 'immich-app/immich^5',
+        references: [{ path: 'immich-app/immich', kind: GithubItemKind.Issue, id: 5 }],
+      },
+      {
+        text: '!12,^13 #14',
+        references: [{ kind: GithubItemKind.PullRequest, id: 12 }, { kind: GithubItemKind.Issue, id: 13 }, { id: 14 }],
+      },
+      {
+        text: '!12/^13',
+        references: [
+          { kind: GithubItemKind.PullRequest, id: 12 },
+          { kind: GithubItemKind.Issue, id: 13 },
+        ],
+      },
+      { text: 'wow!1', references: [{ path: 'wow', kind: GithubItemKind.PullRequest, id: 1 }] },
+      { text: 'HEAD^1', references: [{ path: 'HEAD', kind: GithubItemKind.Issue, id: 1 }] },
+      { text: 'origin/main^2', references: [{ path: 'origin/main', kind: GithubItemKind.Issue, id: 2 }] },
+      { text: 'x^2', references: [{ path: 'x', kind: GithubItemKind.Issue, id: 2 }] },
+      { text: '(^5)', references: [{ kind: GithubItemKind.Issue, id: 5 }] },
+      { text: 'see ^5.', references: [{ kind: GithubItemKind.Issue, id: 5 }] },
+      { text: 'node ^22', references: [{ kind: GithubItemKind.Issue, id: 22 }] },
     ])('should read the shorthand in $text', ({ text, references }) => {
       expect(zulipThreadReferences(text)).toEqual(references);
     });
@@ -1622,6 +1650,46 @@ describe('Bot test', () => {
       '#5–10',
       '#5—10',
       '#0',
+      '![img](https://x/1.png)',
+      '!!1',
+      'a != 1',
+      'https://x.com/a?b=!5',
+      '^^5',
+      '#^5',
+      '!^5',
+      '^#5',
+      '[^1]',
+      'see[^12]',
+      'x=^5',
+      'US$^5',
+      'foo@^1',
+      '?a=1&b=^3',
+      '^5GB',
+      '^5%',
+      '^5k',
+      '^5-10',
+      '^5–10',
+      '^5,000',
+      '^5.5',
+      '(a+b)^2',
+      '(n-1)^2 steps',
+      'x_{i}^2',
+      'arr[i]^2',
+      'a]^5',
+      '|x|^2',
+      '$$\\sum_{i=1}^5 i$$',
+      '$$ (x+1)^2 $$',
+      '"typescript": "^5"',
+      "'^5'",
+      'node ^22.x',
+      '^22.X',
+      '^5.*',
+      '#5.x',
+      '!5.x',
+      '~5',
+      '~100 users',
+      '~~12~~',
+      '~~strike~~',
     ])('should read no reference in %j', (text) => {
       expect(zulipThreadReferences(text)).toEqual([]);
     });
@@ -2967,6 +3035,181 @@ describe('Bot test', () => {
       expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-web', 8, undefined, true);
     });
 
+    describe('prefixes', () => {
+      const posted = (...messages: IssueOrPullRequestMessage[]) =>
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: STREAM,
+          topic: 'thumbnails',
+          content: messages.map(({ message }) => message).join('\n'),
+        });
+
+      it.each([
+        { content: '!12', id: 12, kind: GithubItemKind.PullRequest, other: GithubItemKind.Issue },
+        { content: 'see ^13', id: 13, kind: GithubItemKind.Issue, other: GithubItemKind.PullRequest },
+      ])(
+        'should send a bare $content to the stream repository whose item of its kind was updated last',
+        async ({ content, id, kind, other }) => {
+          await setUp({ groups: [FHS, IMMICH], streamGroups: ['fhs', 'immich'] });
+          databaseMock.getGithubItemsByNumber.mockResolvedValue([
+            item('futo-org', 'fhs-web', id, kind, weeksAgo(3)),
+            item('futo-org', 'fhs-core', id, other, weeksAgo(2)),
+            item('immich-app', 'immich', id, GithubItemKind.Discussion, weeksAgo(1)),
+            item('octokit', 'rest.js', id, kind, new Date()),
+          ]);
+
+          await send(content);
+
+          expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+            'futo-org',
+            'fhs-web',
+            id,
+            undefined,
+            true,
+          );
+          expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+          posted(issueOrPr('futo-org', 'fhs-web', id));
+        },
+      );
+
+      it.each([
+        { content: '!12', kind: GithubItemKind.PullRequest, other: GithubItemKind.Issue },
+        { content: '^12', kind: GithubItemKind.Issue, other: GithubItemKind.PullRequest },
+      ])(
+        'should expand nothing for a bare $content when no item of its kind was seen in the stream repositories',
+        async ({ content, kind, other }) => {
+          await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+          databaseMock.getGithubItemsByNumber.mockResolvedValue([
+            item('futo-org', 'fhs-web', 12, other, new Date()),
+            item('futo-org', 'fhs-core', 12, GithubItemKind.Discussion, new Date()),
+            item('octokit', 'rest.js', 12, kind, new Date()),
+          ]);
+
+          await send(content);
+
+          expect(databaseMock.getGithubItemsByNumber).toHaveBeenCalledExactlyOnceWith(12);
+          expectNothingExpanded();
+        },
+      );
+
+      it.each([
+        { content: 'fhs-web!12', org: 'futo-org', repo: 'fhs-web', id: 12, streamGroups: ['fhs'] },
+        { content: 'Futo-Org/FHS-Core^13', org: 'futo-org', repo: 'fhs-core', id: 13, streamGroups: ['fhs'] },
+        { content: 'immich-app/immich^13', org: 'immich-app', repo: 'immich', id: 13, streamGroups: [] },
+        { content: 'Futo-Org/elsewhere!12', org: 'Futo-Org', repo: 'elsewhere', id: 12, streamGroups: [] },
+        { content: 'github.com/immich-app/immich!12', org: 'immich-app', repo: 'immich', id: 12, streamGroups: [] },
+      ])(
+        'should expand $content, of the stream groups or of an installation owner',
+        async ({ content, org, repo, id, streamGroups }) => {
+          await setUp({ groups: [FHS], streamGroups });
+
+          await send(content);
+
+          expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+          expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(org, repo, id, undefined, true);
+          posted(issueOrPr(org, repo, id));
+        },
+      );
+
+      it.each([
+        'octokit/rest.js!12',
+        'octokit/rest.js^13',
+        'origin/main^1',
+        'upstream/master^2',
+        'wow!1',
+        'HEAD^1',
+        'x^2',
+        '2^10',
+        'grayjay!7',
+      ])('should look nothing up for %j, which names no repository of the stream groups', async (content) => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+
+        await send(content);
+
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expectNothingExpanded();
+      });
+
+      it('should post and track only the answers of the kind each prefix asked for', async () => {
+        await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
+
+        await send('immich^8 immich!9 immich!10 immich^11');
+
+        expect(githubMock.getIssueOrPrMessage.mock.calls).toEqual(
+          [8, 9, 10, 11].map((id) => ['immich-app', 'immich', id, undefined, true]),
+        );
+        posted(issueOrPr('immich-app', 'immich', 10), issueOrPr('immich-app', 'immich', 11));
+        expect(approvalsMock.track).toHaveBeenCalledExactlyOnceWith(
+          { service: 'zulip', messageId: '901', channelId: null },
+          [{ organization: 'immich-app', repository: 'immich', number: 10 }],
+        );
+      });
+
+      it('should never ask for a discussion after a prefix, whatever item was seen', async () => {
+        await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
+        databaseMock.getGithubItemsByNumber.mockResolvedValue([
+          item('immich-app', 'immich', 7, GithubItemKind.Issue, new Date()),
+        ]);
+        githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
+
+        await send('^7 immich!8');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledTimes(2);
+        expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it.each(['(n-1)^3 steps', 'arr[i]^3', '$$\\sum_{i=1}^3 i$$', '"typescript": "^3"', 'node ^3.x'])(
+        'should read no issue in the exponent or version range %j',
+        async (content) => {
+          await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
+          databaseMock.getGithubItemsByNumber.mockResolvedValue([
+            item('immich-app', 'immich', 3, GithubItemKind.Issue, weeksAgo(1)),
+          ]);
+
+          await send(content);
+
+          expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+          expectNothingExpanded();
+        },
+      );
+
+      it.each([
+        { content: 'immich!5 immich^5', id: 5 },
+        { content: 'immich^6 immich!6', id: 6 },
+        { content: 'immich!5 immich#5', id: 5 },
+        { content: 'immich#6 immich^6', id: 6 },
+        { content: 'immich^6 https://github.com/immich-app/immich/pull/6', id: 6 },
+      ])('should fetch $content once and show it whatever its kind', async ({ content, id }) => {
+        await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
+
+        await send(content);
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'immich-app',
+          'immich',
+          id,
+          undefined,
+          true,
+        );
+        posted(issueOrPr('immich-app', 'immich', id));
+      });
+
+      it.each([
+        'immich#7 immich^7',
+        'immich!7 https://github.com/immich-app/immich/discussions/7',
+        'immich!7 immich^7 immich#7',
+        'immich^7 immich!7 https://github.com/immich-app/immich/discussions/7',
+      ])('should still post the discussion %s asks for, as a # or a link beside a prefix does', async (content) => {
+        await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
+        githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
+
+        await send(content);
+
+        expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('immich-app', 'immich', 7, true);
+        posted({ message: 'https://github.com/immich-app/immich/discussions/7' });
+      });
+    });
+
     describe('patterns', () => {
       const ORGS = expanderGroup('orgs', ['immich-app/*']);
 
@@ -3181,6 +3424,41 @@ describe('Bot test', () => {
           [path, 'merge_requests', 7],
         ]);
         expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { content: 'grayjay!7', kind: 'merge_requests' as const, title: '[Merge Request] Fix the player' },
+        { content: 'GrayJay^7', kind: 'issues' as const, title: '[Issue] The player crashes' },
+      ])('should fetch only the $kind of $content', async ({ content, kind, title }) => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+        withItems(
+          located('issues', 'The player crashes', 'videostreaming/grayjay', 7, weeksAgo(kind === 'issues' ? 3 : 0)),
+          located('merge_requests', 'Fix the player', 'videostreaming/grayjay', 7, weeksAgo(kind === 'issues' ? 0 : 3)),
+        );
+
+        await send(content);
+
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
+        expect(gitlabMock.getItem).toHaveBeenCalledExactlyOnceWith('videostreaming/grayjay', kind, 7);
+        expect(reply()).toEqual([
+          `${title} ([videostreaming/grayjay#7](https://gitlab.futo.org/videostreaming/grayjay/-/${kind}/7))`,
+        ]);
+      });
+
+      it('should post a merge request once when name#N and name!N both reach it', async () => {
+        await setUp({ groups: [GRAYJAY], streamGroups: ['grayjay'] });
+        withItems(located('merge_requests', 'Fix the player', 'videostreaming/grayjay', 7));
+
+        await send('grayjay#7 grayjay!7');
+
+        expect(gitlabMock.getItem.mock.calls).toEqual([
+          ['videostreaming/grayjay', 'issues', 7],
+          ['videostreaming/grayjay', 'merge_requests', 7],
+          ['videostreaming/grayjay', 'merge_requests', 7],
+        ]);
+        expect(reply()).toEqual([
+          '[Merge Request] Fix the player ([videostreaming/grayjay#7](https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/7))',
+        ]);
       });
 
       it('should look nothing up for a GitLab path outside the stream groups', async () => {
