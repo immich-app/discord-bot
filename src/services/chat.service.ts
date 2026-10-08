@@ -14,7 +14,14 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubItemKind, GithubOrg, GithubRepo } from 'src/constants';
-import { neutraliseZulipMentions, plural, scanZulipFences, shorten, splitOutsideCode } from 'src/format';
+import {
+  neutraliseZulipMentions,
+  plural,
+  scanZulipFences,
+  shorten,
+  splitOutsideCode,
+  ZULIP_QUOTE_FENCES,
+} from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -128,25 +135,38 @@ const mapConcurrently = async <T, R>(items: T[], limit: number, map: (item: T) =
   return results;
 };
 
+/** Zulip reads a block indented after a list item, by two spaces or more, as the item's text before it can be code. */
+const ZULIP_LIST_ITEM = /^ *(?:[*+-]|\d+\.) /;
+
 /**
  * What Zulip renders as text: no fenced code (an unclosed fence runs to the end of the message), no indented code
- * block (four spaces or a tab, after a blank line or another such line), no code span.
+ * block (four spaces or a tab, after a blank line or another such line, unless it continues a list item), no code
+ * span, and with `skipQuotes` no quote fence either.
  */
-const zulipTextOutsideCode = (content: string) => {
+const zulipTextOutsideCode = (content: string, { skipQuotes = false } = {}) => {
   const lines = content.split(/\r\n?|\n/);
   const { lineFences } = scanZulipFences(lines);
   const kept: string[] = [];
   let indentedCode = false;
+  let list = false;
   for (const [index, line] of lines.entries()) {
-    let fenced = false;
-    for (let fence = lineFences[index]; fence && !fenced; fence = fence.parent) {
-      fenced = fence.code;
+    // Zulip renders a fence as a block of its own, so a list does not run into one or out of one.
+    if (index > 0 && lineFences[index] !== lineFences[index - 1]) {
+      list = false;
+    }
+    let hidden = false;
+    for (let fence = lineFences[index]; fence && !hidden; fence = fence.parent) {
+      hidden = fence.code || (skipQuotes && ZULIP_QUOTE_FENCES.has(fence.lang));
     }
     const blankBefore = index === 0 || lines[index - 1].trim() === '';
-    indentedCode = !fenced && /^( {4}|\t)/.test(line) && (blankBefore || indentedCode);
-    if (!fenced && !indentedCode) {
-      kept.push(line);
+    indentedCode = !hidden && /^( {4}|\t)/.test(line) && (indentedCode || (blankBefore && !list));
+    if (hidden || indentedCode) {
+      continue;
     }
+    if (line.trim() !== '') {
+      list = ZULIP_LIST_ITEM.test(line) || (list && (!blankBefore || /^( {2}|\t)/.test(line)));
+    }
+    kept.push(line);
   }
   return splitOutsideCode(kept.join('\n'))
     .filter(({ code }) => !code)
@@ -587,7 +607,7 @@ export class ChatService {
     const links: GithubLink[] = [];
     const gitlabLinks: GitlabLink[] = [];
 
-    content = content.replaceAll(/```.*```/gs, '');
+    content = scope ? zulipTextOutsideCode(content, { skipQuotes: true }) : content.replaceAll(/```.*```/gs, '');
 
     const matches = content.matchAll(GITHUB_THREAD_REGEX);
 

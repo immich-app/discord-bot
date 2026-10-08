@@ -74,8 +74,11 @@ export const zulipChannelNarrowLink = (streamId: number, topic?: string) =>
 /** Zulip's `FENCE_RE`, applied to a line after Python-Markdown has expanded its tabs. */
 const ZULIP_FENCE = /^(`{3,}|~{3,}) *(?:\{?\.?([\w+,\-./#]+) *([^ ~`][^~`]*)?\}?)?$/;
 
+/** The fences Zulip renders as a quote; its "Quote and reply" writes one. */
+export const ZULIP_QUOTE_FENCES = new Set(['quote', 'quoted']);
+
 /** Fences whose content Zulip renders as Markdown, so it is not code. */
-const ZULIP_MARKDOWN_FENCES = new Set(['quote', 'quoted', 'spoiler']);
+const ZULIP_MARKDOWN_FENCES = new Set([...ZULIP_QUOTE_FENCES, 'spoiler']);
 
 /** Python's `str.isspace()`, which decides whether a line closes a fence. */
 const PYTHON_WHITESPACE = new Set([
