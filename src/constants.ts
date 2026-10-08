@@ -253,6 +253,7 @@ export const Constants = {
     TeamStreams: zulipTeamStreams,
     /** A message using one of these emoji, by name, in a stream the bot can see is answered with the image. */
     EmojiImages: {
+      chugg: 'https://zuclaude.exe.xyz/stickers/chugg.gif',
       nice: 'https://media1.tenor.com/m/l3-VETEqSYkAAAAd/nice-noice.gif',
       'oh-god-the-emails': 'https://zuclaude.exe.xyz/stickers/oh-god-the-emails.png',
       stamppers: 'https://zuclaude.exe.xyz/stickers/stamppers.gif',
