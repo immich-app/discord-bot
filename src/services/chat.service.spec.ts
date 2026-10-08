@@ -2112,6 +2112,16 @@ describe('Bot test', () => {
         });
       });
 
+      it('should answer :nice: with its image', async () => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':nice:' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: 121,
+          topic: 'thumbnails',
+          content: 'https://media1.tenor.com/m/l3-VETEqSYkAAAAd/nice-noice.gif',
+        });
+      });
+
       it('should answer :we-are-crying: with its image', async () => {
         await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':we-are-crying:' }));
 

@@ -253,6 +253,7 @@ export const Constants = {
     TeamStreams: zulipTeamStreams,
     /** A message using one of these emoji, by name, in a stream the bot can see is answered with the image. */
     EmojiImages: {
+      nice: 'https://media1.tenor.com/m/l3-VETEqSYkAAAAd/nice-noice.gif',
       'this-is-fine': 'https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
       'unsee-juice': '![unsee-juice](/user_uploads/2/ed/ngCVicRM4MCEnzYdxl3knd6b/unsee-juice.png)',
       'we-are-checking': 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
