@@ -13,7 +13,7 @@ import { DateTime } from 'luxon';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getConfig } from 'src/config';
-import { Constants, GithubOrg, GithubRepo } from 'src/constants';
+import { Constants, GithubItemKind, GithubOrg, GithubRepo } from 'src/constants';
 import { neutraliseZulipMentions, plural, scanZulipFences, shorten, splitOutsideCode } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
@@ -24,7 +24,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { PullRequest } from 'src/schema';
+import { GithubItem } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
 import { NotificationService } from 'src/services/notification.service';
 import {
@@ -738,9 +738,9 @@ export class ChatService {
 
   /**
    * GitHub links name their repository. `owner/name#123` and `name#123` are looked up among the stream's
-   * repositories, GitLab projects included, by the end of their name; a bare `#123` goes to the one of them with a
-   * pull request of that number updated in the last two weeks, or else to the stream's default repository, below whose
-   * threshold it is dropped.
+   * repositories, GitLab projects included, by the end of their name; a bare `#123` goes to the one of them whose item
+   * of that number was updated last, whatever its kind and age, the one listed first on a tie, or else to the stream's
+   * default repository, below whose threshold it is dropped.
    */
   private async resolveScopedReference(
     scope: ExpanderScope,
@@ -756,8 +756,8 @@ export class ChatService {
       return;
     }
 
-    const pullRequests = await this.database.getPullRequestsByNumber(id);
-    const fullName = (pullRequest: PullRequest) => `${pullRequest.organization}/${pullRequest.repository}`;
+    const items = isPage ? [] : await this.database.getGithubItemsByNumber(id);
+    const fullName = (item: GithubItem) => `${item.organization}/${item.repository}`;
 
     let repository: string;
     if (owner && name) {
@@ -774,16 +774,15 @@ export class ChatService {
       }
       repository = found;
     } else {
-      const twoWeeksAgo = DateTime.now().minus({ week: 2 }).toJSDate();
-      const recent = pullRequests
-        .filter(
-          (pullRequest) =>
-            pullRequest.updatedAt >= twoWeeksAgo &&
-            scope.repositories.some((candidate) => sameRepository(candidate, fullName(pullRequest))),
-        )
-        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-      if (recent) {
-        repository = fullName(recent);
+      const [newest] = items
+        .map((item) => ({
+          item,
+          index: scope.repositories.findIndex((candidate) => sameRepository(candidate, fullName(item))),
+        }))
+        .filter(({ index }) => index !== -1)
+        .sort((a, b) => b.item.updatedAt.getTime() - a.item.updatedAt.getTime() || a.index - b.index);
+      if (newest) {
+        repository = scope.repositories[newest.index];
       } else if (!scope.defaultRepository || id < scope.threshold(scope.defaultRepository)) {
         return;
       } else {
@@ -796,7 +795,9 @@ export class ChatService {
     }
 
     const [org, repo] = repository.split('/');
-    const isPullRequest = pullRequests.some((pullRequest) => sameRepository(fullName(pullRequest), repository));
+    const isPullRequest = items.some(
+      (item) => item.kind === GithubItemKind.PullRequest && sameRepository(fullName(item), repository),
+    );
     return { org, repo, id, type: category ?? (isPullRequest ? 'pull' : undefined) };
   }
 

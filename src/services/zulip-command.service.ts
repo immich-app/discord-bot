@@ -114,8 +114,9 @@ const countRepositories = (count: number) => `${count} ${count === 1 ? 'reposito
 
 const listRepositories = (repositories: string[]) => repositories.map((repository) => code(repository)).join(', ');
 
-const NO_DEFAULT =
-  'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.';
+const SEEN_ITEM = 'a pull request, issue or discussion I have seen activity on';
+
+const NO_DEFAULT = `No group here names a repository of its own, only patterns, so a bare \`#1234\` expands only for ${SEEN_ITEM}; \`expanders default <repository>\` picks one.`;
 
 const NOT_SUBSCRIBED =
   '⚠ I am not subscribed to this stream, so none of its messages reach me and nothing is expanded here until an administrator subscribes me.';
@@ -398,11 +399,11 @@ export class ZulipCommandService {
     },
     expanders: {
       usage: 'expanders <on <group>|off [group]|default <repository>|list>',
-      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. A bare \`#1234\` goes to the one of them whose pull request, issue or discussion of that number I have seen activity on last, else to the default. GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
       subcommands: {
         'on <group>': 'turn that group on here',
         'off [group]': 'turn that group off here, or every group when none is named',
-        'default <repository>': 'choose which of the repositories turned on here a bare `#1234` goes to',
+        'default <repository>': 'choose which of the repositories turned on here a bare `#1234` falls back to',
         list: 'list the streams with groups',
       },
       example: 'expanders on immich',
@@ -422,8 +423,7 @@ export class ZulipCommandService {
         'create <group> <repository>…': 'create a group of those repositories',
         'add <group> <repository>…': 'add those repositories to the group',
         'remove <group> <repository>…': 'remove those repositories from the group',
-        'threshold <group> <number>':
-          'have a bare `#1234` below the number expand only for a pull request updated in the last two weeks',
+        'threshold <group> <number>': `have a bare \`#1234\` below the number expand only for ${SEEN_ITEM}`,
         'delete <group>': 'delete the group, which turns it off everywhere',
         'info <group>': "show the group's repositories and streams",
         list: 'list every group',
@@ -996,7 +996,7 @@ export class ZulipCommandService {
       : `Nothing changed: the group ${code(name)} was already on in this ${kind}.`;
     const lines = [reply];
     if (scope?.defaultRepository) {
-      lines.push(`A bare ${code('#1234')} goes to ${code(scope.defaultRepository)} here.`);
+      lines.push(`A bare ${code('#1234')} falls back to ${code(scope.defaultRepository)} here.`);
     } else if (scope) {
       lines.push(NO_DEFAULT);
     }
@@ -1029,7 +1029,7 @@ export class ZulipCommandService {
       return `${code(given)} is in none of this ${kind}'s groups; the default must be one of ${scope.repositories.map((candidate) => code(candidate)).join(', ')}.`;
     }
     await this.zulipExpanders.setDefault(place, repository, describeZulipSender(message));
-    return `A bare ${code('#1234')} now goes to ${code(repository)} in this ${kind}.`;
+    return `A bare ${code('#1234')} now falls back to ${code(repository)} in this ${kind}.`;
   }
 
   private async expanderList() {
@@ -1047,8 +1047,8 @@ export class ZulipCommandService {
           .join(', ');
         const scope = this.zulipExpanders.getScope(streamId);
         const target = scope?.defaultRepository
-          ? `; ${code('#1234')} goes to ${code(scope.defaultRepository)}`
-          : `; a bare ${code('#1234')} goes to no repository`;
+          ? `; ${code('#1234')} falls back to ${code(scope.defaultRepository)}`
+          : `; a bare ${code('#1234')} falls back to no repository`;
         return `- ${labels[index]}: ${groupNames}${target}`;
       }),
     ].join('\n');
@@ -1099,7 +1099,7 @@ export class ZulipCommandService {
       `- Repositories: ${entries.join(', ')}`,
       ...patterns,
       group.threshold > 0
-        ? `- A bare ${code('#N')} below ${group.threshold} expands only for a pull request updated in the last two weeks.`
+        ? `- A bare ${code('#N')} below ${group.threshold} expands only for ${SEEN_ITEM}.`
         : `- Every bare ${code('#N')} expands.`,
       streams.length === 0
         ? `- On in no stream; ${code(`expanders on ${name}`)} turns it on in the stream it is given in.`
@@ -1215,7 +1215,7 @@ export class ZulipCommandService {
           }
           return threshold === 0
             ? `In the expander group ${code(name)}, every bare ${code('#N')} now expands.`
-            : `In the expander group ${code(name)}, a bare ${code('#N')} below ${threshold} now expands only for a pull request updated in the last two weeks.`;
+            : `In the expander group ${code(name)}, a bare ${code('#N')} below ${threshold} now expands only for ${SEEN_ITEM}.`;
         });
       }
       case 'delete': {

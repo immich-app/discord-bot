@@ -1049,10 +1049,10 @@ describe('ZulipCommandService', () => {
       expect(contents()).toEqual([
         [
           '`expanders <on <group>|off [group]|default <repository>|list>`',
-          'Choose the groups of repositories a bare `#1234` and `name#1234` look among in this stream. GitHub and `gitlab.futo.org` issue, pull request, merge request and discussion links, file permalinks and `owner/name#1234` expand in every subscribed stream, with or without a group, and `x.com` links are mirrored on `nitter.net`.',
+          'Choose the groups of repositories a bare `#1234` and `name#1234` look among in this stream. A bare `#1234` goes to the one of them whose pull request, issue or discussion of that number I have seen activity on last, else to the default. GitHub and `gitlab.futo.org` issue, pull request, merge request and discussion links, file permalinks and `owner/name#1234` expand in every subscribed stream, with or without a group, and `x.com` links are mirrored on `nitter.net`.',
           '- `on <group>`: turn that group on here',
           '- `off [group]`: turn that group off here, or every group when none is named',
-          '- `default <repository>`: choose which of the repositories turned on here a bare `#1234` goes to',
+          '- `default <repository>`: choose which of the repositories turned on here a bare `#1234` falls back to',
           '- `list`: list the streams with groups',
           '- Taken in any stream.',
           '- Example: `expanders on immich`',
@@ -2493,7 +2493,7 @@ describe('ZulipCommandService', () => {
         expect(answers()).toEqual([
           [
             [12],
-            'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` goes to `futo-org/fhs-core` here.',
+            'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` falls back to `futo-org/fhs-core` here.',
           ],
         ]);
       });
@@ -2512,8 +2512,8 @@ describe('ZulipCommandService', () => {
           [12, 13],
         ]);
         expect(answers().map(([, content]) => content)).toEqual([
-          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` goes to `futo-org/fhs-core` here.',
-          'A bare `#1234` now goes to `futo-org/fhs-web` in this conversation.',
+          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this conversation.\nA bare `#1234` falls back to `futo-org/fhs-core` here.',
+          'A bare `#1234` now falls back to `futo-org/fhs-web` in this conversation.',
           'Turned off every group in this conversation (`fhs`): links still expand here, a bare `#1234` no longer does.',
         ]);
         expect(conversations()).toEqual([]);
@@ -2555,7 +2555,7 @@ describe('ZulipCommandService', () => {
             stream: 120,
             topic: 'setup',
             content:
-              'Turned on the group `immich` (`immich-app/immich`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+              'Turned on the group `immich` (`immich-app/immich`) in this stream.\nA bare `#1234` falls back to `immich-app/immich` here.',
           },
         ]);
         expect(database.expanders).toEqual([
@@ -2569,7 +2569,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders on FHS');
 
         expect(contents()).toEqual([
-          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+          'Turned on the group `fhs` (`futo-org/fhs-core`, `futo-org/fhs-web`) in this stream.\nA bare `#1234` falls back to `immich-app/immich` here.',
         ]);
         expect(stored()).toEqual(['107:fhs', '107:immich']);
         expect(zulipExpanders.getPlaceGroups(107)).toEqual(['immich', 'fhs']);
@@ -2579,7 +2579,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** EXPANDERS ON Immich');
 
         expect(contents()).toEqual([
-          'Nothing changed: the group `immich` was already on in this stream.\nA bare `#1234` goes to `immich-app/immich` here.',
+          'Nothing changed: the group `immich` was already on in this stream.\nA bare `#1234` falls back to `immich-app/immich` here.',
         ]);
         expect(stored()).toEqual(['107:immich']);
       });
@@ -2609,8 +2609,8 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders off', { streamId: 130 });
 
         expect(contents()).toEqual([
-          `Turned on the group \`immich\` (\`immich-app/immich\`) in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
-          `Nothing changed: the group \`immich\` was already on in this stream.\nA bare \`#1234\` goes to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
+          `Turned on the group \`immich\` (\`immich-app/immich\`) in this stream.\nA bare \`#1234\` falls back to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
+          `Nothing changed: the group \`immich\` was already on in this stream.\nA bare \`#1234\` falls back to \`immich-app/immich\` here.\n${NOT_SUBSCRIBED}`,
           'Turned off every group in this stream (`immich`): links still expand here, a bare `#1234` no longer does.',
         ]);
         expect(zulipMock.getSubscriptions).toHaveBeenCalledTimes(2);
@@ -2712,7 +2712,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders on fhs');
         await send(`@**Immich** expanders default ${given}`);
 
-        expect(contents()[1]).toBe(`A bare \`#1234\` now goes to \`${expected}\` in this stream.`);
+        expect(contents()[1]).toBe(`A bare \`#1234\` now falls back to \`${expected}\` in this stream.`);
         expect(database.defaults).toEqual([
           { streamId: 107, repository: expected, createdBy: ALICE, createdAt: expect.any(Date) },
         ]);
@@ -2731,7 +2731,7 @@ describe('ZulipCommandService', () => {
         await send(`@**Immich** expanders default ${given}`);
 
         expect(contents()[1]).toBe(
-          'A bare `#1234` now goes to `gitlab.futo.org/videostreaming/Grayjay` in this stream.',
+          'A bare `#1234` now falls back to `gitlab.futo.org/videostreaming/Grayjay` in this stream.',
         );
         expect(database.defaults).toEqual([
           {
@@ -2785,10 +2785,10 @@ describe('ZulipCommandService', () => {
         expect(contents()).toEqual([
           [
             HEADER,
-            '- **#Immich** (54): `immich`; `#1234` goes to `immich-app/immich`',
-            '- **#immich-general** (107): `immich`, `fhs`; `#1234` goes to `futo-org/fhs-web`',
-            '- **#@​**all** news** (130)' + NOT_SUBSCRIBED_MARK + ': `fhs`; `#1234` goes to `futo-org/fhs-core`',
-            `- stream 140${NOT_SUBSCRIBED_MARK}: \`immich\`; \`#1234\` goes to \`immich-app/immich\``,
+            '- **#Immich** (54): `immich`; `#1234` falls back to `immich-app/immich`',
+            '- **#immich-general** (107): `immich`, `fhs`; `#1234` falls back to `futo-org/fhs-web`',
+            '- **#@​**all** news** (130)' + NOT_SUBSCRIBED_MARK + ': `fhs`; `#1234` falls back to `futo-org/fhs-core`',
+            `- stream 140${NOT_SUBSCRIBED_MARK}: \`immich\`; \`#1234\` falls back to \`immich-app/immich\``,
           ].join('\n'),
         ]);
       });
@@ -2800,7 +2800,7 @@ describe('ZulipCommandService', () => {
         await send('@**Immich** expanders list');
 
         expect(contents()).toEqual([
-          [HEADER, '- **#immich-general** (107): `immich`; `#1234` goes to `immich-app/immich`'].join('\n'),
+          [HEADER, '- **#immich-general** (107): `immich`; `#1234` falls back to `immich-app/immich`'].join('\n'),
         ]);
       });
     });
@@ -3067,7 +3067,7 @@ describe('ZulipCommandService', () => {
           await send('@**Immich** expander-group threshold FHS 500');
 
           expect(contents()).toEqual([
-            'In the expander group `fhs`, a bare `#N` below 500 now expands only for a pull request updated in the last two weeks.',
+            'In the expander group `fhs`, a bare `#N` below 500 now expands only for a pull request, issue or discussion I have seen activity on.',
           ]);
           expect(database.groups.find(({ name }) => name === 'fhs')?.threshold).toBe(500);
           expect(zulipExpanders.getGroup('fhs')?.threshold).toBe(500);
@@ -3230,10 +3230,10 @@ describe('ZulipCommandService', () => {
           expect(contents()[2]).toBe(
             [
               'Turned on the group `orgs` (`immich-app/*`) in this stream.',
-              'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request updated in the last two weeks; `expanders default <repository>` picks one.',
+              'No group here names a repository of its own, only patterns, so a bare `#1234` expands only for a pull request, issue or discussion I have seen activity on; `expanders default <repository>` picks one.',
             ].join('\n'),
           );
-          expect(contents()[3]).toContain('- **#orgs** (120): `orgs`; a bare `#1234` goes to no repository');
+          expect(contents()[3]).toContain('- **#orgs** (120): `orgs`; a bare `#1234` falls back to no repository');
         });
 
         it("should take a pattern's repository as a stream's default", async () => {
@@ -3241,7 +3241,7 @@ describe('ZulipCommandService', () => {
           await send('@**Immich** expanders on orgs', { streamId: 120 });
           await send('@**Immich** expanders default repo-07', { streamId: 120 });
 
-          expect(contents()[3]).toBe('A bare `#1234` now goes to `immich-app/repo-07` in this stream.');
+          expect(contents()[3]).toBe('A bare `#1234` now falls back to `immich-app/repo-07` in this stream.');
         });
 
         it('should refuse another change of the groups while a pattern is read', async () => {
@@ -3314,7 +3314,7 @@ describe('ZulipCommandService', () => {
             [
               'Expander group `immich`:',
               "- Repositories: `immich-app/immich` (the group's default for `#1234`)",
-              '- A bare `#N` below 1000 expands only for a pull request updated in the last two weeks.',
+              '- A bare `#N` below 1000 expands only for a pull request, issue or discussion I have seen activity on.',
               `- On in: **#immich-general** (107), stream 140${NOT_SUBSCRIBED_MARK}`,
               'A stream can send a bare `#1234` elsewhere with `expanders default <repository>`; `expanders list` shows where each one goes.',
             ].join('\n'),

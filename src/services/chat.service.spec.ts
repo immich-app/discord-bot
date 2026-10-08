@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
-import { Constants } from 'src/constants';
+import { Constants, GithubItemKind } from 'src/constants';
 import { DiscordCommands } from 'src/discord/commands';
 import { neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
@@ -12,7 +12,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { PullRequest, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
+import { GithubItem, ZulipExpander, ZulipExpanderDefault, ZulipExpanderGroup } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
 import { ChatService, formatEmoteSyncReport, hasBlacklistedUrl, toZulipEmojiName } from 'src/services/chat.service';
 import { NotificationService } from 'src/services/notification.service';
@@ -117,9 +117,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   updatePullRequest: vitest.fn(),
   upsertPullRequest: vitest.fn(),
   getLatestPullRequestByNumber: vitest.fn(),
+  getGithubItemsByNumber: vitest.fn().mockResolvedValue([]),
   upsertGithubItem: vitest.fn(),
   removeGithubItem: vitest.fn(),
-  getPullRequestsByNumber: vitest.fn().mockResolvedValue([]),
   getMirrorConversation: vitest.fn(),
   getMirrorConversationByDiscord: vitest.fn(),
   getMirrorConversationByZulipTopic: vitest.fn(),
@@ -533,7 +533,7 @@ describe('Bot test', () => {
 
       expect(parts).toEqual(['https://github.com/immich-app/immich/pull/4242']);
       expect(databaseMock.getLatestPullRequestByNumber).toHaveBeenCalledWith(4242, 'immich-app');
-      expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
+      expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
     });
 
     it('should name the pull requests among the links, and no issue, discussion or reference GitHub cannot find', async () => {
@@ -2081,7 +2081,7 @@ describe('Bot test', () => {
       it('should give no shorthand a meaning in a conversation without a group', async () => {
         await direct([BOT_USER_ID, 12], '#4242 immich#12');
 
-        expect(databaseMock.getPullRequestsByNumber).not.toHaveBeenCalled();
+        expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
         expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
         expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
       });
@@ -2436,16 +2436,13 @@ describe('Bot test', () => {
   describe('onZulipMessage with expander groups', () => {
     const STREAM = 130;
     const weeksAgo = (weeks: number) => new Date(Date.now() - weeks * 7 * 24 * 60 * 60 * 1000);
-    const pullRequest = (organization: string, repository: string, number: number, updatedAt: Date): PullRequest => ({
-      nodeId: `${organization}/${repository}#${number}`,
-      organization,
-      repository,
-      number,
-      discordThreadId: null,
-      zulipMessageId: null,
-      updatedAt,
-      closedAt: null,
-    });
+    const item = (
+      organization: string,
+      repository: string,
+      number: number,
+      kind: GithubItemKind,
+      updatedAt: Date,
+    ): GithubItem => ({ organization, repository, number, kind, updatedAt, removed: false });
     const defaultRow = (streamId: number, repository: string): ZulipExpanderDefault => ({
       streamId,
       repository,
@@ -2490,7 +2487,7 @@ describe('Bot test', () => {
         ['futo-org', 'fhs-core', 7, undefined, true],
         ['immich-app', 'immich', 8, undefined, true],
       ]);
-      expect(databaseMock.getPullRequestsByNumber.mock.calls).toEqual([[7], [8]]);
+      expect(databaseMock.getGithubItemsByNumber.mock.calls).toEqual([[8]]);
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: STREAM,
         topic: 'thumbnails',
@@ -2605,17 +2602,53 @@ describe('Bot test', () => {
       );
     });
 
-    it('should prefer a pull request updated in the last two weeks in one of the stream repositories', async () => {
+    it('should send a bare #N to the stream repository whose item of that number was updated last, whatever its kind', async () => {
       await setUp({ groups: [FHS, IMMICH], streamGroups: ['fhs', 'immich'] });
-      databaseMock.getPullRequestsByNumber.mockResolvedValue([
-        pullRequest('futo-org', 'fhs-web', 12, weeksAgo(3)),
-        pullRequest('Immich-App', 'Immich', 12, weeksAgo(1)),
-        pullRequest('octokit', 'rest.js', 12, new Date()),
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('futo-org', 'fhs-web', 12, GithubItemKind.PullRequest, weeksAgo(3)),
+        item('immich-app', 'immich', 12, GithubItemKind.Discussion, weeksAgo(1)),
+        item('futo-org', 'fhs-core', 12, GithubItemKind.Issue, weeksAgo(2)),
+        item('octokit', 'rest.js', 12, GithubItemKind.PullRequest, new Date()),
       ]);
 
       await send('#12');
 
-      expect(databaseMock.getPullRequestsByNumber).toHaveBeenCalledWith(12);
+      expect(databaseMock.getGithubItemsByNumber).toHaveBeenCalledExactlyOnceWith(12);
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+        'immich-app',
+        'immich',
+        12,
+        undefined,
+        true,
+      );
+    });
+
+    const immichIssue = item('immich-app', 'immich', 12, GithubItemKind.Issue, new Date('2026-10-01T00:00:00Z'));
+    const fhsWebPullRequest = item('futo-org', 'fhs-web', 12, GithubItemKind.PullRequest, immichIssue.updatedAt);
+
+    it.each([
+      { streamGroups: ['immich', 'fhs'], items: [fhsWebPullRequest, immichIssue], org: 'immich-app', repo: 'immich' },
+      { streamGroups: ['fhs', 'immich'], items: [immichIssue, fhsWebPullRequest], org: 'futo-org', repo: 'fhs-web' },
+    ])(
+      'should send a bare #N whose items were updated at the same time to the stream repository listed first, $org/$repo when its group is on first',
+      async ({ streamGroups, items, org, repo }) => {
+        await setUp({ groups: [FHS, IMMICH], streamGroups });
+        databaseMock.getGithubItemsByNumber.mockResolvedValue(items);
+
+        await send('#12');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(org, repo, 12, undefined, true);
+      },
+    );
+
+    it('should send a bare #N to an item however long ago it was updated, spelled as the stream group spells its repository', async () => {
+      await setUp({ groups: [FHS, expanderGroup('immich', ['Immich-App/Immich'])], streamGroups: ['fhs', 'immich'] });
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('immich-app', 'immich', 12, GithubItemKind.Issue, weeksAgo(150)),
+      ]);
+
+      await send('#12');
+
       expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
         'Immich-App',
         'Immich',
@@ -2625,11 +2658,11 @@ describe('Bot test', () => {
       );
     });
 
-    it('should send a bare #N to the default when its only pull requests are stale or in other repositories', async () => {
+    it('should send a bare #N to the default when its only items are in other repositories, however recent', async () => {
       await setUp({ groups: [FHS, IMMICH], streamGroups: ['fhs', 'immich'] });
-      databaseMock.getPullRequestsByNumber.mockResolvedValue([
-        pullRequest('immich-app', 'immich', 1200, weeksAgo(3)),
-        pullRequest('octokit', 'rest.js', 1200, new Date()),
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('octokit', 'rest.js', 1200, GithubItemKind.PullRequest, new Date()),
+        item('immich-app', 'static-pages', 1200, GithubItemKind.Issue, new Date()),
       ]);
 
       await send('#1200');
@@ -2653,9 +2686,11 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should expand a bare #N below the threshold when a recent pull request matches', async () => {
+    it('should expand a bare #N below the threshold when an item of that number was seen in the stream repositories', async () => {
       await setUp({ groups: [IMMICH], streamGroups: ['immich'] });
-      databaseMock.getPullRequestsByNumber.mockResolvedValue([pullRequest('immich-app', 'immich', 123, weeksAgo(1))]);
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('immich-app', 'immich', 123, GithubItemKind.Issue, weeksAgo(52)),
+      ]);
 
       await send('see #123');
 
@@ -2715,9 +2750,11 @@ describe('Bot test', () => {
       );
     });
 
-    it('should treat the reference as a pull request only when a row matches the resolved repository', async () => {
+    it('should treat the reference as a pull request only when a pull request item matches the resolved repository', async () => {
       await setUp({ groups: [FHS], streamGroups: ['fhs'] });
-      databaseMock.getPullRequestsByNumber.mockResolvedValue([pullRequest('octokit', 'rest.js', 3, weeksAgo(5))]);
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('octokit', 'rest.js', 3, GithubItemKind.PullRequest, weeksAgo(5)),
+      ]);
       githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
 
       await send('#3');
@@ -2732,22 +2769,52 @@ describe('Bot test', () => {
       expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-core', 3, true);
     });
 
-    it('should not fall back to a discussion when a pull request row matches the resolved repository', async () => {
-      await setUp({ groups: [FHS], streamGroups: ['fhs'] });
-      databaseMock.getPullRequestsByNumber.mockResolvedValue([pullRequest('Futo-Org', 'FHS-Core', 3, weeksAgo(5))]);
-      githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
+    it.each(['#3', 'FHS-Core#3', 'Futo-Org/FHS-Core#3'])(
+      'should not fall back to a discussion for %s when a pull request item matches the resolved repository',
+      async (content) => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        databaseMock.getGithubItemsByNumber.mockResolvedValue([
+          item('futo-org', 'fhs-core', 3, GithubItemKind.PullRequest, weeksAgo(5)),
+        ]);
+        githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
 
-      await send('#3');
+        await send(content);
 
-      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
-        'futo-org',
-        'fhs-core',
-        3,
-        undefined,
-        true,
-      );
-      expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
-    });
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'futo-org',
+          'fhs-core',
+          3,
+          undefined,
+          true,
+        );
+        expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([GithubItemKind.Issue, GithubItemKind.Discussion])(
+      'should still post the discussion GitHub has when the resolved repository has an item of kind %s',
+      async (kind) => {
+        await setUp({ groups: [FHS], streamGroups: ['fhs'] });
+        databaseMock.getGithubItemsByNumber.mockResolvedValue([item('futo-org', 'fhs-web', 3, kind, weeksAgo(1))]);
+        githubMock.getIssueOrPrMessage.mockResolvedValue(undefined);
+
+        await send('#3');
+
+        expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith(
+          'futo-org',
+          'fhs-web',
+          3,
+          undefined,
+          true,
+        );
+        expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-web', 3, true);
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: STREAM,
+          topic: 'thumbnails',
+          content: 'https://github.com/futo-org/fhs-web/discussions/3',
+        });
+      },
+    );
 
     it('should look discussion links up as discussions', async () => {
       await setUp({ groups: [FHS], streamGroups: ['fhs'] });
@@ -2758,14 +2825,17 @@ describe('Bot test', () => {
       expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
     });
 
-    it('should keep a discussion link a discussion when a pull request row has its number', async () => {
+    it('should look no item up for a link, so a discussion link stays a discussion beside a pull request item', async () => {
       await setUp({ groups: [FHS], streamGroups: ['fhs'] });
-      databaseMock.getPullRequestsByNumber.mockResolvedValue([pullRequest('futo-org', 'fhs-core', 7, weeksAgo(0))]);
+      databaseMock.getGithubItemsByNumber.mockResolvedValue([
+        item('futo-org', 'fhs-core', 7, GithubItemKind.PullRequest, weeksAgo(0)),
+      ]);
 
-      await send('https://github.com/futo-org/fhs-core/discussions/7');
+      await send('https://github.com/futo-org/fhs-core/discussions/7 https://github.com/futo-org/fhs-web/issues/8');
 
+      expect(databaseMock.getGithubItemsByNumber).not.toHaveBeenCalled();
       expect(githubMock.getDiscussionMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-core', 7, true);
-      expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledExactlyOnceWith('futo-org', 'fhs-web', 8, undefined, true);
     });
 
     describe('patterns', () => {
@@ -2792,16 +2862,16 @@ describe('Bot test', () => {
         );
       });
 
-      it('should leave a name#N no repository has, and a bare #N with no recent pull request, without a default', async () => {
+      it('should leave a name#N no repository has, and a bare #N with no item seen, without a default', async () => {
         await send('elsewhere#12 #4321');
 
         expect(githubMock.getIssueOrPrMessage).not.toHaveBeenCalled();
         expect(githubMock.getDiscussionMessage).not.toHaveBeenCalled();
       });
 
-      it('should still send a bare #N to a recent pull request of a repository a pattern stands for', async () => {
-        databaseMock.getPullRequestsByNumber.mockResolvedValue([
-          pullRequest('immich-app', 'static-pages', 4321, weeksAgo(0)),
+      it('should still send a bare #N to an item of a repository a pattern stands for', async () => {
+        databaseMock.getGithubItemsByNumber.mockResolvedValue([
+          item('immich-app', 'static-pages', 4321, GithubItemKind.Issue, weeksAgo(10)),
         ]);
 
         await send('#4321');

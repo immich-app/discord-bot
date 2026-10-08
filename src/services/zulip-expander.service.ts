@@ -14,7 +14,7 @@ export type ExpanderScope = {
   repositories: string[];
   /** None when no group of the stream names a repository of its own and the stream chose none. */
   defaultRepository?: string;
-  /** A bare `#123` below this expands only for a pull request updated in the last two weeks. */
+  /** A bare `#123` below this expands only when a stream repository has that item in `github_item`. */
   threshold: (repository: string) => number;
 };
 

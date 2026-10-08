@@ -541,6 +541,41 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
       expect(await items()).toEqual([row(GithubItemKind.Issue, '2026-10-02T00:00:00Z')]);
     });
 
+    it('should get the items of a number in every repository, lowercased, and none of another number', async () => {
+      const updatedAt = new Date('2026-10-01T00:00:00Z');
+      await sut.upsertGithubItem({ ...ITEM, kind: GithubItemKind.Issue, updatedAt });
+      await sut.upsertGithubItem({
+        ...ITEM,
+        organization: 'Futo-Org',
+        repository: 'Grayjay',
+        kind: GithubItemKind.PullRequest,
+        updatedAt,
+      });
+      await sut.upsertGithubItem({ ...ITEM, number: 4243, kind: GithubItemKind.Discussion, updatedAt });
+
+      const found = await sut.getGithubItemsByNumber(4242);
+
+      expect(found.sort((a, b) => a.organization.localeCompare(b.organization))).toEqual([
+        {
+          organization: 'futo-org',
+          repository: 'grayjay',
+          number: 4242,
+          kind: GithubItemKind.PullRequest,
+          updatedAt,
+          removed: false,
+        },
+        { ...ITEM, kind: GithubItemKind.Issue, updatedAt, removed: false },
+      ]);
+      expect(await sut.getGithubItemsByNumber(4244)).toEqual([]);
+    });
+
+    it('should leave a removed item out of the items of its number', async () => {
+      await sut.upsertGithubItem({ ...ITEM, kind: GithubItemKind.Issue, updatedAt: '2026-10-01T00:00:00Z' });
+      await sut.removeGithubItem({ ...ITEM, kind: GithubItemKind.Issue, updatedAt: '2026-10-02T00:00:00Z' });
+
+      expect(await sut.getGithubItemsByNumber(4242)).toEqual([]);
+    });
+
     it('should record every pull request as an item, lowercased and as of its latest update', async () => {
       const pullRequest = (
         nodeId: string,
