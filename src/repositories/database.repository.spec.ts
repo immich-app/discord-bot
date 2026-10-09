@@ -9,6 +9,7 @@ import * as recheckEmotes from 'src/schema/migrations/1791240072190-RecheckZulip
 import * as dmExpanders from 'src/schema/migrations/1791302531964-ZulipDmExpanders';
 import * as githubItems from 'src/schema/migrations/1791390966853-GithubItems';
 import * as removeExpanderDefaults from 'src/schema/migrations/1791396489732-RemoveExpanderDefaults';
+import * as stickers from 'src/schema/migrations/1791533816065-ZulipStickers';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -18,7 +19,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, github_item, zulip_expander*, zulip_dm_expander*, zulip_emote and zulip_command_bot rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, github_item, zulip_expander*, zulip_dm_expander*, zulip_emote, zulip_command_bot and zulip_sticker rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -34,6 +35,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     await db.deleteFrom('zulip_dm_expander').execute();
     await db.deleteFrom('zulip_expander_group').execute();
     await db.deleteFrom('zulip_command_bot').execute();
+    await db.deleteFrom('zulip_sticker').execute();
   });
 
   afterAll(async () => {
@@ -779,6 +781,60 @@ VALUES ('7,12', 'futo-org/fhs-core', 'Alice')`.execute(trx);
       expect(await sut.removeZulipCommandBot(30)).toBe(true);
       expect(await sut.removeZulipCommandBot(30)).toBe(false);
       expect(await sut.getZulipCommandBots()).toEqual([]);
+    });
+  });
+
+  describe('zulip stickers', () => {
+    it('should seed the stickers that were constants', async () => {
+      const rolledBack = new Error('rolled back');
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await stickers.down(trx);
+          await stickers.up(trx);
+          const rows = await trx
+            .selectFrom('zulip_sticker')
+            .select(['name', 'image', 'createdBy'])
+            .orderBy('name')
+            .execute();
+          expect(rows).toEqual(
+            Object.entries({
+              chugg: 'https://zuclaude.exe.xyz/stickers/chugg.gif',
+              nice: 'https://media1.tenor.com/m/l3-VETEqSYkAAAAd/nice-noice.gif',
+              'oh-god-the-emails': 'https://zuclaude.exe.xyz/stickers/oh-god-the-emails.png',
+              stamppers: 'https://zuclaude.exe.xyz/stickers/stamppers.gif',
+              'this-is-fine': 'https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
+              'unsee-juice': '![unsee-juice](/user_uploads/2/ed/ngCVicRM4MCEnzYdxl3knd6b/unsee-juice.png)',
+              'we-are-checking': 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
+              'we-are-crying': 'https://media1.tenor.com/m/vjWI_-HHKdgAAAAd/ferrari-cry-ferrari.gif',
+            }).map(([name, image]) => ({ name, image, createdBy: 'migration' })),
+          );
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+    });
+
+    it('should add a sticker, replace its image, list the stickers by name and remove one', async () => {
+      await sut.setZulipSticker('party', 'https://example.com/party.gif', 'Alice on Zulip (user 12)');
+      await sut.setZulipSticker('cake', 'https://example.com/cake.gif', 'Alice on Zulip (user 12)');
+      const replaced = await sut.setZulipSticker(
+        'party',
+        '![party](/user_uploads/2/ab/cd/party.gif)',
+        'Bob on Zulip (user 13)',
+      );
+
+      expect(replaced).toEqual({
+        name: 'party',
+        image: '![party](/user_uploads/2/ab/cd/party.gif)',
+        createdBy: 'Bob on Zulip (user 13)',
+        createdAt: expect.any(Date),
+      });
+      expect((await sut.getZulipStickers()).map(({ name, image }) => [name, image])).toEqual([
+        ['cake', 'https://example.com/cake.gif'],
+        ['party', '![party](/user_uploads/2/ab/cd/party.gif)'],
+      ]);
+      expect(await sut.removeZulipSticker('party')).toBe(true);
+      expect(await sut.removeZulipSticker('party')).toBe(false);
+      expect((await sut.getZulipStickers()).map(({ name }) => name)).toEqual(['cake']);
     });
   });
 });

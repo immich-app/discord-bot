@@ -39,6 +39,7 @@ import {
   ZulipEmote,
   ZulipExpander,
   ZulipExpanderGroup,
+  ZulipSticker,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
@@ -176,4 +177,10 @@ export interface IDatabaseRepository {
   addZulipCommandBot(userId: number, createdBy: string): Promise<ZulipCommandBot | undefined>;
   /** Resolves to whether the bot was listed. */
   removeZulipCommandBot(userId: number): Promise<boolean>;
+
+  getZulipStickers(): Promise<ZulipSticker[]>;
+  /** Replaces the image of a sticker that exists. */
+  setZulipSticker(name: string, image: string, createdBy: string): Promise<ZulipSticker>;
+  /** Resolves to whether there was such a sticker. */
+  removeZulipSticker(name: string): Promise<boolean>;
 }

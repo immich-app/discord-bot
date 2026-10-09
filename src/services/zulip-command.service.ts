@@ -64,6 +64,40 @@ const EXPANDER_GROUP = 'expander-group';
 
 const COMMAND_BOTS = 'command-bots';
 
+const STICKERS = 'sticker-*';
+
+/** An emoji name, which is what a sticker answers to. */
+const STICKER_NAME = /^[\w+-]+$/;
+
+/**
+ * The whole image argument as a file attached to the message, which Zulip links as `![file](/user_uploads/…)` for an
+ * image or audio file and as `[file](/user_uploads/…)` for any other, or a bare `/user_uploads/…` path; nothing before
+ * or after it, and nothing in the path that `isStickerUrl` refuses.
+ */
+const STICKER_UPLOAD = /^(?:(!?)\[[^\]]*\]\((\/user_uploads\/[^\s()*[\]`<>]+)\)|(\/user_uploads\/[^\s()*[\]`<>]+))$/;
+
+/** The uploads `![…](…)` shows full size; for a video or a document, Zulip posts it as text. */
+const IMAGE_UPLOAD = /\.(?:avif|gif|jpe?g|png|webp)$/i;
+
+/**
+ * An absolute http(s) URL (`new URL` refuses one without a host). It is posted as given, so it may hold no `*`, which
+ * mentions, nor whitespace, `[`, `]`, `` ` ``, `<` or `>`: no URL holds them unencoded outside an IPv6 host, and Zulip
+ * renders them.
+ */
+const isStickerUrl = (value: string) => {
+  if (/[\s*[\]`<>]/.test(value)) {
+    return false;
+  }
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const STICKER_SUMMARY = 'answer an emoji with an image, in every stream';
+
 /** `@**Name**` or the silent `@_**Name**`, with Zulip's `|user_id` suffix when the name is not enough. */
 const USER_MENTION = /^@_?\*\*(.+?)(?:\|(\d+))?\*\*$/;
 
@@ -459,6 +493,35 @@ export class ZulipCommandService {
       positionals: Number.POSITIVE_INFINITY,
       options: ['text'],
       run: (context) => this.similar(context),
+    },
+    'sticker-add': {
+      usage: 'sticker-add <name> <image URL or attached upload>',
+      description:
+        'Answer every message that uses the emoji `:name:`, in any stream I can see, with that image, replacing the image of a sticker of that name. An attached image is shown full size, a URL as a link preview.',
+      example: 'sticker-add this-is-fine https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
+      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      positionals: Number.POSITIVE_INFINITY,
+      options: [],
+      teamStreams: true,
+      run: (context) => this.stickerAdd(context),
+    },
+    'sticker-remove': {
+      usage: 'sticker-remove <name>',
+      description: 'Stop answering the emoji `:name:` with an image.',
+      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      positionals: 1,
+      options: [],
+      teamStreams: true,
+      run: (context) => this.stickerRemove(context),
+    },
+    'sticker-list': {
+      usage: 'sticker-list',
+      description: 'List the stickers, with their images.',
+      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      positionals: 0,
+      options: [],
+      teamStreams: true,
+      run: () => this.stickerList(),
     },
     'command-bots': {
       usage: 'command-bots <add|remove> <bot> | list',
@@ -1332,6 +1395,54 @@ export class ZulipCommandService {
         return `- ${user ? describeUser(user) : `user ${userId}`}, added by ${code(createdBy)} on ${createdAt.toISOString().slice(0, 10)}`;
       }),
     ].join('\n');
+  }
+
+  private async stickerAdd({ message, args }: CommandContext) {
+    const [given, ...rest] = args;
+    // The tokenizer splits the label of an upload named with a space, `[my file.png](…)`, in two, and the command fails to
+    // parse when that name holds an unmatched quote, which a bare path avoids.
+    const upload = STICKER_UPLOAD.exec(rest.join(' '));
+    const path = upload?.[2] ?? upload?.[3];
+    const url = rest.length === 1 && isStickerUrl(rest[0]) ? rest[0] : undefined;
+    if (!given || (!path && !url)) {
+      return this.usage('sticker-add');
+    }
+    const name = given.toLowerCase();
+    if (!STICKER_NAME.test(name)) {
+      return `${code(given)} cannot name a sticker: an emoji name is letters, digits, ${code('_')}, ${code('-')} and ${code('+')}.`;
+    }
+    // Zulip shows `![…]` of an image upload full size, where a link gets a small preview, but posts it as text for a
+    // video or a document, so the `!` goes where Zulip wrote one or the file is an image.
+    const inline = upload?.[1] === '!' || (path !== undefined && IMAGE_UPLOAD.test(path));
+    const image = path ? `${inline ? '!' : ''}[${name}](${path})` : url!;
+    return this.underLock(STICKERS, async () => {
+      const replaced = await this.chatService.setSticker(name, image, describeZulipSender(message));
+      return replaced
+        ? `Updated the sticker ${code(name)}: ${code(`:${name}:`)} is answered with the new image.`
+        : `Added the sticker ${code(name)}: ${code(`:${name}:`)} is answered with the image, in any stream I can see.`;
+    });
+  }
+
+  private async stickerRemove({ args: [given] }: CommandContext) {
+    if (!given) {
+      return this.usage('sticker-remove');
+    }
+    const name = given.toLowerCase();
+    return this.underLock(STICKERS, async () =>
+      (await this.chatService.removeSticker(name))
+        ? `Removed the sticker ${code(name)}.`
+        : `There is no sticker ${code(name)}; ${code('sticker-list')} lists them.`,
+    );
+  }
+
+  private stickerList() {
+    const stickers = this.chatService.getStickers();
+    if (stickers.length === 0) {
+      return Promise.resolve(`There are no stickers; ${code('sticker-add <name> <image>')} adds one.`);
+    }
+    return Promise.resolve(
+      ['Stickers:', ...stickers.map(({ name, image }) => `- ${code(`:${name}:`)}: ${code(image)}`)].join('\n'),
+    );
   }
 
   private async similar({ message, args, options }: CommandContext) {

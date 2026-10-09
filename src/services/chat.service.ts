@@ -256,10 +256,10 @@ const shorthandRepository = ({ repositories }: ExpanderScope, path: string, kind
   return isOwner ? wanted : undefined;
 };
 
-/** The images `Constants.Zulip.EmojiImages` names for the emoji a message uses outside code, each once. */
-const emojiImages = (content: string) => {
+/** The images of the stickers a message uses outside code, by their emoji, each once. */
+const emojiImages = (content: string, stickers: Map<string, string>) => {
   const text = zulipTextOutsideCode(content);
-  const images = [...text.matchAll(/:([\w+-]+):/g)].map(([, name]) => Constants.Zulip.EmojiImages[name.toLowerCase()]);
+  const images = [...text.matchAll(/:([\w+-]+):/g)].map(([, name]) => stickers.get(name.toLowerCase()));
   return [...new Set(images.filter((image) => image !== undefined))];
 };
 
@@ -373,6 +373,7 @@ export const formatEmoteSyncReport = (
 @Injectable()
 export class ChatService {
   private logger = new Logger(ChatService.name);
+  private stickers = new Map<string, string>();
 
   constructor(
     @Inject(IDatabaseRepository) private database: IDatabaseRepository,
@@ -390,9 +391,31 @@ export class ChatService {
   ) {}
 
   async init() {
+    // Read once, so that no message costs a query; `setSticker` and `removeSticker` change the table and this together.
+    const stickers = await this.database.getZulipStickers();
+    this.stickers = new Map(stickers.map(({ name, image }) => [name, image]));
     this.discord.onHandlerError((error) => this.onError(error));
     // The Zulip clients are initialised once, by ZulipService.
     this.zulipService.onMessage((message) => this.onZulipMessage(message));
+  }
+
+  getStickers() {
+    return [...this.stickers].map(([name, image]) => ({ name, image })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Resolves to whether the sticker was there already, and so had its image replaced. */
+  async setSticker(name: string, image: string, createdBy: string) {
+    const replaced = this.stickers.has(name);
+    await this.database.setZulipSticker(name, image, createdBy);
+    this.stickers.set(name, image);
+    return replaced;
+  }
+
+  /** Resolves to whether there was such a sticker. */
+  async removeSticker(name: string) {
+    const removed = await this.database.removeZulipSticker(name);
+    this.stickers.delete(name);
+    return removed;
   }
 
   async onZulipMessage({ type, streamId, topic, content, recipientIds = [] }: ZulipReceivedMessage) {
@@ -416,7 +439,10 @@ export class ChatService {
 
     // One failing lookup must not cost the reply the rest; the failure still reaches the event loop's log.
     const [expansions] = await Promise.allSettled([this.zulipExpansions(scope, content)]);
-    const parts = [...(expansions.status === 'fulfilled' ? expansions.value.parts : []), ...emojiImages(content)];
+    const parts = [
+      ...(expansions.status === 'fulfilled' ? expansions.value.parts : []),
+      ...emojiImages(content, this.stickers),
+    ];
 
     if (parts.length !== 0) {
       const { id } = await reply(parts.join('\n'));
