@@ -2452,6 +2452,27 @@ describe('Bot test', () => {
         expect(sut.getStickers().map(({ name }) => name)).not.toContain('we-are-checking');
       });
 
+      it('should change no sticker when saving one fails', async () => {
+        databaseMock.setZulipSticker.mockRejectedValue(new Error('connection terminated'));
+
+        await expect(
+          sut.setSticker('nice', 'https://example.com/nice.gif', 'Alice on Zulip (user 12)'),
+        ).rejects.toThrow('connection terminated');
+        await expect(
+          sut.setSticker('party', 'https://example.com/party.gif', 'Alice on Zulip (user 12)'),
+        ).rejects.toThrow('connection terminated');
+
+        expect(sut.getStickers()).toEqual(STICKERS.map(({ name, image }) => ({ name, image })));
+      });
+
+      it('should keep a sticker when removing it fails', async () => {
+        databaseMock.removeZulipSticker.mockRejectedValue(new Error('connection terminated'));
+
+        await expect(sut.removeSticker('we-are-checking')).rejects.toThrow('connection terminated');
+
+        expect(sut.getStickers()).toEqual(STICKERS.map(({ name, image }) => ({ name, image })));
+      });
+
       it('should post the image after the expansions of the same message, in one reply', async () => {
         await sut.onZulipMessage(
           zulipMessage({ streamId: 121, content: 'https://x.com/immich/status/1 :we-are-checking:' }),

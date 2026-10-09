@@ -3257,6 +3257,10 @@ describe('ZulipCommandService', () => {
   describe('stickers', () => {
     const contents = () => replies().map(({ content }) => content);
     const UPLOAD = '/user_uploads/2/ab/cdEF12/my_party.gif';
+    const VIDEO = '/user_uploads/2/ab/cdEF12/party.mp4';
+    const AUDIO = '/user_uploads/2/ab/cdEF12/party.mp3';
+    const ADDED = 'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.';
+    const RUNNING = '`sticker-*` is already running; wait for it to finish.';
 
     it('should add, list, update and remove a sticker', async () => {
       await send('@**Immich** sticker-list');
@@ -3283,28 +3287,51 @@ describe('ZulipCommandService', () => {
     });
 
     it.each([
-      { content: `@**Immich** sticker-add party ![party.gif](${UPLOAD})` },
-      { content: `@**Immich** sticker-add party\n![my party.gif](${UPLOAD})` },
-      { content: `@**Immich** sticker-add party ${UPLOAD}` },
-    ])('should keep an image upload as inline image markdown, shown full size: $content', async ({ content }) => {
-      await send(content);
+      { content: `@**Immich** sticker-add party\n[my party.gif](${UPLOAD})`, image: `![party](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party [party.gif](${UPLOAD})`, image: `![party](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party ![party](${UPLOAD})`, image: `![party](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party ${UPLOAD}`, image: `![party](${UPLOAD})` },
+      {
+        content: '@**Immich** sticker-add party /user_uploads/2/ab/cdEF12/PARTY.WEBP',
+        image: '![party](/user_uploads/2/ab/cdEF12/PARTY.WEBP)',
+      },
+      { content: `@**Immich** sticker-add party ![party.mp3](${AUDIO})`, image: `![party](${AUDIO})` },
+      { content: `@**Immich** sticker-add party [party.mp4](${VIDEO})`, image: `[party](${VIDEO})` },
+      { content: `@**Immich** sticker-add party ${VIDEO}`, image: `[party](${VIDEO})` },
+    ])(
+      'should keep an image upload, or one Zulip wrote as one, as inline image markdown and any other as a link: $content',
+      async ({ content, image }) => {
+        await send(content);
 
-      expect(chatServiceMock.stickers.get('party')).toBe(`![party](${UPLOAD})`);
-      expect(contents()).toEqual([
-        'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.',
-      ]);
+        expect(chatServiceMock.stickers.get('party')).toBe(image);
+        expect(contents()).toEqual([ADDED]);
+      },
+    );
+
+    it('should keep a URL as given, parentheses included', async () => {
+      await send('@**Immich** sticker-add party https://en.wikipedia.org/wiki/File:Party_(cake).gif');
+
+      expect(chatServiceMock.stickers.get('party')).toBe('https://en.wikipedia.org/wiki/File:Party_(cake).gif');
+      expect(contents()).toEqual([ADDED]);
     });
 
-    it.each([
-      { content: `@**Immich** sticker-add party [party.mp4](${UPLOAD})` },
-      { content: `@**Immich** sticker-add party\n[my party.pdf](${UPLOAD})` },
-    ])('should keep a non-image attachment as a link, which Zulip previews: $content', async ({ content }) => {
-      await send(content);
+    it('should refuse a second change while one runs, and finish the first', async () => {
+      let release: (replaced: boolean) => void = () => {};
+      chatServiceMock.setSticker.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
 
-      expect(chatServiceMock.stickers.get('party')).toBe(`[party](${UPLOAD})`);
-      expect(contents()).toEqual([
-        'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.',
-      ]);
+      const first = send('@**Immich** sticker-add party https://example.com/party.gif');
+      await flush();
+      await send('@**Immich** sticker-add cake https://example.com/cake.gif');
+      await send('@**Immich** sticker-remove party');
+      release(false);
+      await first;
+
+      expect(contents()).toEqual([RUNNING, RUNNING, ADDED]);
+      expect(chatServiceMock.setSticker).toHaveBeenCalledOnce();
     });
 
     it.each([
@@ -3316,12 +3343,19 @@ describe('ZulipCommandService', () => {
       `@**Immich** sticker-add party ${UPLOAD} extra`,
       `@**Immich** sticker-add party [party.gif](${UPLOAD}) extra`,
       '@**Immich** sticker-add party /user_uploads/2/ab/a*b.gif',
+      '@**Immich** sticker-add party /user_uploads/2/ab/[a].gif',
+      '@**Immich** sticker-add party /user_uploads/2/ab/`a`.gif',
+      '@**Immich** sticker-add party /user_uploads/2/ab/<a>.gif',
+      '@**Immich** sticker-add party https://example.com/[Download](https://evil.example/)',
+      '@**Immich** sticker-add party https://example.com/party[.gif',
+      '@**Immich** sticker-add party https://example.com/party].gif',
+      '@**Immich** sticker-add party https://example.com/`party`.gif',
+      '@**Immich** sticker-add party https://example.com/<time:2026-10-09T10:00:00Z>.gif',
+      '@**Immich** sticker-add party https://example.com/party<.gif',
+      '@**Immich** sticker-add party https://example.com/party>.gif',
       '@**Immich** sticker-add party https://#',
       '@**Immich** sticker-add party http:///',
       '@**Immich** sticker-add party ftp://example.com/party.gif',
-      '@**Immich** sticker-add party https://example.com/[Download](https://evil.example/)',
-      '@**Immich** sticker-add party https://example.com/`code`.gif',
-      '@**Immich** sticker-add party https://example.com/<time:2026-10-09T10:00:00Z>.gif',
       '@**Immich** sticker-remove',
       '@**Immich** sticker-remove party extra',
       '@**Immich** sticker-list party',
