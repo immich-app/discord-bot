@@ -79,6 +79,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
 const newZulipServiceMock = () => ({
   onMessage: vitest.fn<(handler: ZulipMessageHandler, options?: { withBots?: boolean }) => void>(),
   ownUser: BOT as ZulipUser | undefined,
+  isGuest: vitest.fn<(userId: number) => Promise<boolean>>().mockResolvedValue(false),
 });
 
 const newChatServiceMock = () => {
@@ -363,11 +364,13 @@ const HELP = [
   '- `mirror-list`: list the mirrored channels and the linked accounts',
   '- `discord-unlink`: unlink your Zulip and Discord accounts; `/zulip-link` on Discord links them',
   '',
+  '**Stickers**',
+  '- `sticker-add`, `sticker-remove`, `sticker-list`: answer an emoji with an image, in every stream',
+  '',
   '**Team tools**',
   '- `emote-sync`: upload the emotes of the Immich Discord server to Zulip',
   '- `backfill-pull-requests`: create the Discord thread and the Zulip topic a pull request lacks',
   '- `fourthwall`: fetch a Fourthwall order again, or every order',
-  '- `sticker-add`, `sticker-remove`, `sticker-list`: answer an emoji with an image, in every stream',
   '',
   '**Other bots**',
   '- `command-bots`: choose the other bots whose commands I take',
@@ -392,6 +395,9 @@ const HELP_FOR_EVERYONE = [
   '**Discord mirror**',
   '- `discord-unlink`: unlink your Zulip and Discord accounts; `/zulip-link` on Discord links them',
   '',
+  '**Stickers**',
+  '- `sticker-add`, `sticker-remove`, `sticker-list`: answer an emoji with an image, in every stream',
+  '',
   '*Left out here: the commands taken in the Immich team streams only and the commands for organization administrators and owners.*',
   '',
   HELP_FINE_PRINT,
@@ -415,8 +421,12 @@ const DIRECT_MESSAGE_HELP = [
   '- `link <code>`: link your Zulip account with the Discord account `/zulip-link` gave you the code on',
   '- `unlink`: unlink your Zulip account from your Discord account',
   '',
+  '**Stickers**',
+  '- `sticker-add <name> <image>`, `sticker-remove <name>`, `sticker-list`: answer an emoji with an image, in every stream',
+  '',
   '```spoiler How it works',
   '- `expanders on <group>`, `expanders off [group]` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+  '- `sticker-add` takes an image URL or a file attached to the message, as in a stream.',
   `- ${bareNumbers('conversation')}`,
   `- ${PREFIXES}`,
   '- Links expand here without a group, unless a guest is in the conversation.',
@@ -679,12 +689,16 @@ describe('ZulipCommandService', () => {
       },
     );
 
-    it("should ignore a listed bot's direct message", async () => {
-      await send('link ABCD2345', { ...fromClaude, type: 'private', streamId: undefined, topic: '' });
+    it.each(['link ABCD2345', 'sticker-add party https://example.com/party.gif'])(
+      "should ignore a listed bot's direct message %j",
+      async (content) => {
+        await send(content, { ...fromClaude, type: 'private', streamId: undefined, topic: '' });
 
-      expect(mirrorLinksMock.redeemIdentityCode).not.toHaveBeenCalled();
-      expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
-    });
+        expect(mirrorLinksMock.redeemIdentityCode).not.toHaveBeenCalled();
+        expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+        expect(zulipMock.sendDirectMessage).not.toHaveBeenCalled();
+      },
+    );
 
     it("should check a listed bot's role as any sender's for the administrators' commands", async () => {
       zulipMock.getUser.mockResolvedValue({ userId: 30, fullName: 'Claude', role: 400 });
@@ -880,6 +894,9 @@ describe('ZulipCommandService', () => {
       'expander-group',
       'discord-unlink',
       'similar',
+      'sticker-add',
+      'sticker-remove',
+      'sticker-list',
       'command-bots',
     ];
     const SCHEDULE_ADD = [
@@ -1020,6 +1037,17 @@ describe('ZulipCommandService', () => {
           '- Taken in the Immich team streams only.',
         ].join('\n'),
       ]);
+    });
+
+    it.each([
+      ['sticker-add', '- Taken in any stream and in a direct message, from anyone but guests.'],
+      ['sticker-remove', '- Taken in any stream and in a direct message, from anyone but guests.'],
+      ['sticker-list', '- Taken in any stream and in a direct message.'],
+    ])('should say where %s is taken, and from whom', async (name, taken) => {
+      await send(`@**Immich** help ${name}`, { streamId: 999 });
+
+      expect(lines(contents()[0])).toContain(taken);
+      expect(zulipServiceMock.isGuest).not.toHaveBeenCalled();
     });
 
     it('should explain each form of a command that has several on a line of its own, with no host turned into a link', async () => {
@@ -3373,30 +3401,131 @@ describe('ZulipCommandService', () => {
       expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
     });
 
-    it('should refuse every sticker command outside the team streams, saying so', async () => {
+    it('should take every sticker command outside the team streams, checking that the sender is no guest', async () => {
       await send('@**Immich** sticker-add party https://example.com/party.gif', { streamId: 999 });
-      await send('@**Immich** sticker-remove party', { streamId: 999 });
       await send('@**Immich** sticker-list', { streamId: 999 });
+      await send('@**Immich** sticker-remove party', { streamId: 999 });
 
-      expect(contents()).toEqual([
-        '`sticker-add` is taken in the Immich team streams only.',
-        '`sticker-remove` is taken in the Immich team streams only.',
-        '`sticker-list` is taken in the Immich team streams only.',
+      expect(replies().map(({ stream, content }) => [stream, content])).toEqual([
+        [999, ADDED],
+        [999, 'Stickers:\n- `:party:`: `https://example.com/party.gif`'],
+        [999, 'Removed the sticker `party`.'],
       ]);
-      expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+      expect(zulipServiceMock.isGuest.mock.calls).toEqual([[12], [12]]);
     });
 
-    it("should take a listed bot's sticker command", async () => {
+    it("should take a listed bot's sticker command outside the team streams", async () => {
       database.commandBots.push({ userId: 30, createdBy: 'Alice on Zulip (user 12)', createdAt: new Date() });
       await sut.init();
 
-      await send('@**Immich** sticker-add party https://example.com/party.gif', fromClaude);
+      await send('@**Immich** sticker-add party https://example.com/party.gif', { ...fromClaude, streamId: 999 });
 
       expect(chatServiceMock.setSticker).toHaveBeenCalledExactlyOnceWith(
         'party',
         'https://example.com/party.gif',
         'Claude on Zulip (user 30)',
       );
+      expect(zulipServiceMock.isGuest).toHaveBeenCalledExactlyOnceWith(30);
+      expect(replies()).toEqual([{ stream: 999, topic: 'deploy', content: ADDED }]);
+    });
+
+    describe('in direct messages', () => {
+      const direct = (content: string, recipientIds = [12, BOT.userId]) =>
+        send(content, { type: 'private', streamId: undefined, topic: '', recipientIds });
+      const answers = () => zulipMock.sendDirectMessage.mock.calls;
+
+      it('should take every sticker command, an attached upload included, answering the sender', async () => {
+        await direct(`sticker-add party [party.gif](${UPLOAD})`);
+        await direct('Sticker-List');
+        await direct('@**Immich** sticker-remove party');
+
+        expect(chatServiceMock.setSticker).toHaveBeenCalledExactlyOnceWith(
+          'party',
+          `![party](${UPLOAD})`,
+          'Alice on Zulip (user 12)',
+        );
+        expect(answers()).toEqual([
+          [[12], ADDED],
+          [[12], `Stickers:\n- \`:party:\`: \`![party](${UPLOAD})\``],
+          [[12], 'Removed the sticker `party`.'],
+        ]);
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should take a sticker command in a group conversation only when it mentions the bot, answering the sender alone', async () => {
+        await direct('sticker-add party https://example.com/party.gif', [12, BOT.userId, 13]);
+        expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+        expect(answers()).toEqual([]);
+
+        await direct('@**Immich** sticker-add party https://example.com/party.gif', [12, BOT.userId, 13]);
+
+        expect(chatServiceMock.stickers.get('party')).toBe('https://example.com/party.gif');
+        expect(answers()).toEqual([[[12], ADDED]]);
+      });
+
+      it('should answer a sticker command given an argument it does not take with its usage, and run nothing', async () => {
+        await direct('sticker-add party https://example.com/a.gif https://example.com/b.gif');
+        await direct('sticker-remove party extra');
+
+        expect(answers()).toEqual([
+          [[12], expect.stringMatching(/^Usage: `sticker-add /)],
+          [[12], 'Usage: `sticker-remove <name>`'],
+        ]);
+        expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('guests', () => {
+      const GUESTS = 'Guests cannot change the stickers.';
+      const direct = (content: string) =>
+        send(content, { type: 'private', streamId: undefined, topic: '', recipientIds: [12, BOT.userId] });
+      const answers = () => zulipMock.sendDirectMessage.mock.calls.map(([, content]) => content);
+
+      beforeEach(() => {
+        zulipServiceMock.isGuest.mockResolvedValue(true);
+        chatServiceMock.stickers.set('party', 'https://example.com/party.gif');
+      });
+
+      it('should refuse a guest adding or removing a sticker, in a stream and in a direct message', async () => {
+        await send('@**Immich** sticker-add cake https://example.com/cake.gif', { streamId: 999 });
+        await send('@**Immich** sticker-remove party');
+        await direct('sticker-add cake https://example.com/cake.gif');
+        await direct('sticker-remove party');
+
+        expect(contents()).toEqual([GUESTS, GUESTS]);
+        expect(answers()).toEqual([GUESTS, GUESTS]);
+        expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+        expect([...chatServiceMock.stickers.keys()]).toEqual(['party']);
+      });
+
+      it('should list the stickers to a guest, in a stream and in a direct message', async () => {
+        await send('@**Immich** sticker-list', { streamId: 999 });
+        await direct('sticker-list');
+
+        const list = 'Stickers:\n- `:party:`: `https://example.com/party.gif`';
+        expect(contents()).toEqual([list]);
+        expect(answers()).toEqual([list]);
+        expect(zulipServiceMock.isGuest).not.toHaveBeenCalled();
+      });
+
+      it("should refuse a change, and log it at debug, when the sender's role cannot be read", async () => {
+        const error = new Error('Zulip is down');
+        zulipServiceMock.isGuest.mockRejectedValue(error);
+
+        await send('@**Immich** sticker-add cake https://example.com/cake.gif');
+        await direct('sticker-remove party');
+
+        const refusal = 'Could not read your Zulip role, and guests cannot change the stickers; try again later.';
+        expect(contents()).toEqual([refusal]);
+        expect(answers()).toEqual([refusal]);
+        expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+        expect([...chatServiceMock.stickers.keys()]).toEqual(['party']);
+        expect(vitest.mocked(Logger.prototype.debug).mock.calls).toEqual([
+          ['Could not read the role of Zulip user 12 for sticker-add', error],
+          ['Could not read the role of Zulip user 12 for sticker-remove', error],
+        ]);
+        expect(Logger.prototype.error).not.toHaveBeenCalled();
+      });
     });
   });
 
