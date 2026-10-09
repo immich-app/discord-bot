@@ -3283,14 +3283,25 @@ describe('ZulipCommandService', () => {
     });
 
     it.each([
-      { content: `@**Immich** sticker-add party\n[my party.gif](${UPLOAD})` },
-      { content: `@**Immich** sticker-add party [party.gif](${UPLOAD})` },
-      { content: `@**Immich** sticker-add party ![party](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party ![party.gif](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party\n![my party.gif](${UPLOAD})` },
       { content: `@**Immich** sticker-add party ${UPLOAD}` },
-    ])('should keep an attached upload as inline image markdown, shown full size: $content', async ({ content }) => {
+    ])('should keep an image upload as inline image markdown, shown full size: $content', async ({ content }) => {
       await send(content);
 
       expect(chatServiceMock.stickers.get('party')).toBe(`![party](${UPLOAD})`);
+      expect(contents()).toEqual([
+        'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.',
+      ]);
+    });
+
+    it.each([
+      { content: `@**Immich** sticker-add party [party.mp4](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party\n[my party.pdf](${UPLOAD})` },
+    ])('should keep a non-image attachment as a link, which Zulip previews: $content', async ({ content }) => {
+      await send(content);
+
+      expect(chatServiceMock.stickers.get('party')).toBe(`[party](${UPLOAD})`);
       expect(contents()).toEqual([
         'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.',
       ]);
@@ -3308,6 +3319,9 @@ describe('ZulipCommandService', () => {
       '@**Immich** sticker-add party https://#',
       '@**Immich** sticker-add party http:///',
       '@**Immich** sticker-add party ftp://example.com/party.gif',
+      '@**Immich** sticker-add party https://example.com/[Download](https://evil.example/)',
+      '@**Immich** sticker-add party https://example.com/`code`.gif',
+      '@**Immich** sticker-add party https://example.com/<time:2026-10-09T10:00:00Z>.gif',
       '@**Immich** sticker-remove',
       '@**Immich** sticker-remove party extra',
       '@**Immich** sticker-list party',
