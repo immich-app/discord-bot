@@ -98,6 +98,8 @@ const isStickerUrl = (value: string) => {
 
 const STICKER_SUMMARY = 'answer an emoji with an image, in every stream';
 
+const CHANGE_STICKERS = 'change the stickers';
+
 /** `@**Name**` or the silent `@_**Name**`, with Zulip's `|user_id` suffix when the name is not enough. */
 const USER_MENTION = /^@_?\*\*(.+?)(?:\|(\d+))?\*\*$/;
 
@@ -205,8 +207,12 @@ const DIRECT_MESSAGE_HELP = [
     helpLine(['link <code>'], 'link your Zulip account with the Discord account `/zulip-link` gave you the code on'),
     helpLine(['unlink'], 'unlink your Zulip account from your Discord account'),
   ]),
+  helpSection(ZulipHelpSection.Stickers, [
+    helpLine(['sticker-add <name> <image>', 'sticker-remove <name>', 'sticker-list'], STICKER_SUMMARY),
+  ]),
   spoiler('How it works', [
     '- `expanders on <group>`, `expanders off [group]` and `expanders list` work as in a stream; `expander-group list`, in a stream, lists the groups.',
+    '- `sticker-add` takes an image URL or a file attached to the message, as in a stream.',
     `- ${bareNumbers('conversation')}`,
     `- ${PREFIXES}`,
     '- Links expand here without a group, unless a guest is in the conversation.',
@@ -245,7 +251,7 @@ const fit = (content: string) => {
 
 type StreamMessage = ZulipReceivedMessage & { streamId: number };
 
-type CommandContext = Arguments & { message: StreamMessage };
+type CommandContext<Message = StreamMessage> = Arguments & { message: Message };
 
 /** Where `expanders` turns groups on and off, and what its answers call that place. */
 type ExpanderTarget = { place: ExpanderPlace; kind: 'stream' | 'conversation' };
@@ -262,10 +268,18 @@ type Command = {
   options: string[];
   /** Taken from organization administrators and owners only; what they alone can do, for the refusal. */
   administrators?: string;
+  /** Refused to guests, since it acts in streams they may not see; what they cannot do, for the refusal. */
+  guestsCannot?: string;
   /** Taken in the team streams only: it acts on more than the stream it is given in. */
   teamStreams?: boolean;
-  run: (context: CommandContext) => Promise<string | undefined>;
-};
+} & (
+  | { directMessages?: false; run: (context: CommandContext) => Promise<string | undefined> }
+  | {
+      /** Taken in a direct message too, with the same arguments, and answered to the sender alone. */
+      directMessages: true;
+      run: (context: CommandContext<ZulipReceivedMessage>) => Promise<string>;
+    }
+);
 
 type BackgroundJob = { ack: string; work: () => Promise<string> };
 
@@ -499,28 +513,30 @@ export class ZulipCommandService {
       description:
         'Answer every message that uses the emoji `:name:`, in any stream I can see, with that image, replacing the image of a sticker of that name. An attached image is shown full size, a URL as a link preview.',
       example: 'sticker-add this-is-fine https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
-      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      listing: { section: ZulipHelpSection.Stickers, summary: STICKER_SUMMARY },
       positionals: Number.POSITIVE_INFINITY,
       options: [],
-      teamStreams: true,
+      guestsCannot: CHANGE_STICKERS,
+      directMessages: true,
       run: (context) => this.stickerAdd(context),
     },
     'sticker-remove': {
       usage: 'sticker-remove <name>',
       description: 'Stop answering the emoji `:name:` with an image.',
-      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      listing: { section: ZulipHelpSection.Stickers, summary: STICKER_SUMMARY },
       positionals: 1,
       options: [],
-      teamStreams: true,
+      guestsCannot: CHANGE_STICKERS,
+      directMessages: true,
       run: (context) => this.stickerRemove(context),
     },
     'sticker-list': {
       usage: 'sticker-list',
       description: 'List the stickers, with their images.',
-      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      listing: { section: ZulipHelpSection.Stickers, summary: STICKER_SUMMARY },
       positionals: 0,
       options: [],
-      teamStreams: true,
+      directMessages: true,
       run: () => this.stickerList(),
     },
     'command-bots': {
@@ -566,7 +582,7 @@ export class ZulipCommandService {
   }
 
   /**
-   * Stream membership is the authorisation, so a command outside the team streams is not run; the mirror commands,
+   * Stream membership is the authorisation, so a team command outside the team streams is not run; the mirror commands,
    * whose stream is usually not a team one, check the sender's role instead. Another bot's commands are taken only
    * once an administrator has listed it with `command-bots`, and never in a direct message.
    */
@@ -623,25 +639,50 @@ export class ZulipCommandService {
     if (!command) {
       return `Unknown command ${code(shorten(name, ECHO_LENGTH))}. Mention me with ${code('help')} for the list.`;
     }
+    return this.runCommand(name, message, tokens, (args) => command.run({ message, ...args }));
+  }
+
+  /** Checks the arguments and the sender, then runs the command; a failure is answered, never thrown. */
+  private async runCommand<Reply extends string | undefined>(
+    name: string,
+    message: ZulipReceivedMessage,
+    tokens: string[],
+    run: (args: Arguments) => Promise<Reply>,
+  ): Promise<Reply | string> {
+    const command = this.commands[name];
     // With no autocomplete, an argument the command does not take must be answered, never dropped: a typo in `number=` would otherwise backfill every PR.
-    const { args, options } = splitArguments(tokens, command.options);
-    if (args.length > command.positionals) {
+    const args = splitArguments(tokens, command.options);
+    if (args.args.length > command.positionals) {
       return this.usage(name);
     }
     try {
       if (command.administrators && !(await this.isAdministrator(message.senderId))) {
         return `Only Zulip organization administrators and owners can ${command.administrators}.`;
       }
-      return await command.run({ message, args, options });
+      const refusal = command.guestsCannot && (await this.refuseGuests(name, message.senderId, command.guestsCannot));
+      if (refusal) {
+        return refusal;
+      }
+      return await run(args);
     } catch (error) {
       this.logger.error(`The Zulip command ${name} failed on message ${message.id}`, error);
       return `${code(name)} failed: ${describeError(error)}`;
     }
   }
 
+  /** Fails closed: a sender whose role cannot be read is refused too. */
+  private async refuseGuests(name: string, userId: number, action: string) {
+    try {
+      return (await this.zulipService.isGuest(userId)) ? `Guests cannot ${action}.` : undefined;
+    } catch (error) {
+      this.logger.debug(`Could not read the role of Zulip user ${userId} for ${name}`, error);
+      return `Could not read your Zulip role, and guests cannot ${action}; try again later.`;
+    }
+  }
+
   /**
-   * Only `link <code>` and `unlink` are taken in a direct message, exactly as typed, so that nothing else said to the
-   * bot, in a group conversation too, gets an answer. The answer goes to the sender alone.
+   * Only `help`, `expanders`, `link <code>`, `unlink` and the `directMessages` commands are taken in a direct message, so
+   * that nothing else said to the bot, in a group conversation too, gets an answer. The answer goes to the sender alone.
    */
   private async onDirectMessage(message: ZulipReceivedMessage) {
     const parsed = parseCommand(message.content, this.zulipService.ownUser?.fullName ?? '');
@@ -656,6 +697,7 @@ export class ZulipCommandService {
     }
     const [name = '', ...args] = tokens;
     const command = name.toLowerCase();
+    const tableCommand = this.commands[command];
     const conversation = message.recipientIds ?? [message.senderId];
     let run: (() => Promise<string>) | undefined;
     let recipients = [message.senderId];
@@ -671,6 +713,8 @@ export class ZulipCommandService {
         this.mirrorLinks.redeemIdentityCode({ id: message.senderId, fullName: message.senderFullName }, args[0]);
     } else if ((command === 'unlink' || command === 'discord-unlink') && args.length === 0) {
       run = () => this.mirrorLinks.unlinkIdentity({ zulipUserId: message.senderId }, 'zulip');
+    } else if (tableCommand?.directMessages) {
+      run = () => this.runCommand(command, message, args, (context) => tableCommand.run({ message, ...context }));
     }
     if (!run) {
       return;
@@ -777,17 +821,23 @@ export class ZulipCommandService {
       return `There is no command ${code(shorten(given, ECHO_LENGTH))}; ${code('help')} lists them.`;
     }
 
-    const { usage, description, subcommands = {}, administrators, teamStreams, options, example } = this.commands[name];
-    const where = administrators
-      ? 'in any stream, from organization administrators and owners only'
-      : teamStreams
-        ? 'in the Immich team streams only'
+    const command = this.commands[name];
+    const { usage, description, subcommands = {}, options, example } = command;
+    const where = command.teamStreams
+      ? 'in the Immich team streams only'
+      : command.directMessages
+        ? 'in any stream and in a direct message'
         : 'in any stream';
+    const from = command.administrators
+      ? ', from organization administrators and owners only'
+      : command.guestsCannot
+        ? ', from anyone but guests'
+        : '';
     return [
       code(usage),
       description,
       ...Object.entries(subcommands).map(([form, summary]) => helpLine([form], summary)),
-      `- Taken ${where}.`,
+      `- Taken ${where}${from}.`,
       ...(options.length > 0 ? [`- Options: ${options.map((key) => code(`${key}=`)).join(', ')}`] : []),
       ...(example ? [`- Example: ${code(example)}`] : []),
     ].join('\n');
@@ -1397,7 +1447,7 @@ export class ZulipCommandService {
     ].join('\n');
   }
 
-  private async stickerAdd({ message, args }: CommandContext) {
+  private async stickerAdd({ message, args }: CommandContext<ZulipReceivedMessage>) {
     const [given, ...rest] = args;
     // The tokenizer splits the label of an upload named with a space, `[my file.png](…)`, in two, and the command fails to
     // parse when that name holds an unmatched quote, which a bare path avoids.
@@ -1423,7 +1473,7 @@ export class ZulipCommandService {
     });
   }
 
-  private async stickerRemove({ args: [given] }: CommandContext) {
+  private async stickerRemove({ args: [given] }: CommandContext<ZulipReceivedMessage>) {
     if (!given) {
       return this.usage('sticker-remove');
     }

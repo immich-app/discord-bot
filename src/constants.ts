@@ -42,6 +42,7 @@ export enum ZulipHelpSection {
   Schedule = 'Scheduled messages',
   Rss = 'RSS',
   Mirror = 'Discord mirror',
+  Stickers = 'Stickers',
   Team = 'Team tools',
   Bots = 'Other bots',
 }
