@@ -59,6 +59,7 @@ import {
   ZulipEmote,
   ZulipExpander,
   ZulipExpanderGroup,
+  ZulipSticker,
 } from 'src/schema';
 import { PullRequestTable } from 'src/schema/tables/pull-request.table';
 
@@ -778,6 +779,28 @@ export class DatabaseRepository implements IDatabaseRepository {
       .deleteFrom('zulip_command_bot')
       .where('userId', '=', userId)
       .returning('userId')
+      .executeTakeFirst();
+    return removed !== undefined;
+  }
+
+  getZulipStickers(): Promise<ZulipSticker[]> {
+    return this.db.selectFrom('zulip_sticker').selectAll().orderBy('name').execute();
+  }
+
+  setZulipSticker(name: string, image: string, createdBy: string): Promise<ZulipSticker> {
+    return this.db
+      .insertInto('zulip_sticker')
+      .values({ name, image, createdBy })
+      .onConflict((oc) => oc.column('name').doUpdateSet({ image, createdBy }))
+      .returningAll()
+      .executeTakeFirstOrThrow();
+  }
+
+  async removeZulipSticker(name: string): Promise<boolean> {
+    const removed = await this.db
+      .deleteFrom('zulip_sticker')
+      .where('name', '=', name)
+      .returning('name')
       .executeTakeFirst();
     return removed !== undefined;
   }

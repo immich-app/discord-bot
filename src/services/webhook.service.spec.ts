@@ -122,6 +122,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getZulipCommandBots: vitest.fn(),
   addZulipCommandBot: vitest.fn(),
   removeZulipCommandBot: vitest.fn(),
+  getZulipStickers: vitest.fn(),
+  setZulipSticker: vitest.fn(),
+  removeZulipSticker: vitest.fn(),
 });
 
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({

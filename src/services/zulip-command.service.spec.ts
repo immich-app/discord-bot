@@ -81,11 +81,22 @@ const newZulipServiceMock = () => ({
   ownUser: BOT as ZulipUser | undefined,
 });
 
-const newChatServiceMock = () => ({
-  syncEmotes: vitest.fn<(guildId: string) => Promise<EmoteSyncReport>>(),
-  updateFourthwallOrders: vitest.fn<(id?: string | null) => Promise<void>>().mockResolvedValue(),
-  handleFindSimilarIssuesOrDiscussions: vitest.fn<(text: string) => Promise<string>>().mockResolvedValue(''),
-});
+const newChatServiceMock = () => {
+  const stickers = new Map<string, string>();
+  return {
+    stickers,
+    syncEmotes: vitest.fn<(guildId: string) => Promise<EmoteSyncReport>>(),
+    updateFourthwallOrders: vitest.fn<(id?: string | null) => Promise<void>>().mockResolvedValue(),
+    handleFindSimilarIssuesOrDiscussions: vitest.fn<(text: string) => Promise<string>>().mockResolvedValue(''),
+    getStickers: () => [...stickers].map(([name, image]) => ({ name, image })),
+    setSticker: vitest.fn<(name: string, image: string, createdBy: string) => Promise<boolean>>((name, image) => {
+      const replaced = stickers.has(name);
+      stickers.set(name, image);
+      return Promise.resolve(replaced);
+    }),
+    removeSticker: (name: string) => Promise.resolve(stickers.delete(name)),
+  };
+};
 
 const newGithubServiceMock = () => ({
   getOpenPullRequests: vitest.fn<() => Promise<PullRequestBaseEvent[]>>().mockResolvedValue([]),
@@ -356,6 +367,7 @@ const HELP = [
   '- `emote-sync`: upload the emotes of the Immich Discord server to Zulip',
   '- `backfill-pull-requests`: create the Discord thread and the Zulip topic a pull request lacks',
   '- `fourthwall`: fetch a Fourthwall order again, or every order',
+  '- `sticker-add`, `sticker-remove`, `sticker-list`: answer an emoji with an image, in every stream',
   '',
   '**Other bots**',
   '- `command-bots`: choose the other bots whose commands I take',
@@ -3239,6 +3251,98 @@ describe('ZulipCommandService', () => {
         expect(contents()).toHaveLength(2);
         expect(database.groups.map(({ name }) => name).sort()).toEqual(['apps', 'immich']);
       });
+    });
+  });
+
+  describe('stickers', () => {
+    const contents = () => replies().map(({ content }) => content);
+    const UPLOAD = '/user_uploads/2/ab/cdEF12/my_party.gif';
+
+    it('should add, list, update and remove a sticker', async () => {
+      await send('@**Immich** sticker-list');
+      await send('@**Immich** sticker-add Party https://example.com/party.gif');
+      await send('@**Immich** sticker-add party https://example.com/party2.gif');
+      await send('@**Immich** sticker-list');
+      await send('@**Immich** sticker-remove PARTY');
+      await send('@**Immich** sticker-remove party');
+
+      expect(contents()).toEqual([
+        'There are no stickers; `sticker-add <name> <image>` adds one.',
+        'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.',
+        'Updated the sticker `party`: `:party:` is answered with the new image.',
+        'Stickers:\n- `:party:`: `https://example.com/party2.gif`',
+        'Removed the sticker `party`.',
+        'There is no sticker `party`; `sticker-list` lists them.',
+      ]);
+      expect(chatServiceMock.setSticker).toHaveBeenCalledWith(
+        'party',
+        'https://example.com/party.gif',
+        'Alice on Zulip (user 12)',
+      );
+      expect(chatServiceMock.stickers.size).toBe(0);
+    });
+
+    it.each([
+      { content: `@**Immich** sticker-add party\n[my party.gif](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party [party.gif](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party ![party](${UPLOAD})` },
+      { content: `@**Immich** sticker-add party ${UPLOAD}` },
+    ])('should keep an attached upload as inline image markdown, shown full size: $content', async ({ content }) => {
+      await send(content);
+
+      expect(chatServiceMock.stickers.get('party')).toBe(`![party](${UPLOAD})`);
+      expect(contents()).toEqual([
+        'Added the sticker `party`: `:party:` is answered with the image, in any stream I can see.',
+      ]);
+    });
+
+    it.each([
+      '@**Immich** sticker-add',
+      '@**Immich** sticker-add party',
+      '@**Immich** sticker-add party not-a-url',
+      '@**Immich** sticker-add party https://example.com/a.gif https://example.com/b.gif',
+      '@**Immich** sticker-add party https://example.com/@**all**.gif',
+      '@**Immich** sticker-remove',
+      '@**Immich** sticker-remove party extra',
+      '@**Immich** sticker-list party',
+    ])('should answer %j with the usage', async (content) => {
+      await send(content);
+
+      expect(contents()).toEqual([expect.stringMatching(/^Usage: `sticker-(add|remove|list)/)]);
+      expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+    });
+
+    it.each(['"two words"', ':party:', 'pärty'])('should refuse to name a sticker %s', async (name) => {
+      await send(`@**Immich** sticker-add ${name} https://example.com/party.gif`);
+
+      expect(contents()).toEqual([expect.stringContaining('cannot name a sticker: an emoji name is letters, digits')]);
+      expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+    });
+
+    it('should refuse every sticker command outside the team streams, saying so', async () => {
+      await send('@**Immich** sticker-add party https://example.com/party.gif', { streamId: 999 });
+      await send('@**Immich** sticker-remove party', { streamId: 999 });
+      await send('@**Immich** sticker-list', { streamId: 999 });
+
+      expect(contents()).toEqual([
+        '`sticker-add` is taken in the Immich team streams only.',
+        '`sticker-remove` is taken in the Immich team streams only.',
+        '`sticker-list` is taken in the Immich team streams only.',
+      ]);
+      expect(chatServiceMock.setSticker).not.toHaveBeenCalled();
+    });
+
+    it("should take a listed bot's sticker command", async () => {
+      database.commandBots.push({ userId: 30, createdBy: 'Alice on Zulip (user 12)', createdAt: new Date() });
+      await sut.init();
+
+      await send('@**Immich** sticker-add party https://example.com/party.gif', fromClaude);
+
+      expect(chatServiceMock.setSticker).toHaveBeenCalledExactlyOnceWith(
+        'party',
+        'https://example.com/party.gif',
+        'Claude on Zulip (user 30)',
+      );
     });
   });
 

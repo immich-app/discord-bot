@@ -19,6 +19,7 @@ import { ZulipDmExpanderTable } from 'src/schema/tables/zulip-dm-expander.table'
 import { ZulipEmoteTable } from 'src/schema/tables/zulip-emote.table';
 import { ZulipExpanderGroupTable } from 'src/schema/tables/zulip-expander-group.table';
 import { ZulipExpanderTable } from 'src/schema/tables/zulip-expander.table';
+import { ZulipStickerTable } from 'src/schema/tables/zulip-sticker.table';
 
 @Extensions(['uuid-ossp'])
 @Database({ name: 'discord-bot' })
@@ -43,6 +44,7 @@ export class DiscordBotDatabase {
     PullRequestExpansionTable,
     ZulipCommandBotTable,
     GithubItemTable,
+    ZulipStickerTable,
   ];
 }
 
@@ -104,6 +106,7 @@ export type ZulipEmote = Selectable<ZulipEmoteTable>;
 export type NewZulipEmote = Insertable<ZulipEmoteTable>;
 export type UpdateZulipEmote = Updateable<ZulipEmoteTable>;
 export type ZulipCommandBot = Selectable<ZulipCommandBotTable>;
+export type ZulipSticker = Selectable<ZulipStickerTable>;
 
 export interface Database {
   payment: PaymentTable;
@@ -125,4 +128,5 @@ export interface Database {
   pull_request_expansion: PullRequestExpansionTable;
   zulip_command_bot: ZulipCommandBotTable;
   github_item: GithubItemTable;
+  zulip_sticker: ZulipStickerTable;
 }

@@ -257,17 +257,6 @@ export const Constants = {
     /** Zulip has no per-channel bot permissions, so this list is the only authorisation for commands. */
     Commands: Object.values(zulipTeamStreams),
     TeamStreams: zulipTeamStreams,
-    /** A message using one of these emoji, by name, in a stream the bot can see is answered with the image. */
-    EmojiImages: {
-      chugg: 'https://zuclaude.exe.xyz/stickers/chugg.gif',
-      nice: 'https://media1.tenor.com/m/l3-VETEqSYkAAAAd/nice-noice.gif',
-      'oh-god-the-emails': 'https://zuclaude.exe.xyz/stickers/oh-god-the-emails.png',
-      stamppers: 'https://zuclaude.exe.xyz/stickers/stamppers.gif',
-      'this-is-fine': 'https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
-      'unsee-juice': '![unsee-juice](/user_uploads/2/ed/ngCVicRM4MCEnzYdxl3knd6b/unsee-juice.png)',
-      'we-are-checking': 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
-      'we-are-crying': 'https://media1.tenor.com/m/vjWI_-HHKdgAAAAd/ferrari-cry-ferrari.gif',
-    } as Record<string, string>,
   },
   /** An approval marks the bot's expansion replies of the last `MaxAgeDays` that name the pull request. */
   /** `Emoji` is the Zulip realm emoji; `DiscordEmote` the Immich Discord server's emote. */

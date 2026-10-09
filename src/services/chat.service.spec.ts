@@ -12,7 +12,7 @@ import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { GithubItem, ZulipExpander, ZulipExpanderGroup } from 'src/schema';
+import { GithubItem, ZulipExpander, ZulipExpanderGroup, ZulipSticker } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
 import {
   ChatService,
@@ -90,6 +90,18 @@ const newOutlineMockRepository = (): Mocked<IOutlineInterface> => ({
   shareDocument: vitest.fn(),
   searchDocuments: vitest.fn(),
 });
+
+/** The stickers the `ZulipStickers` migration seeds. */
+const STICKERS: ZulipSticker[] = Object.entries({
+  chugg: 'https://zuclaude.exe.xyz/stickers/chugg.gif',
+  nice: 'https://media1.tenor.com/m/l3-VETEqSYkAAAAd/nice-noice.gif',
+  'oh-god-the-emails': 'https://zuclaude.exe.xyz/stickers/oh-god-the-emails.png',
+  stamppers: 'https://zuclaude.exe.xyz/stickers/stamppers.gif',
+  'this-is-fine': 'https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
+  'unsee-juice': '![unsee-juice](/user_uploads/2/ed/ngCVicRM4MCEnzYdxl3knd6b/unsee-juice.png)',
+  'we-are-checking': 'https://media1.tenor.com/m/wzhj-RbyNyIAAAAd/ferrari-f1.gif',
+  'we-are-crying': 'https://media1.tenor.com/m/vjWI_-HHKdgAAAAd/ferrari-cry-ferrari.gif',
+}).map(([name, image]) => ({ name, image, createdBy: 'migration', createdAt: new Date(0) }));
 
 const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   addDiscordLink: vitest.fn(),
@@ -170,6 +182,9 @@ const newDatabaseMockRepository = (): Mocked<IDatabaseRepository> => ({
   getZulipCommandBots: vitest.fn(),
   addZulipCommandBot: vitest.fn(),
   removeZulipCommandBot: vitest.fn(),
+  getZulipStickers: vitest.fn().mockResolvedValue(STICKERS),
+  setZulipSticker: vitest.fn(),
+  removeZulipSticker: vitest.fn(),
 });
 
 const newFourthwallMockRepository = (): Mocked<IFourthwallRepository> => ({
@@ -2118,6 +2133,7 @@ describe('Bot test', () => {
         [54, 107, 108, 109, 110, 111, 112, 113, 120].map((streamId) => expanderRow(streamId)),
       );
       await zulipExpanders.init();
+      await sut.init();
     });
 
     describe('approval tracking', () => {
@@ -2384,6 +2400,56 @@ describe('Bot test', () => {
         await sut.onZulipMessage(zulipMessage({ type: 'private', streamId: undefined, content: ':we-are-checking:' }));
 
         expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+      });
+
+      it('should read the stickers once, at init, rather than for every message', async () => {
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':nice:' }));
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':chugg:' }));
+
+        expect(databaseMock.getZulipStickers).toHaveBeenCalledOnce();
+        expect(zulipMock.sendMessage).toHaveBeenCalledTimes(2);
+      });
+
+      it('should answer a sticker as soon as it is added, and save it', async () => {
+        databaseMock.setZulipSticker.mockResolvedValue(STICKERS[0]);
+
+        await expect(
+          sut.setSticker('party', 'https://example.com/party.gif', 'Alice on Zulip (user 12)'),
+        ).resolves.toBe(false);
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':Party:' }));
+
+        expect(databaseMock.setZulipSticker).toHaveBeenCalledExactlyOnceWith(
+          'party',
+          'https://example.com/party.gif',
+          'Alice on Zulip (user 12)',
+        );
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ content: 'https://example.com/party.gif' }),
+        );
+      });
+
+      it('should answer a sticker given a new image with that image', async () => {
+        databaseMock.setZulipSticker.mockResolvedValue(STICKERS[0]);
+
+        await expect(sut.setSticker('nice', 'https://example.com/nice.gif', 'Alice on Zulip (user 12)')).resolves.toBe(
+          true,
+        );
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':nice:' }));
+
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ content: 'https://example.com/nice.gif' }),
+        );
+      });
+
+      it('should no longer answer a sticker once it is removed', async () => {
+        databaseMock.removeZulipSticker.mockResolvedValue(true);
+
+        await expect(sut.removeSticker('we-are-checking')).resolves.toBe(true);
+        await sut.onZulipMessage(zulipMessage({ streamId: 121, content: ':we-are-checking:' }));
+
+        expect(databaseMock.removeZulipSticker).toHaveBeenCalledExactlyOnceWith('we-are-checking');
+        expect(zulipMock.sendMessage).not.toHaveBeenCalled();
+        expect(sut.getStickers().map(({ name }) => name)).not.toContain('we-are-checking');
       });
 
       it('should post the image after the expansions of the same message, in one reply', async () => {

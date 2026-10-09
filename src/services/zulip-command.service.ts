@@ -64,6 +64,18 @@ const EXPANDER_GROUP = 'expander-group';
 
 const COMMAND_BOTS = 'command-bots';
 
+const STICKERS = 'stickers';
+
+/** An emoji name, which is what a sticker answers to. */
+const STICKER_NAME = /^[\w+-]+$/;
+
+/** A file attached to the message, which Zulip links as `[name](/user_uploads/…)`; no `*`, so it can mention no one. */
+const STICKER_UPLOAD = /(?:^|\]\()(\/user_uploads\/[^\s()*]+)/;
+
+const STICKER_URL = /^https?:\/\/[^\s*]+$/i;
+
+const STICKER_SUMMARY = 'answer an emoji with an image, in every stream';
+
 /** `@**Name**` or the silent `@_**Name**`, with Zulip's `|user_id` suffix when the name is not enough. */
 const USER_MENTION = /^@_?\*\*(.+?)(?:\|(\d+))?\*\*$/;
 
@@ -459,6 +471,35 @@ export class ZulipCommandService {
       positionals: Number.POSITIVE_INFINITY,
       options: ['text'],
       run: (context) => this.similar(context),
+    },
+    'sticker-add': {
+      usage: 'sticker-add <name> <image URL or attached upload>',
+      description:
+        'Answer every message that uses the emoji `:name:`, in any stream I can see, with that image, replacing the image of a sticker of that name. An attached upload is shown full size, a URL as a link preview.',
+      example: 'sticker-add this-is-fine https://media.giphy.com/media/QMHoU66sBXqqLqYvGO/giphy.gif',
+      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      positionals: Number.POSITIVE_INFINITY,
+      options: [],
+      teamStreams: true,
+      run: (context) => this.stickerAdd(context),
+    },
+    'sticker-remove': {
+      usage: 'sticker-remove <name>',
+      description: 'Stop answering the emoji `:name:` with an image.',
+      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      positionals: 1,
+      options: [],
+      teamStreams: true,
+      run: (context) => this.stickerRemove(context),
+    },
+    'sticker-list': {
+      usage: 'sticker-list',
+      description: 'List the stickers, with their images.',
+      listing: { section: ZulipHelpSection.Team, summary: STICKER_SUMMARY },
+      positionals: 0,
+      options: [],
+      teamStreams: true,
+      run: () => this.stickerList(),
     },
     'command-bots': {
       usage: 'command-bots <add|remove> <bot> | list',
@@ -1332,6 +1373,50 @@ export class ZulipCommandService {
         return `- ${user ? describeUser(user) : `user ${userId}`}, added by ${code(createdBy)} on ${createdAt.toISOString().slice(0, 10)}`;
       }),
     ].join('\n');
+  }
+
+  private async stickerAdd({ message, args }: CommandContext) {
+    const [given, ...rest] = args;
+    // The tokenizer splits the label of an upload named with a space, `[my file.png](…)`, in two.
+    const upload = STICKER_UPLOAD.exec(rest.join(' '))?.[1];
+    const url = rest.length === 1 && STICKER_URL.test(rest[0]) ? rest[0] : undefined;
+    if (!given || (!upload && !url)) {
+      return this.usage('sticker-add');
+    }
+    const name = given.toLowerCase();
+    if (!STICKER_NAME.test(name)) {
+      return `${code(given)} cannot name a sticker: an emoji name is letters, digits, ${code('_')}, ${code('-')} and ${code('+')}.`;
+    }
+    // Zulip shows the inline image markdown of an upload full size, where a link gets a small preview.
+    const image = upload ? `![${name}](${upload})` : url!;
+    return this.underLock(STICKERS, async () => {
+      const replaced = await this.chatService.setSticker(name, image, describeZulipSender(message));
+      return replaced
+        ? `Updated the sticker ${code(name)}: ${code(`:${name}:`)} is answered with the new image.`
+        : `Added the sticker ${code(name)}: ${code(`:${name}:`)} is answered with the image, in any stream I can see.`;
+    });
+  }
+
+  private async stickerRemove({ args: [given] }: CommandContext) {
+    if (!given) {
+      return this.usage('sticker-remove');
+    }
+    const name = given.toLowerCase();
+    return this.underLock(STICKERS, async () =>
+      (await this.chatService.removeSticker(name))
+        ? `Removed the sticker ${code(name)}.`
+        : `There is no sticker ${code(name)}; ${code('sticker-list')} lists them.`,
+    );
+  }
+
+  private stickerList() {
+    const stickers = this.chatService.getStickers();
+    if (stickers.length === 0) {
+      return Promise.resolve(`There are no stickers; ${code('sticker-add <name> <image>')} adds one.`);
+    }
+    return Promise.resolve(
+      ['Stickers:', ...stickers.map(({ name, image }) => `- ${code(`:${name}:`)}: ${code(image)}`)].join('\n'),
+    );
   }
 
   private async similar({ message, args, options }: CommandContext) {
