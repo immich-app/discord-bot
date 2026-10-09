@@ -69,10 +69,24 @@ const STICKERS = 'stickers';
 /** An emoji name, which is what a sticker answers to. */
 const STICKER_NAME = /^[\w+-]+$/;
 
-/** A file attached to the message, which Zulip links as `[name](/user_uploads/…)`; no `*`, so it can mention no one. */
-const STICKER_UPLOAD = /(?:^|\]\()(\/user_uploads\/[^\s()*]+)/;
+/**
+ * The whole image argument as a file attached to the message, which Zulip links as `[name](/user_uploads/…)`, or a
+ * bare `/user_uploads/…` path; nothing before or after it, and no `*`, so it can mention no one.
+ */
+const STICKER_UPLOAD = /^(?:!?\[[^\]]*\]\((\/user_uploads\/[^\s()*]+)\)|(\/user_uploads\/[^\s()*]+))$/;
 
-const STICKER_URL = /^https?:\/\/[^\s*]+$/i;
+/** An absolute http(s) URL with a host, and no whitespace or `*`. */
+const isStickerUrl = (value: string) => {
+  if (/[\s*]/.test(value)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '';
+  } catch {
+    return false;
+  }
+};
 
 const STICKER_SUMMARY = 'answer an emoji with an image, in every stream';
 
@@ -1378,8 +1392,9 @@ export class ZulipCommandService {
   private async stickerAdd({ message, args }: CommandContext) {
     const [given, ...rest] = args;
     // The tokenizer splits the label of an upload named with a space, `[my file.png](…)`, in two.
-    const upload = STICKER_UPLOAD.exec(rest.join(' '))?.[1];
-    const url = rest.length === 1 && STICKER_URL.test(rest[0]) ? rest[0] : undefined;
+    const uploadMatch = STICKER_UPLOAD.exec(rest.join(' '));
+    const upload = uploadMatch?.[1] ?? uploadMatch?.[2];
+    const url = rest.length === 1 && isStickerUrl(rest[0]) ? rest[0] : undefined;
     if (!given || (!upload && !url)) {
       return this.usage('sticker-add');
     }
