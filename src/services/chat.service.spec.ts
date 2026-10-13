@@ -2366,6 +2366,9 @@ describe('Bot test', () => {
         'we-are-checking',
         ':we-are-checking',
         ':smile:',
+        '```quote\n:we-are-checking:\n```',
+        '@_**Alice|12** [said](https://zulip.example/#narrow/near/1):\n```quote\n@**FUBot** :we-are-checking:\n```',
+        '~~~quoted\n:we-are-checking:\n~~~',
       ])('should not answer %j', async (content) => {
         await sut.onZulipMessage(zulipMessage({ streamId: 121, content }));
 
@@ -2374,8 +2377,9 @@ describe('Bot test', () => {
 
       it.each([
         '- a list item\n    :we-are-checking:',
-        '```quote\n:we-are-checking:\n```',
         'text\n    :we-are-checking:',
+        '```quote\n:smile:\n```\n:we-are-checking:',
+        '```quote\n:we-are-checking:\n```\nagain :we-are-checking:',
       ])('should answer %j, which Zulip renders as text', async (content) => {
         await sut.onZulipMessage(zulipMessage({ streamId: 121, content }));
 
