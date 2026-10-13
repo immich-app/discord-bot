@@ -256,9 +256,10 @@ const shorthandRepository = ({ repositories }: ExpanderScope, path: string, kind
   return isOwner ? wanted : undefined;
 };
 
-/** The images of the stickers a message uses outside code, by their emoji, each once. */
+/** The images of the stickers a message uses outside code and quotes, by their emoji, each once. */
 const emojiImages = (content: string, stickers: Map<string, string>) => {
-  const text = zulipTextOutsideCode(content);
+  // A quote is the quoted message's, whose stickers were answered when it was sent: quoting it again must not repost them.
+  const text = zulipTextOutsideCode(content, { skipQuotes: true });
   const images = [...text.matchAll(/:([\w+-]+):/g)].map(([, name]) => stickers.get(name.toLowerCase()));
   return [...new Set(images.filter((image) => image !== undefined))];
 };
