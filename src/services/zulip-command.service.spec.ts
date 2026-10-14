@@ -55,6 +55,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   getMessage: vitest.fn(),
   updateMessage: vitest.fn(),
   createEmote: vitest.fn(),
+  createEmoteFromFile: vitest.fn(),
   replaceCroppedEmote: vitest.fn(),
   listEmoji: vitest.fn(),
   getSubscriptions: vitest.fn(),
@@ -368,6 +369,7 @@ const HELP = [
   '- `backfill-pull-requests`: create the Discord thread and the Zulip topic a pull request lacks',
   '- `fourthwall`: fetch a Fourthwall order again, or every order',
   '- `sticker-add`, `sticker-remove`, `sticker-list`: answer an emoji with an image, in every stream',
+  '- `emoji-add`: add a custom emoji from an attached image',
   '',
   '**Other bots**',
   '- `command-bots`: choose the other bots whose commands I take',
@@ -3397,6 +3399,76 @@ describe('ZulipCommandService', () => {
         'https://example.com/party.gif',
         'Claude on Zulip (user 30)',
       );
+    });
+  });
+
+  describe('emoji-add', () => {
+    const contents = () => replies().map(({ content }) => content);
+    const UPLOAD = '/user_uploads/2/ab/cdEF12/party.gif';
+    const file = new File([new Uint8Array([71, 73, 70, 56])], 'party.gif', { type: 'image/gif' });
+
+    beforeEach(() => {
+      zulipMock.listEmoji.mockResolvedValue([]);
+      zulipMock.downloadUpload.mockResolvedValue(file);
+    });
+
+    it('should add an emoji from an upload', async () => {
+      await send(`@**Immich** emoji-add Party [party.gif](${UPLOAD})`);
+
+      expect(zulipMock.downloadUpload).toHaveBeenCalledWith(UPLOAD, 5 * 1024 * 1024);
+      expect(zulipMock.createEmoteFromFile).toHaveBeenCalledExactlyOnceWith('party', file);
+      expect(contents()).toEqual(['Added `:party:`: :party:']);
+    });
+
+    it('should never replace an emoji in use', async () => {
+      zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'party', deactivated: false }]);
+
+      await send(`@**Immich** emoji-add party [party.gif](${UPLOAD})`);
+
+      expect(contents()).toEqual(['`:party:` already exists, and I never replace an emoji.']);
+      expect(zulipMock.downloadUpload).not.toHaveBeenCalled();
+      expect(zulipMock.createEmoteFromFile).not.toHaveBeenCalled();
+    });
+
+    it('should reuse the name of a deactivated emoji', async () => {
+      zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'party', deactivated: true }]);
+
+      await send(`@**Immich** emoji-add party [party.gif](${UPLOAD})`);
+
+      expect(zulipMock.createEmoteFromFile).toHaveBeenCalledExactlyOnceWith('party', file);
+    });
+
+    it.each(['party-', 'pärty', ':party:'])('should refuse to name an emoji %s', async (name) => {
+      await send(`@**Immich** emoji-add ${name} [party.gif](${UPLOAD})`);
+
+      expect(contents()).toEqual([expect.stringContaining('cannot name an emoji')]);
+      expect(zulipMock.createEmoteFromFile).not.toHaveBeenCalled();
+    });
+
+    it.each(['@**Immich** emoji-add party https://example.com/party.gif', '@**Immich** emoji-add party'])(
+      'should take an upload only, never a URL: %s',
+      async (content) => {
+        await send(content);
+
+        expect(contents()).toEqual([expect.stringContaining('emoji-add <name> <attached image>')]);
+        expect(zulipMock.downloadUpload).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should refuse a file over 5 MB', async () => {
+      zulipMock.downloadUpload.mockResolvedValue(undefined);
+
+      await send(`@**Immich** emoji-add party [party.gif](${UPLOAD})`);
+
+      expect(contents()).toEqual(["That file is over 5 MB, Zulip's limit for an emoji."]);
+      expect(zulipMock.createEmoteFromFile).not.toHaveBeenCalled();
+    });
+
+    it('should refuse outside the team streams', async () => {
+      await send(`@**Immich** emoji-add party [party.gif](${UPLOAD})`, { streamId: 999 });
+
+      expect(contents()).toEqual(['`emoji-add` is taken in the Immich team streams only.']);
+      expect(zulipMock.createEmoteFromFile).not.toHaveBeenCalled();
     });
   });
 
