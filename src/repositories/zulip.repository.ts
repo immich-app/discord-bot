@@ -91,6 +91,8 @@ const padToSquare = async (data: EmoteData): Promise<Pick<EmoteImage, 'padded' |
   }
 };
 
+const urlExtension = (url: string) => new URL(url).pathname.match(/\.(\w+)$/)?.[1];
+
 const readEmote = async (emoteUrl: string): Promise<EmoteImage> => {
   const image = await fetch(emoteUrl, { signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
   if (!image.ok) {
@@ -480,7 +482,15 @@ export class ZulipRepository implements IZulipInterface {
     const user = this.user;
     const emote = await readEmote(emoteUrl);
     const { contentType, data } = emote.padded ?? { contentType: emote.contentType, data: emote.original };
-    await this.uploadEmote(user, name, emoteUrl, contentType, data);
+    await this.uploadEmote(user, name, urlExtension(emoteUrl), contentType, data);
+  }
+
+  async createEmoteFromFile(name: string, file: File) {
+    const user = this.user;
+    const original = new Uint8Array(await file.arrayBuffer());
+    const emote = { original, contentType: file.type || 'application/octet-stream', ...(await padToSquare(original)) };
+    const { contentType, data } = emote.padded ?? { contentType: emote.contentType, data: emote.original };
+    await this.uploadEmote(user, name, file.name.match(/\.(\w+)$/)?.[1], contentType, data);
   }
 
   /** A failed upload of the padded image puts the original back, so the emoji is never left deactivated. */
@@ -495,11 +505,11 @@ export class ZulipRepository implements IZulipInterface {
     }
     await user.DELETE('/realm/emoji/{emoji_name}', { params: { path: { emoji_name: name.toLowerCase() } } });
     try {
-      await this.uploadEmote(user, name, emoteUrl, emote.padded.contentType, emote.padded.data);
+      await this.uploadEmote(user, name, urlExtension(emoteUrl), emote.padded.contentType, emote.padded.data);
     } catch (error) {
       let restored = true;
       try {
-        await this.uploadEmote(user, name, emoteUrl, emote.contentType, emote.original);
+        await this.uploadEmote(user, name, urlExtension(emoteUrl), emote.contentType, emote.original);
       } catch {
         restored = false;
         this.logger.error(
@@ -520,10 +530,16 @@ export class ZulipRepository implements IZulipInterface {
     return 'replaced' as const;
   }
 
-  private async uploadEmote(user: ZulipClient, name: string, emoteUrl: string, contentType: string, data: EmoteData) {
+  private async uploadEmote(
+    user: ZulipClient,
+    name: string,
+    extensionHint: string | undefined,
+    contentType: string,
+    data: EmoteData,
+  ) {
     const emojiName = name.toLowerCase();
     // Zulip needs a real filename with an extension and the image's content type on the multipart part.
-    const extension = IMAGE_EXTENSIONS[contentType] ?? new URL(emoteUrl).pathname.match(/\.(\w+)$/)?.[1] ?? 'png';
+    const extension = IMAGE_EXTENSIONS[contentType] ?? extensionHint ?? 'png';
     const file = new File([data], `${emojiName}.${extension}`, { type: contentType });
 
     await user.POST('/realm/emoji/{emoji_name}', {

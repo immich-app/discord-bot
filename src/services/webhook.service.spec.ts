@@ -171,6 +171,7 @@ const newZulipMockRepository = (): Mocked<IZulipInterface> => ({
   init: vitest.fn(),
   isInitialised: vitest.fn().mockReturnValue(true),
   createEmote: vitest.fn(),
+  createEmoteFromFile: vitest.fn(),
   replaceCroppedEmote: vitest.fn(),
   sendMessage: vitest.fn(),
   sendDirectMessage: vitest.fn(),

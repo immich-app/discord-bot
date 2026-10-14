@@ -66,6 +66,14 @@ const COMMAND_BOTS = 'command-bots';
 
 const STICKERS = 'sticker-*';
 
+const EMOJI_ADD = 'emoji-add';
+
+/** Zulip's own rule for a custom emoji name: lowercase letters, digits, `-` and `_`, not ending in either. */
+const EMOJI_NAME = /^[\da-z_-]*[\da-z]$/;
+
+/** Zulip's limit on a custom emoji's file. */
+const MAX_EMOJI_BYTES = 5 * 1024 * 1024;
+
 /** An emoji name, which is what a sticker answers to. */
 const STICKER_NAME = /^[\w+-]+$/;
 
@@ -522,6 +530,17 @@ export class ZulipCommandService {
       options: [],
       teamStreams: true,
       run: () => this.stickerList(),
+    },
+    'emoji-add': {
+      usage: 'emoji-add <name> <attached image>',
+      description:
+        'Add the attached image as the custom emoji `:name:`, padded to a square like the emote sync. A name already in use is refused, never replaced. Only an upload to this Zulip is taken, never a URL, so the bot fetches nothing it is pointed at.',
+      example: 'emoji-add fap-shipit [fap-shipit.gif](/user_uploads/…)',
+      listing: { section: ZulipHelpSection.Team, summary: 'add a custom emoji from an attached image' },
+      positionals: Number.POSITIVE_INFINITY,
+      options: [],
+      teamStreams: true,
+      run: (context) => this.emojiAdd(context),
     },
     'command-bots': {
       usage: 'command-bots <add|remove> <bot> | list',
@@ -1420,6 +1439,31 @@ export class ZulipCommandService {
       return replaced
         ? `Updated the sticker ${code(name)}: ${code(`:${name}:`)} is answered with the new image.`
         : `Added the sticker ${code(name)}: ${code(`:${name}:`)} is answered with the image, in any stream I can see.`;
+    });
+  }
+
+  private async emojiAdd({ args }: CommandContext) {
+    const [given, ...rest] = args;
+    const upload = STICKER_UPLOAD.exec(rest.join(' '));
+    const path = upload?.[2] ?? upload?.[3];
+    if (!given || !path) {
+      return this.usage(EMOJI_ADD);
+    }
+    const name = given.toLowerCase();
+    if (!EMOJI_NAME.test(name)) {
+      return `${code(given)} cannot name an emoji: lowercase letters, digits, ${code('-')} and ${code('_')}, not ending in either.`;
+    }
+    return this.underLock(EMOJI_ADD, async () => {
+      const taken = (await this.zulip.listEmoji()).some((emoji) => emoji.name === name && !emoji.deactivated);
+      if (taken) {
+        return `${code(`:${name}:`)} already exists, and I never replace an emoji.`;
+      }
+      const file = await this.zulip.downloadUpload(path, MAX_EMOJI_BYTES);
+      if (!file) {
+        return `That file is over 5 MB, Zulip's limit for an emoji.`;
+      }
+      await this.zulip.createEmoteFromFile(name, file);
+      return `Added ${code(`:${name}:`)}: :${name}:`;
     });
   }
 

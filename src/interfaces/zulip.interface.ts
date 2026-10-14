@@ -153,6 +153,8 @@ export interface IZulipInterface {
   updateMessage(id: number, update: ZulipMessageUpdate): Promise<void>;
   /** Pads a non-square image to a transparent square first, since Zulip would crop it. */
   createEmote(name: string, emoteUrl: string): Promise<void>;
+  /** `createEmote` for a file in hand (an upload to Zulip), padded the same way. */
+  createEmoteFromFile(name: string, file: File): Promise<void>;
   /** Re-uploads the emoji padded when the emote's image is not square, which Zulip cropped; `kept` when it is. */
   replaceCroppedEmote(name: string, emoteUrl: string): Promise<'kept' | 'replaced'>;
   listEmoji(): Promise<ZulipEmoji[]>;
