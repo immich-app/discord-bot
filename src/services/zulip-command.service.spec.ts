@@ -58,6 +58,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => ({
   createEmoteFromFile: vitest.fn(),
   replaceCroppedEmote: vitest.fn(),
   listEmoji: vitest.fn(),
+  deactivateEmote: vitest.fn(),
   getSubscriptions: vitest.fn(),
   getOwnUser: vitest.fn(),
   getUser: vitest.fn(),
@@ -369,7 +370,7 @@ const HELP = [
   '- `backfill-pull-requests`: create the Discord thread and the Zulip topic a pull request lacks',
   '- `fourthwall`: fetch a Fourthwall order again, or every order',
   '- `sticker-add`, `sticker-remove`, `sticker-list`: answer an emoji with an image, in every stream',
-  '- `emoji-add`: add a custom emoji from an attached image',
+  '- `emoji-add`, `emoji-remove`: add a custom emoji from an attached image, or remove one',
   '',
   '**Other bots**',
   '- `command-bots`: choose the other bots whose commands I take',
@@ -3469,6 +3470,44 @@ describe('ZulipCommandService', () => {
 
       expect(contents()).toEqual(['`emoji-add` is taken in the Immich team streams only.']);
       expect(zulipMock.createEmoteFromFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('emoji-remove', () => {
+    const contents = () => replies().map(({ content }) => content);
+
+    beforeEach(() => {
+      zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'party', deactivated: false }]);
+    });
+
+    it.each(['party', 'Party', ':party:'])('should remove an active emoji named %s', async (name) => {
+      await send(`@**Immich** emoji-remove ${name}`);
+
+      expect(zulipMock.deactivateEmote).toHaveBeenCalledExactlyOnceWith('party');
+      expect(contents()).toEqual(['Removed `:party:`; `emoji-add party` can use the name again.']);
+    });
+
+    it('should say so when there is no such emoji', async () => {
+      zulipMock.listEmoji.mockResolvedValue([{ id: '1', name: 'party', deactivated: true }]);
+
+      await send('@**Immich** emoji-remove party');
+
+      expect(contents()).toEqual(['There is no emoji `:party:`.']);
+      expect(zulipMock.deactivateEmote).not.toHaveBeenCalled();
+    });
+
+    it('should give the usage without a name', async () => {
+      await send('@**Immich** emoji-remove');
+
+      expect(contents()).toEqual([expect.stringContaining('emoji-remove <name>')]);
+      expect(zulipMock.deactivateEmote).not.toHaveBeenCalled();
+    });
+
+    it('should refuse outside the team streams', async () => {
+      await send('@**Immich** emoji-remove party', { streamId: 999 });
+
+      expect(contents()).toEqual(['`emoji-remove` is taken in the Immich team streams only.']);
+      expect(zulipMock.deactivateEmote).not.toHaveBeenCalled();
     });
   });
 

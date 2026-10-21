@@ -67,6 +67,7 @@ const COMMAND_BOTS = 'command-bots';
 const STICKERS = 'sticker-*';
 
 const EMOJI_ADD = 'emoji-add';
+const EMOJI_SUMMARY = 'add a custom emoji from an attached image, or remove one';
 
 /** Zulip's own rule for a custom emoji name: lowercase letters, digits, `-` and `_`, not ending in either. */
 const EMOJI_NAME = /^[\da-z_-]*[\da-z]$/;
@@ -536,11 +537,22 @@ export class ZulipCommandService {
       description:
         'Add the attached image as the custom emoji `:name:`, padded to a square like the emote sync. A name already in use is refused, never replaced. Only an upload to this Zulip is taken, never a URL, so the bot fetches nothing it is pointed at.',
       example: 'emoji-add fap-shipit [fap-shipit.gif](/user_uploads/…)',
-      listing: { section: ZulipHelpSection.Team, summary: 'add a custom emoji from an attached image' },
+      listing: { section: ZulipHelpSection.Team, summary: EMOJI_SUMMARY },
       positionals: Number.POSITIVE_INFINITY,
       options: [],
       teamStreams: true,
       run: (context) => this.emojiAdd(context),
+    },
+    'emoji-remove': {
+      usage: 'emoji-remove <name>',
+      description:
+        'Remove the custom emoji `:name:`, so that its name can be used again. Zulip deactivates it: reactions made with it keep showing it.',
+      example: 'emoji-remove fap-shipit',
+      listing: { section: ZulipHelpSection.Team, summary: EMOJI_SUMMARY },
+      positionals: 1,
+      options: [],
+      teamStreams: true,
+      run: (context) => this.emojiRemove(context),
     },
     'command-bots': {
       usage: 'command-bots <add|remove> <bot> | list',
@@ -1464,6 +1476,22 @@ export class ZulipCommandService {
       }
       await this.zulip.createEmoteFromFile(name, file);
       return `Added ${code(`:${name}:`)}: :${name}:`;
+    });
+  }
+
+  private async emojiRemove({ args: [given] }: CommandContext) {
+    if (!given) {
+      return this.usage('emoji-remove');
+    }
+    const name = given.toLowerCase().replaceAll(':', '');
+    // The lock emoji-add takes, so that a removal and an add of one name never interleave.
+    return this.underLock(EMOJI_ADD, async () => {
+      const active = (await this.zulip.listEmoji()).some((emoji) => emoji.name === name && !emoji.deactivated);
+      if (!active) {
+        return `There is no emoji ${code(`:${name}:`)}.`;
+      }
+      await this.zulip.deactivateEmote(name);
+      return `Removed ${code(`:${name}:`)}; ${code(`emoji-add ${name}`)} can use the name again.`;
     });
   }
 

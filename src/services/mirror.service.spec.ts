@@ -358,6 +358,7 @@ const newZulipMock = (): Mocked<IZulipInterface> => {
       names: { '1f604': 'smile', '1f525': 'fire', '1f44d': '+1', '2764': 'heart' },
     }),
     listEmoji: vitest.fn().mockResolvedValue([]),
+    deactivateEmote: vitest.fn(),
     addReaction: vitest.fn().mockResolvedValue(undefined),
     removeReaction: vitest.fn().mockResolvedValue(undefined),
   };
