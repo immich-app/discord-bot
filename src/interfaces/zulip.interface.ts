@@ -157,6 +157,8 @@ export interface IZulipInterface {
   createEmoteFromFile(name: string, file: File): Promise<void>;
   /** Re-uploads the emoji padded when the emote's image is not square, which Zulip cropped; `kept` when it is. */
   replaceCroppedEmote(name: string, emoteUrl: string): Promise<'kept' | 'replaced'>;
+  /** Deactivates the custom emoji through the user account; reactions made with it keep pointing at it. */
+  deactivateEmote(name: string): Promise<void>;
   listEmoji(): Promise<ZulipEmoji[]>;
   getSubscriptions(): Promise<ZulipSubscription[]>;
   getOwnUser(): Promise<ZulipUser>;

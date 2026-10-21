@@ -493,6 +493,10 @@ export class ZulipRepository implements IZulipInterface {
     await this.uploadEmote(user, name, file.name.match(/\.(\w+)$/)?.[1], contentType, data);
   }
 
+  async deactivateEmote(name: string) {
+    await this.user.DELETE('/realm/emoji/{emoji_name}', { params: { path: { emoji_name: name.toLowerCase() } } });
+  }
+
   /** A failed upload of the padded image puts the original back, so the emoji is never left deactivated. */
   async replaceCroppedEmote(name: string, emoteUrl: string) {
     const user = this.user;
