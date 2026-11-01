@@ -14,6 +14,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   ThreadChannel,
+  User,
   type CommandInteraction,
 } from 'discord.js';
 import { Discord, ModalComponent, Slash, SlashChoice, SlashOption } from 'discordx';
@@ -494,7 +495,7 @@ export class DiscordCommands {
       type: ApplicationCommandOptionType.User,
       required: true,
     })
-    member: GuildMember,
+    member: GuildMember | User,
     @SlashOption({
       name: 'timespan',
       description: 'Delete all messages in the past x minutes',
@@ -504,11 +505,20 @@ export class DiscordCommands {
     minutes: number = 5,
     interaction: CommandInteraction,
   ) {
+    if (!(member instanceof GuildMember)) {
+      await interaction.reply({
+        content: `${member.toString()} is not a member of this server`,
+        flags: [MessageFlags.Ephemeral],
+      });
+      return;
+    }
+
     if (!member.isCommunicationDisabled()) {
       await interaction.reply({
         content: `${member.user.toString()} must be timeouted first`,
         flags: [MessageFlags.Ephemeral],
       });
+      return;
     }
 
     const deferredInteraction = await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
