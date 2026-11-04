@@ -572,7 +572,7 @@ export class WebhookService {
 
     const { id, description, amount, created, currency, status, livemode, source } = data;
 
-    await withErrorLogging({
+    const recorded = await withErrorLogging({
       method: () =>
         this.database.createPayment({
           event_id: id,
@@ -586,12 +586,12 @@ export class WebhookService {
           data: JSON.stringify(event),
         }),
       message: 'Failed to insert payment into database',
-      fallbackValue: undefined,
+      fallbackValue: true,
       notifications: this.notifications,
       logger: this.logger,
     });
 
-    if (status !== 'succeeded' && status !== 'paid') {
+    if (!recorded || (status !== 'succeeded' && status !== 'paid')) {
       return;
     }
 
