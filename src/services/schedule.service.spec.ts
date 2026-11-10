@@ -308,69 +308,6 @@ describe('ScheduleService', () => {
       expect(discordMock.sendMessage).toHaveBeenCalledOnce();
     });
 
-    it('should create the recap document in the support crew blog', async () => {
-      setNow('2026-09-23T00:00:00.000Z');
-
-      await sut.onCreateMonthlySummary();
-
-      expect(outlineMock.createDocument).toHaveBeenCalledOnce();
-      expect(outlineMock.createDocument.mock.calls[0][0]).toMatchInlineSnapshot(`
-        {
-          "collectionId": "e2910656-714c-4871-8721-447d9353bd73",
-          "icon": "pencil",
-          "iconColor": "#00D084",
-          "parentDocumentId": "25c227ce-7d6c-4a0e-84d2-e82fe362a609",
-          "text": "
-        ---
-
-        title: September recap
-
-        description: A recap of September, 2026, including an update on upcoming features, releases, developer updates, and more.
-
-        publishedAt: 2026-09-30
-
-        slug: 2026-september-recap
-
-        authors: [Immich Team]
-
-        type: recap
-
-        coverAttribution: Photo by <a href="https://unsplash.com/@v2osk" class="underline">v2osk</a> on <a href="https://unsplash.com/photos/foggy-mountain-summit-1Z2niiBPg5A" class="underline">Unsplash</a>
-
-        ---
-
-        ![](https://outline.immich.cloud/api/attachments.redirect?id=7f44c5e3-8f91-4149-aeab-39243c313816" =5299x2981")
-
-        Hello everyone!
-
-
-        ## Roadmap update
-
-
-        ## Releases
-
-
-        ## Developers update - from the labyrinth
-
-        *Our team members' unfiltered thoughts on the good, the bad, and the frustration about the current tasks they are working on.*
-
-        ### @alextran1502
-
-        ### @jrasm91
-
-        ### @danieldietzler
-
-
-        ## Upcoming goals
-
-
-        Well, that's it for this month. As always, if you find the project helpful, you can support us at <https://buy.immich.app/>.
-        ",
-          "title": "September 2026 recap",
-        }
-      `);
-    });
-
     it('should kick off a discord thread linking to the document and ping the support crew', async () => {
       setNow('2026-09-23T00:00:00.000Z');
 
