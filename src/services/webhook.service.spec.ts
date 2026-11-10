@@ -1,6 +1,6 @@
 import { Logger, UnauthorizedException } from '@nestjs/common';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
-import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
+import type { webhooks } from '@polar-sh/sdk/2026-10';
 import { CommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import _ from 'lodash';
 import { Constants, GithubItemKind, ReleaseMessages } from 'src/constants';
@@ -377,12 +377,12 @@ const polarEvent = {
   data: {
     id: 'order_1',
     description: 'polar-description',
-    totalAmount: 2500,
-    createdAt: new Date('2026-01-01T00:00:00Z'),
+    total_amount: 2500,
+    created_at: '2026-01-01T00:00:00Z',
     currency: 'usd',
     status: 'paid',
   },
-} as unknown as WebhookOrderPaidPayload;
+} as unknown as webhooks.WebhookOrderPaidPayload;
 
 describe(WebhookService.name, () => {
   let sut: WebhookService;

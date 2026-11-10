@@ -1,7 +1,6 @@
 import { Inject, Injectable, Logger, RawBodyRequest, UnauthorizedException } from '@nestjs/common';
 import type { EmitterWebhookEvent } from '@octokit/webhooks';
-import { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload.js';
-import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks.js';
+import { webhooks } from '@polar-sh/sdk/2026-10';
 import { MessageFlags, roleMention } from 'discord.js';
 import { Request, Response } from 'express';
 import _ from 'lodash';
@@ -419,7 +418,11 @@ export class WebhookService {
 
     try {
       const secret = orgSlug === 'immich-client' ? polar.immichClientSecret : polar.immichServerSecret;
-      const event = validateEvent(JSON.stringify(request.body), request.headers as Record<string, string>, secret);
+      const event = await webhooks.validateEvent(
+        JSON.stringify(request.body),
+        request.headers as Record<string, string>,
+        secret,
+      );
       if (event.type !== 'order.paid') {
         return;
       }
@@ -427,7 +430,7 @@ export class WebhookService {
       await this.handlePayment(event, orgSlug);
       response.status(202).send('');
     } catch (error) {
-      if (error instanceof WebhookVerificationError) {
+      if (error instanceof webhooks.PolarWebhookVerificationError) {
         response.status(403).send('');
         return;
       }
@@ -541,7 +544,7 @@ export class WebhookService {
   }
 
   private async handlePayment(
-    event: StripeBase<PaymentIntent> | WebhookOrderPaidPayload,
+    event: StripeBase<PaymentIntent> | webhooks.WebhookOrderPaidPayload,
     orgSlug?: 'immich-client' | 'immich-server',
   ) {
     let data: {
@@ -561,8 +564,8 @@ export class WebhookService {
       data = {
         id: event.data.id,
         description: orgSlug ?? event.data.description,
-        amount: event.data.totalAmount,
-        created: DateTime.fromJSDate(event.data.createdAt).toUnixInteger(),
+        amount: event.data.total_amount,
+        created: DateTime.fromISO(event.data.created_at).toUnixInteger(),
         currency: event.data.currency,
         status: event.data.status,
         source: 'polar',
