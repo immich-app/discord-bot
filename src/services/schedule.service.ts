@@ -147,11 +147,11 @@ Hello everyone!
 ### @danieldietzler
 
 
-## Upcoming goals
+## Next month
 
+Well, that's it for this month. Next month we
 
-\
-Well, that's it for this month. As always, if you find the project helpful, you can support us at <https://buy.immich.app/>.
+As always, if you find the project helpful, you can support us at <https://buy.immich.app/>.
 `,
     });
     const thread = await this.discord.createThread(Constants.Discord.Channels.SupportCrewDraftAnnouncements, {
