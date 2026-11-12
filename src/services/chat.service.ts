@@ -20,6 +20,7 @@ import {
   scanZulipFences,
   shorten,
   splitOutsideCode,
+  ZULIP_MAX_MESSAGE_LENGTH,
   ZULIP_QUOTE_FENCES,
 } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
@@ -61,7 +62,6 @@ type FxTweet = {
   media?: { all?: { url: string; type: string }[] };
 };
 
-/** Quotes the tweet from the fxtwitter API, for Zulip; the fxtwitter link itself when that fails. */
 const embedTweet = async (link: string) => {
   const { user, id } = link.match(/^https:\/\/fxtwitter\.com\/(?<user>\w+)\/status\/(?<id>\d+)/)?.groups ?? {};
   if (!user || !id) {
@@ -82,7 +82,7 @@ const embedTweet = async (link: string) => {
       ...(media && /^https:\/\/[^\s()<>[\]]+$/.test(media.url)
         ? [`> [${media.type === 'photo' ? 'image' : 'video'}](${media.url})`]
         : []),
-      // A blank line ends the quote, which would otherwise swallow the next part of the reply.
+      // Ends the quote; Zulip folds the next line into it otherwise.
       '',
     ].join('\n');
   } catch {
@@ -505,16 +505,27 @@ export class ChatService {
     ]
       .sort((a, b) => a.index - b.index)
       .slice(0, MAX_ZULIP_FILE_REFERENCES);
-    const [githubSnippets, gitlabSnippets, links, twitter] = await Promise.all([
+    const [githubSnippets, gitlabSnippets, links, tweets] = await Promise.all([
       this.handleGithubFileReferences(content, true, firstPermalinks.filter(({ host }) => host === 'github').length),
       this.handleGitlabFileReferences(content, firstPermalinks.filter(({ host }) => host === 'gitlab').length),
       this.handleGithubThreadReferences({ content, scope }, true),
-      this.handleTwitterReferences(content).then((links) => Promise.all(links.map((link) => embedTweet(link)))),
+      this.handleTwitterReferences(content).then((links) =>
+        Promise.all(links.map(async (link) => [link, await embedTweet(link)].map(neutraliseZulipMentions))),
+      ),
     ]);
-    return {
-      parts: [...githubSnippets, ...gitlabSnippets, ...[...links.parts, ...twitter].map(neutraliseZulipMentions)],
-      pullRequests: links.pullRequests,
-    };
+    const parts = [...githubSnippets, ...gitlabSnippets, ...links.parts.map(neutraliseZulipMentions)];
+    const rest = [...parts, ...emojiImages(content, this.stickers), ...tweets.map(([link]) => link)];
+    let budget = ZULIP_MAX_MESSAGE_LENGTH - [...rest.join('\n')].length;
+    for (const [link, embed] of tweets) {
+      const extra = [...embed].length - [...link].length;
+      if (extra <= budget) {
+        budget -= extra;
+        parts.push(embed);
+      } else {
+        parts.push(link);
+      }
+    }
+    return { parts, pullRequests: links.pullRequests };
   }
 
   @Cron(Constants.Cron.ImmichBirthday)
@@ -716,7 +727,7 @@ export class ChatService {
     const links: string[] = [];
     content = content.replaceAll(/```.*```/gs, '');
 
-    const matches = content.matchAll(/https:\/\/x\.com\/(?<path>[^ ]+)/g);
+    const matches = content.matchAll(/https:\/\/x\.com\/(?<path>\S+)/g);
 
     for (const match of matches) {
       if (!match || !match.groups) {

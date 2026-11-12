@@ -79,7 +79,7 @@ export class DiscordEvents {
         ? undefined
         : message.reply({
             content: twitterLinks.join('\n'),
-            flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
+            flags: [MessageFlags.SuppressNotifications],
           }),
     ]);
   }

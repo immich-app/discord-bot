@@ -19,6 +19,7 @@ const parts = ['[Pull Request] Fix (immich-app/immich#1234)', '[Pull Request] Ad
 const fxtwitterLinks = ['https://fxtwitter.com/immich/status/1'];
 
 const flags = [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications];
+const tweetFlags = [MessageFlags.SuppressNotifications];
 
 const newMessage = ({ bot = false, dm = false } = {}) => ({
   content: 'see #1234 and #5678',
@@ -91,7 +92,7 @@ describe(DiscordEvents.name, () => {
 
       await onMessageCreate(message);
 
-      expect(message.reply).toHaveBeenCalledExactlyOnceWith({ content: fxtwitterLinks.join('\n'), flags });
+      expect(message.reply).toHaveBeenCalledExactlyOnceWith({ content: fxtwitterLinks.join('\n'), flags: tweetFlags });
       expect(approvals.track).not.toHaveBeenCalled();
     });
 
@@ -105,7 +106,7 @@ describe(DiscordEvents.name, () => {
 
       expect(message.reply.mock.calls).toEqual([
         [{ content: parts.join('\n'), flags }],
-        [{ content: fxtwitterLinks.join('\n'), flags }],
+        [{ content: fxtwitterLinks.join('\n'), flags: tweetFlags }],
       ]);
       expect(approvals.track).toHaveBeenCalledExactlyOnceWith(
         { service: 'discord', channelId: THREAD, messageId: REPLY },
@@ -126,7 +127,7 @@ describe(DiscordEvents.name, () => {
 
       expect(message.reply.mock.calls).toEqual([
         [{ content: parts.join('\n'), flags }],
-        [{ content: fxtwitterLinks.join('\n'), flags }],
+        [{ content: fxtwitterLinks.join('\n'), flags: tweetFlags }],
       ]);
       expect(approvals.track).not.toHaveBeenCalled();
     });

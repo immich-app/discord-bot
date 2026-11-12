@@ -2,7 +2,7 @@ import { Logger } from '@nestjs/common';
 import { CommandInteraction, GuildEmoji } from 'discord.js';
 import { Constants, GithubItemKind } from 'src/constants';
 import { DiscordCommands } from 'src/discord/commands';
-import { neutraliseZulipLabel } from 'src/format';
+import { ZULIP_MAX_MESSAGE_LENGTH, neutraliseZulipLabel } from 'src/format';
 import { IDatabaseRepository } from 'src/interfaces/database.interface';
 import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interface';
 import { IFourthwallRepository } from 'src/interfaces/fourthwall.interface';
@@ -2605,7 +2605,7 @@ describe('Bot test', () => {
         fetchMock.mockResolvedValueOnce(tweet()).mockResolvedValueOnce(tweet({ text: 'Bye', media: undefined }));
 
         await sut.onZulipMessage(
-          zulipMessage({ content: 'https://x.com/immich/status/1 https://x.com/immich/status/2' }),
+          zulipMessage({ content: 'https://x.com/immich/status/1\nhttps://x.com/immich/status/2' }),
         );
 
         expect(fetchMock.mock.calls).toEqual([
@@ -2624,6 +2624,20 @@ describe('Bot test', () => {
             '',
           ].join('\n'),
         );
+      });
+
+      it("should fall back to links for the tweets that would push the reply past Zulip's limit", async () => {
+        fetchMock.mockImplementation(() => Promise.resolve(tweet({ text: '*'.repeat(1500), media: undefined })));
+        const urls = [1, 2, 3, 4, 5, 6, 7].map((id) => `https://x.com/immich/status/${id}`);
+
+        await sut.onZulipMessage(zulipMessage({ content: urls.join(' ') }));
+
+        const { content } = zulipMock.sendMessage.mock.calls[0][0];
+        expect([...content].length).toBeLessThanOrEqual(ZULIP_MAX_MESSAGE_LENGTH);
+        expect(content).toContain(`> ${'&#42;'.repeat(1500)}`);
+        expect(
+          content.endsWith([2, 3, 4, 5, 6, 7].map((id) => `https://fxtwitter.com/immich/status/${id}`).join('\n')),
+        ).toBe(true);
       });
 
       it('should escape the tweet, cut a long one and drop a media URL that is not plain https', async () => {
