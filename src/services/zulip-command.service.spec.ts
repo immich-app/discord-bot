@@ -1031,7 +1031,7 @@ describe('ZulipCommandService', () => {
       expect(contents()).toEqual([
         [
           '`expanders <on <group>|off [group]|list>`',
-          `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${BARE_NUMBERS} ${PREFIXES} GitHub and \`gitlab.futo.org\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+          `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${BARE_NUMBERS} ${PREFIXES} GitHub and \`gitlab.futo.org\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are quoted from fxtwitter.`,
           '- `on <group>`: turn that group on here',
           '- `off [group]`: turn that group off here, or every group when none is named',
           '- `list`: list the streams with groups',

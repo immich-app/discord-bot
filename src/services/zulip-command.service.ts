@@ -443,7 +443,7 @@ export class ZulipCommandService {
     },
     expanders: {
       usage: 'expanders <on <group>|off [group]|list>',
-      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${bareNumbers('stream')} ${PREFIXES} GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are mirrored on \`nitter.net\`.`,
+      description: `Choose the groups of repositories a bare \`#1234\` and \`name#1234\` look among in this stream. ${bareNumbers('stream')} ${PREFIXES} GitHub and \`${Constants.Gitlab.Host}\` issue, pull request, merge request and discussion links, file permalinks and \`owner/name#1234\` expand in every subscribed stream, with or without a group, and \`x.com\` links are quoted from fxtwitter.`,
       subcommands: {
         'on <group>': 'turn that group on here',
         'off [group]': 'turn that group off here, or every group when none is named',

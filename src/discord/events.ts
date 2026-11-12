@@ -60,7 +60,7 @@ export class DiscordEvents {
       this.service.handleTaggingOfPullRequestThreads(message),
     ]);
 
-    // Neither reply waits on the other, so the GitHub reply or its tracking failing cannot cost the nitter reply.
+    // Neither reply waits on the other, so the GitHub reply or its tracking failing cannot cost the fxtwitter reply.
     await Promise.all([
       parts.length === 0
         ? undefined
@@ -79,7 +79,7 @@ export class DiscordEvents {
         ? undefined
         : message.reply({
             content: twitterLinks.join('\n'),
-            flags: [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications],
+            flags: [MessageFlags.SuppressNotifications],
           }),
     ]);
   }

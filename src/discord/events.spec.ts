@@ -9,16 +9,17 @@ import { beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
 const PARENT = '100000000000000001';
 const THREAD = '200000000000000001';
 const REPLY = '300000000000000002';
-const NITTER_REPLY = '300000000000000003';
+const FXTWITTER_REPLY = '300000000000000003';
 
 const pullRequests = [
   { organization: 'immich-app', repository: 'immich', number: 1234 },
   { organization: 'immich-app', repository: 'immich', number: 5678 },
 ];
 const parts = ['[Pull Request] Fix (immich-app/immich#1234)', '[Pull Request] Add (immich-app/immich#5678)'];
-const nitterLinks = ['https://nitter.net/immich/status/1'];
+const fxtwitterLinks = ['https://fxtwitter.com/immich/status/1'];
 
 const flags = [MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications];
+const tweetFlags = [MessageFlags.SuppressNotifications];
 
 const newMessage = ({ bot = false, dm = false } = {}) => ({
   content: 'see #1234 and #5678',
@@ -28,7 +29,7 @@ const newMessage = ({ bot = false, dm = false } = {}) => ({
   reply: vitest
     .fn()
     .mockResolvedValueOnce({ id: REPLY, channelId: THREAD })
-    .mockResolvedValueOnce({ id: NITTER_REPLY, channelId: THREAD }),
+    .mockResolvedValueOnce({ id: FXTWITTER_REPLY, channelId: THREAD }),
 });
 
 describe(DiscordEvents.name, () => {
@@ -84,28 +85,28 @@ describe(DiscordEvents.name, () => {
       expect(approvals.track).not.toHaveBeenCalled();
     });
 
-    it('should reply with the nitter links of a message that names nothing on GitHub, without tracking it', async () => {
+    it('should reply with the fxtwitter links of a message that names nothing on GitHub, without tracking it', async () => {
       const message = newMessage();
       chat.handleGithubReferences.mockResolvedValue({ parts: [], pullRequests: [] });
-      chat.handleTwitterReferences.mockResolvedValue(nitterLinks);
+      chat.handleTwitterReferences.mockResolvedValue(fxtwitterLinks);
 
       await onMessageCreate(message);
 
-      expect(message.reply).toHaveBeenCalledExactlyOnceWith({ content: nitterLinks.join('\n'), flags });
+      expect(message.reply).toHaveBeenCalledExactlyOnceWith({ content: fxtwitterLinks.join('\n'), flags: tweetFlags });
       expect(approvals.track).not.toHaveBeenCalled();
     });
 
-    it('should still post the nitter reply when tracking fails, and reject', async () => {
+    it('should still post the fxtwitter reply when tracking fails, and reject', async () => {
       const message = newMessage();
       const failure = new Error('database down');
-      chat.handleTwitterReferences.mockResolvedValue(nitterLinks);
+      chat.handleTwitterReferences.mockResolvedValue(fxtwitterLinks);
       approvals.track.mockRejectedValue(failure);
 
       await expect(onMessageCreate(message)).rejects.toBe(failure);
 
       expect(message.reply.mock.calls).toEqual([
         [{ content: parts.join('\n'), flags }],
-        [{ content: nitterLinks.join('\n'), flags }],
+        [{ content: fxtwitterLinks.join('\n'), flags: tweetFlags }],
       ]);
       expect(approvals.track).toHaveBeenCalledExactlyOnceWith(
         { service: 'discord', channelId: THREAD, messageId: REPLY },
@@ -113,29 +114,29 @@ describe(DiscordEvents.name, () => {
       );
     });
 
-    it('should still post the nitter reply when the GitHub reply fails, and reject without tracking', async () => {
+    it('should still post the fxtwitter reply when the GitHub reply fails, and reject without tracking', async () => {
       const message = newMessage();
       const failure = new Error('Missing Permissions');
       message.reply
         .mockReset()
         .mockRejectedValueOnce(failure)
-        .mockResolvedValueOnce({ id: NITTER_REPLY, channelId: THREAD });
-      chat.handleTwitterReferences.mockResolvedValue(nitterLinks);
+        .mockResolvedValueOnce({ id: FXTWITTER_REPLY, channelId: THREAD });
+      chat.handleTwitterReferences.mockResolvedValue(fxtwitterLinks);
 
       await expect(onMessageCreate(message)).rejects.toBe(failure);
 
       expect(message.reply.mock.calls).toEqual([
         [{ content: parts.join('\n'), flags }],
-        [{ content: nitterLinks.join('\n'), flags }],
+        [{ content: fxtwitterLinks.join('\n'), flags: tweetFlags }],
       ]);
       expect(approvals.track).not.toHaveBeenCalled();
     });
 
-    it('should still track the GitHub reply when the nitter reply fails, and reject', async () => {
+    it('should still track the GitHub reply when the fxtwitter reply fails, and reject', async () => {
       const message = newMessage();
       const failure = new Error('Unknown message');
       message.reply.mockReset().mockResolvedValueOnce({ id: REPLY, channelId: THREAD }).mockRejectedValueOnce(failure);
-      chat.handleTwitterReferences.mockResolvedValue(nitterLinks);
+      chat.handleTwitterReferences.mockResolvedValue(fxtwitterLinks);
 
       await expect(onMessageCreate(message)).rejects.toBe(failure);
 
