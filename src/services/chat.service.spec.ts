@@ -2487,7 +2487,7 @@ describe('Bot test', () => {
         expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
           stream: 121,
           topic: 'thumbnails',
-          content: `https://nitter.net/immich/status/1\n${IMAGE}`,
+          content: `https://fxtwitter.com/immich/status/1\n${IMAGE}`,
         });
       });
     });
@@ -2500,7 +2500,7 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: 121,
         topic: 'thumbnails',
-        content: 'https://nitter.net/immich/status/1',
+        content: 'https://fxtwitter.com/immich/status/1',
       });
     });
 
@@ -2510,7 +2510,7 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: 120,
         topic: 'thumbnails',
-        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://nitter.net/immich/status/1',
+        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://fxtwitter.com/immich/status/1',
       });
     });
 
@@ -2527,7 +2527,7 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: 107,
         topic: 'thumbnails',
-        content: 'https://nitter.net/immich/status/1',
+        content: 'https://fxtwitter.com/immich/status/1',
       });
       expect(databaseMock.getZulipExpanders).toHaveBeenCalledTimes(reads);
     });
@@ -2572,14 +2572,77 @@ describe('Bot test', () => {
       });
     });
 
-    it('should reply with a nitter mirror for an x.com link', async () => {
+    it('should reply with the fxtwitter link for an x.com link the fxtwitter API cannot read', async () => {
+      fetchMock.mockResolvedValue({ json: () => Promise.resolve({ code: 404, message: 'NOT_FOUND', tweet: null }) });
+
       await sut.onZulipMessage(zulipMessage({ content: 'look https://x.com/immich/status/1' }));
 
+      expect(fetchMock).toHaveBeenCalledWith('https://api.fxtwitter.com/immich/status/1', expect.anything());
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage).toHaveBeenCalledWith({
         stream: 107,
         topic: 'thumbnails',
-        content: 'https://nitter.net/immich/status/1',
+        content: 'https://fxtwitter.com/immich/status/1',
+      });
+    });
+
+    describe('tweet embeds', () => {
+      const tweet = (overrides: object = {}) => ({
+        json: () =>
+          Promise.resolve({
+            code: 200,
+            tweet: {
+              text: 'Hello\nworld',
+              created_at: 'Wed Oct 05 20:17:23 +0000 2022',
+              author: { name: 'Immich', screen_name: 'immich' },
+              media: { all: [{ url: 'https://pbs.twimg.com/media/a.jpg', type: 'photo' }] },
+              ...overrides,
+            },
+          }),
+      });
+
+      it('should quote the tweet from the fxtwitter API, its first media item linked, a blank line after each', async () => {
+        fetchMock.mockResolvedValueOnce(tweet()).mockResolvedValueOnce(tweet({ text: 'Bye', media: undefined }));
+
+        await sut.onZulipMessage(
+          zulipMessage({ content: 'https://x.com/immich/status/1 https://x.com/immich/status/2' }),
+        );
+
+        expect(fetchMock.mock.calls).toEqual([
+          ['https://api.fxtwitter.com/immich/status/1', { signal: expect.any(AbortSignal) }],
+          ['https://api.fxtwitter.com/immich/status/2', { signal: expect.any(AbortSignal) }],
+        ]);
+        expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe(
+          [
+            '**[Immich &#40;&#64;immich&#41;](https://x.com/immich/status/1)** · 2022-10-05',
+            '> Hello',
+            '> world',
+            '> [image](https://pbs.twimg.com/media/a.jpg)',
+            '',
+            '**[Immich &#40;&#64;immich&#41;](https://x.com/immich/status/2)** · 2022-10-05',
+            '> Bye',
+            '',
+          ].join('\n'),
+        );
+      });
+
+      it('should escape the tweet, cut a long one and drop a media URL that is not plain https', async () => {
+        fetchMock.mockResolvedValue(
+          tweet({
+            text: `@**all** [x](https://evil) ${'a'.repeat(2000)}`,
+            author: { name: '[bad](https://evil)', screen_name: 'immich' },
+            media: { all: [{ url: 'https://pbs.twimg.com/a.jpg) [x](https://evil', type: 'photo' }] },
+          }),
+        );
+
+        await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/immich/status/1' }));
+
+        const [header, quote, ...rest] = zulipMock.sendMessage.mock.calls[0][0].content.split('\n');
+        expect(header).toBe(
+          '**[&#91;bad&#93;&#40;https&#58;//evil&#41; &#40;&#64;immich&#41;](https://x.com/immich/status/1)** · 2022-10-05',
+        );
+        expect(quote).toBe(`> &#64;&#42;&#42;all&#42;&#42; &#91;x&#93;&#40;https&#58;//evil&#41; ${'a'.repeat(1473)}…`);
+        expect(rest).toEqual(['']);
       });
     });
 
@@ -2588,7 +2651,7 @@ describe('Bot test', () => {
 
       expect(zulipMock.sendMessage).toHaveBeenCalledOnce();
       expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe(
-        'https://github.com/immich-app/immich/pull/4242\nhttps://nitter.net/immich/status/1',
+        'https://github.com/immich-app/immich/pull/4242\nhttps://fxtwitter.com/immich/status/1',
       );
     });
 
@@ -2620,10 +2683,10 @@ describe('Bot test', () => {
       );
     });
 
-    it('should neutralise mentions in a nitter mirror, which is built from whatever the sender typed', async () => {
+    it('should neutralise mentions in an fxtwitter link, which is built from whatever the sender typed', async () => {
       await sut.onZulipMessage(zulipMessage({ content: 'https://x.com/@**all**/status/1' }));
 
-      expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe('https://nitter.net/@\u200B**all**/status/1');
+      expect(zulipMock.sendMessage.mock.calls[0][0].content).toBe('https://fxtwitter.com/@\u200B**all**/status/1');
     });
 
     it('should expand GitHub references, privileged, and mirror x.com links in the Immich stream', async () => {
@@ -2638,7 +2701,7 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: 54,
         topic: 'thumbnails',
-        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://nitter.net/immich/status/1',
+        content: 'https://github.com/immich-app/immich/pull/4242\nhttps://fxtwitter.com/immich/status/1',
       });
     });
 
@@ -2668,7 +2731,7 @@ describe('Bot test', () => {
       expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
         stream: streamId,
         topic: 'thumbnails',
-        content: 'https://nitter.net/immich/status/1',
+        content: 'https://fxtwitter.com/immich/status/1',
       });
     });
 
@@ -2843,7 +2906,7 @@ describe('Bot test', () => {
         content: [
           '[Pull Request] Fix (futo-org/fhs-core#7)',
           '[Issue] Bug (immich-app/immich#8)',
-          'https://nitter.net/immich/status/1',
+          'https://fxtwitter.com/immich/status/1',
         ].join('\n'),
       });
     });

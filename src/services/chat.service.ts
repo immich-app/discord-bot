@@ -30,6 +30,7 @@ import { GitlabItemKind, IGitlabInterface } from 'src/interfaces/gitlab.interfac
 import { ILoopDedupeInterface } from 'src/interfaces/loop-dedupe.interface';
 import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
+import { escapeZulipInline } from 'src/mirror/discord-to-zulip';
 import { ZulipApiError } from 'src/repositories/zulip.client';
 import { GithubItem } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
@@ -50,6 +51,44 @@ import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/uti
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
 const DISCORD_READY_WAIT_MS = 60_000;
+const TWEET_TIMEOUT_MS = 5000;
+const TWEET_MAX_LENGTH = 1500;
+
+type FxTweet = {
+  text: string;
+  created_at: string;
+  author: { name: string; screen_name: string };
+  media?: { all?: { url: string; type: string }[] };
+};
+
+/** Quotes the tweet from the fxtwitter API, for Zulip; the fxtwitter link itself when that fails. */
+const embedTweet = async (link: string) => {
+  const { user, id } = link.match(/^https:\/\/fxtwitter\.com\/(?<user>\w+)\/status\/(?<id>\d+)/)?.groups ?? {};
+  if (!user || !id) {
+    return link;
+  }
+  try {
+    const response = await fetch(`https://api.fxtwitter.com/${user}/status/${id}`, {
+      signal: AbortSignal.timeout(TWEET_TIMEOUT_MS),
+    });
+    const { tweet } = (await response.json()) as { tweet: FxTweet };
+    const text =
+      tweet.text.length > TWEET_MAX_LENGTH ? `${tweet.text.slice(0, TWEET_MAX_LENGTH).trimEnd()}…` : tweet.text;
+    const author = escapeZulipInline(`${tweet.author.name} (@${tweet.author.screen_name})`);
+    const media = tweet.media?.all?.[0];
+    return [
+      `**[${author}](https://x.com/${user}/status/${id})** · ${new Date(tweet.created_at).toISOString().slice(0, 10)}`,
+      ...text.split('\n').map((line) => `> ${escapeZulipInline(line)}`),
+      ...(media && /^https:\/\/[^\s()<>[\]]+$/.test(media.url)
+        ? [`> [${media.type === 'photo' ? 'image' : 'video'}](${media.url})`]
+        : []),
+      // A blank line ends the quote, which would otherwise swallow the next part of the reply.
+      '',
+    ].join('\n');
+  } catch {
+    return link;
+  }
+};
 
 export const hasBlacklistedUrl = (urls: string[]) =>
   urls.some((url) => PREVIEW_BLACKLIST.some((blacklist) => url.startsWith(blacklist)));
@@ -470,7 +509,7 @@ export class ChatService {
       this.handleGithubFileReferences(content, true, firstPermalinks.filter(({ host }) => host === 'github').length),
       this.handleGitlabFileReferences(content, firstPermalinks.filter(({ host }) => host === 'gitlab').length),
       this.handleGithubThreadReferences({ content, scope }, true),
-      this.handleTwitterReferences(content),
+      this.handleTwitterReferences(content).then((links) => Promise.all(links.map((link) => embedTweet(link)))),
     ]);
     return {
       parts: [...githubSnippets, ...gitlabSnippets, ...[...links.parts, ...twitter].map(neutraliseZulipMentions)],
@@ -685,7 +724,7 @@ export class ChatService {
       }
 
       const { path } = match.groups;
-      links.push(`https://nitter.net/${path}`);
+      links.push(`https://fxtwitter.com/${path}`);
     }
 
     return links;
