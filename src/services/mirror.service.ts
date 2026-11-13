@@ -686,6 +686,40 @@ export class MirrorService implements OnModuleDestroy {
     });
   }
 
+  /**
+   * For a message whose content Discord withheld from the bot. It is read when its turn comes, so it keeps its place
+   * among the pair's changes; a read that fails is a failure before the send, which catch-up picks up again.
+   */
+  onDiscordMessageUnread(
+    location: { channelId: string; threadId: string | null },
+    messageId: string,
+    read: () => Promise<DiscordSourceMessage | undefined>,
+  ) {
+    const state = this.byChannel(location.channelId);
+    if (!state) {
+      return;
+    }
+    const label = `Discord message ${messageId}`;
+    state.queue.push(label, async () => {
+      let dto: DiscordSourceMessage | undefined;
+      try {
+        dto = await read();
+      } catch (error) {
+        const turnAway = () =>
+          this.turnAway(state, {
+            discord: new Map([[location.threadId ?? location.channelId, BigInt(messageId)]]),
+            zulip: new Set(),
+          });
+        this.createFailed(state, label, error, { posted: false, uncertain: false }, turnAway);
+        this.fail(`${state.pair.key}: could not read Discord message ${messageId}`, error);
+        return;
+      }
+      if (dto) {
+        await this.mirrorDiscordMessage(state, dto);
+      }
+    });
+  }
+
   onDiscordMessageEdited(dto: DiscordSourceMessage) {
     const state = this.byChannel(dto.channelId);
     state?.queue.push(`edit of Discord message ${dto.id}`, () => this.editFromDiscord(state, dto));

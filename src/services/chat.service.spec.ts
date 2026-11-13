@@ -75,6 +75,8 @@ const newGithubMockRepository = (): Mocked<IGithubInterface> => ({
 const newDiscordMockRepository = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
   isReady: vitest.fn().mockReturnValue(true),
+  needsContentRead: vitest.fn().mockReturnValue(false),
+  withContent: vitest.fn(),
   onHandlerError: vitest.fn(),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),
@@ -1928,7 +1930,7 @@ describe('Bot test', () => {
       ready();
       await loggingIn;
 
-      expect(discordMock.login).toHaveBeenCalledExactlyOnceWith('token');
+      expect(discordMock.login).toHaveBeenCalledExactlyOnceWith('token', undefined);
       await vitest.waitFor(() => expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith(announced), {
         timeout: ANNOUNCE_WAIT_MS,
       });

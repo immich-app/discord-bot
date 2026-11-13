@@ -1,4 +1,4 @@
-import { GuildEmoji, MessageCreateOptions } from 'discord.js';
+import { GuildEmoji, Message, MessageCreateOptions, PartialMessage } from 'discord.js';
 
 export const IDiscordInterface = 'IDiscordInterface';
 
@@ -24,8 +24,16 @@ export enum DiscordEvents {
 }
 
 export interface IDiscordInterface {
-  login(token: string): Promise<void>;
+  /** `userToken` is a Discord user account's, which reads the message content Discord withholds from the bot. */
+  login(token: string, userToken?: string): Promise<void>;
   isReady(): boolean;
+  /** Whether the message's content was withheld from the bot and is to be read again as the user account. */
+  needsContentRead(message: Message | PartialMessage): boolean;
+  /**
+   * The complete message, read again as the user account when `needsContentRead`, or through the bot when partial;
+   * `undefined` when the user account finds it gone.
+   */
+  withContent(message: Message | PartialMessage): Promise<Message | undefined>;
   onHandlerError(handler: (error: unknown) => Promise<void>): void;
   sendMessage({
     channelId,

@@ -551,7 +551,7 @@ export class ChatService {
 
   async loginToDiscord() {
     const { bot } = getConfig();
-    const login = bot.token === 'dev' ? Promise.resolve() : this.discord.login(bot.token);
+    const login = bot.token === 'dev' ? Promise.resolve() : this.discord.login(bot.token, bot.userToken);
     void this.announceStartup(login);
     try {
       await login;

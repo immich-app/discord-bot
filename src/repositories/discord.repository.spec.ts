@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ChannelType,
   Collection,
@@ -20,7 +21,9 @@ import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest';
 const bot = vitest.hoisted(() => ({
   once: vitest.fn(),
   on: vitest.fn(),
+  login: vitest.fn(),
   isReady: vitest.fn(),
+  options: { intents: { has: vitest.fn() } },
   user: null as { id: string; displayAvatarURL: (options: unknown) => string } | null,
   channels: { fetch: vitest.fn() },
   guilds: { cache: new Map<string, unknown>() },
@@ -151,6 +154,7 @@ describe(DiscordRepository.name, () => {
     channel = makeChannel();
     webhook = makeWebhook('700000000000000001');
     bot.channels.fetch.mockResolvedValue(channel);
+    bot.options.intents.has.mockReturnValue(false);
     vitest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
     sut = new DiscordRepository();
   });
@@ -1079,6 +1083,130 @@ describe(DiscordRepository.name, () => {
 
       channel.messages.fetch.mockRejectedValueOnce(apiError(50_001, 403));
       await expect(sut.fetchMirrorMessage(channelId, '1')).rejects.toMatchObject({ kind: 'forbidden' });
+    });
+
+    describe('as the user account', () => {
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      const raw = (id: string) => ({ id, content: `read as the user ${id}` });
+      let answer: (url: string) => Response;
+
+      const requests = () =>
+        vitest.mocked(globalThis.fetch).mock.calls.map(([url, init]) => ({
+          url: String(url),
+          authorization: (init?.headers as Record<string, string>).Authorization,
+        }));
+
+      beforeEach(async () => {
+        answer = (url) => (url.endsWith('/users/@me') ? json({ id: '800000000000000001' }) : json([]));
+        vitest.mocked(globalThis.fetch).mockImplementation(async (url) => answer(String(url)));
+        vitest.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+        bot.once.mockImplementation((event: string, listener: () => void) => {
+          if (event === 'clientReady') {
+            listener();
+          }
+          return bot;
+        });
+        channel.messages = {
+          ...channel.messages,
+          _add: vitest.fn((data: { id: string; content: string }) => makeMessage(data.id, { content: data.content })),
+        } as typeof channel.messages;
+        await sut.login('bot-token', 'user-token');
+      });
+
+      it('should check the token, then read pages with it, without the Bot prefix', async () => {
+        answer = (url) =>
+          url.endsWith('/users/@me')
+            ? json({ id: '800000000000000001' })
+            : json([raw('1000000000000000003'), raw('1000000000000000002')]);
+
+        const page = await sut.fetchMirrorMessagesBefore(channelId, '1000000000000000009', 2);
+
+        expect(bot.login).toHaveBeenCalledWith('bot-token');
+        expect(sut.canReadMessageContent()).toBe(true);
+        expect(channel.messages.fetch).not.toHaveBeenCalled();
+        expect(requests()).toEqual([
+          { url: 'https://discord.com/api/v10/users/@me', authorization: 'user-token' },
+          {
+            url: `https://discord.com/api/v10/channels/${channelId}/messages?limit=2&before=1000000000000000009`,
+            authorization: 'user-token',
+          },
+        ]);
+        expect(page.messages.map(({ id, content }) => [id, content])).toEqual([
+          ['1000000000000000002', 'read as the user 1000000000000000002'],
+          ['1000000000000000003', 'read as the user 1000000000000000003'],
+        ]);
+      });
+
+      it('should read one message from the page around it, and find none when the page does not hold it', async () => {
+        answer = (url) =>
+          url.includes('around=1000000000000000003')
+            ? json([raw('1000000000000000004'), raw('1000000000000000003')])
+            : json([raw('1000000000000000004')]);
+
+        await expect(sut.fetchMirrorMessage(channelId, '1000000000000000003')).resolves.toMatchObject({
+          content: 'read as the user 1000000000000000003',
+        });
+        await expect(sut.fetchMirrorMessage(channelId, '1000000000000000005')).resolves.toBeUndefined();
+        expect(requests()[1].url).toBe(
+          `https://discord.com/api/v10/channels/${channelId}/messages?limit=3&around=1000000000000000003`,
+        );
+      });
+
+      it('should say so when the user account cannot read the channel', async () => {
+        answer = () => json({ code: 50_001, message: 'Missing Access' }, 403);
+
+        await expect(sut.fetchMirrorMessagesBefore(channelId, undefined, 100)).rejects.toMatchObject({
+          kind: 'forbidden',
+          code: 50_001,
+          message: `The Discord user account cannot read channel ${channelId}`,
+        });
+      });
+
+      it("should read again only other users' messages that do not mention the bot", async () => {
+        const users = (...ids: string[]) => new Collection(ids.map((id) => [id, {}]));
+        const event = (authorId: string, mentioned: string[] = []) =>
+          makeMessage('1000000000000000003', {
+            partial: false,
+            channelId,
+            author: { id: authorId },
+            mentions: { users: users(...mentioned) },
+          }) as never;
+        answer = () => json([raw('1000000000000000003')]);
+
+        expect(sut.needsContentRead(event('400000000000000001'))).toBe(true);
+        expect(sut.needsContentRead(event(botUserId))).toBe(false);
+        expect(sut.needsContentRead(event('400000000000000001', [botUserId]))).toBe(false);
+        await expect(sut.withContent(event('400000000000000001'))).resolves.toMatchObject({
+          content: 'read as the user 1000000000000000003',
+        });
+        const own = event(botUserId);
+        await expect(sut.withContent(own)).resolves.toBe(own);
+
+        bot.options.intents.has.mockReturnValue(true);
+        expect(sut.needsContentRead(event('400000000000000001'))).toBe(false);
+      });
+    });
+
+    it('should not use a token Discord refuses', async () => {
+      vitest
+        .mocked(globalThis.fetch)
+        .mockResolvedValue(new Response(JSON.stringify({ code: 0, message: '401: Unauthorized' }), { status: 401 }));
+      const error = vitest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      bot.once.mockImplementation((event: string, listener: () => void) => {
+        if (event === 'clientReady') {
+          listener();
+        }
+        return bot;
+      });
+
+      await sut.login('bot-token', 'user-token');
+
+      expect(error).toHaveBeenCalledWith(
+        "Discord refused DISCORD_USER_TOKEN, so the content of other users' messages stays unreadable",
+      );
+      expect(sut.canReadMessageContent()).toBe(false);
+      expect(sut.needsContentRead(makeMessage('1') as never)).toBe(false);
     });
   });
 

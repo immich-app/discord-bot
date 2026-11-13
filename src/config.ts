@@ -1,6 +1,7 @@
 export const getConfig = () => {
   const databaseUri = process.env.uri;
   const botToken = process.env.BOT_TOKEN;
+  const discordUserToken = process.env.DISCORD_USER_TOKEN?.trim() || undefined;
   // A secret pasted with its trailing newline is otherwise sent as it is, and Zulip answers `Malformed API key`.
   const zulipBotUsername = process.env.ZULIP_BOT_USERNAME?.trim();
   const zulipBotApiKey = process.env.ZULIP_BOT_API_KEY?.trim();
@@ -67,6 +68,7 @@ export const getConfig = () => {
     commitSha: commitSha || 'dev',
     bot: {
       token: botToken,
+      userToken: discordUserToken,
     },
     database: {
       uri: databaseUri,

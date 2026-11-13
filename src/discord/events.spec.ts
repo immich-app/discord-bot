@@ -1,10 +1,13 @@
+import { Logger } from '@nestjs/common';
 import { MessageFlags } from 'discord.js';
 import { ArgsOf } from 'discordx';
 import { Constants } from 'src/constants';
 import { DiscordEvents } from 'src/discord/events';
+import { DiscordMirrorError } from 'src/interfaces/discord-mirror.interface';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { ApprovalService } from 'src/services/approval.service';
 import { ChatService } from 'src/services/chat.service';
-import { beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
 
 const PARENT = '100000000000000001';
 const THREAD = '200000000000000001';
@@ -38,6 +41,7 @@ describe(DiscordEvents.name, () => {
     Pick<ChatService, 'handleGithubReferences' | 'handleTwitterReferences' | 'handleTaggingOfPullRequestThreads'>
   >;
   let approvals: Mocked<Pick<ApprovalService, 'track'>>;
+  let discord: Mocked<Pick<IDiscordInterface, 'needsContentRead' | 'withContent'>>;
 
   const onMessageCreate = (message: ReturnType<typeof newMessage>) =>
     sut.onMessageCreate([message] as unknown as ArgsOf<'messageCreate'>);
@@ -49,7 +53,16 @@ describe(DiscordEvents.name, () => {
       handleTaggingOfPullRequestThreads: vitest.fn(),
     };
     approvals = { track: vitest.fn() };
-    sut = new DiscordEvents(chat as unknown as ChatService, approvals as unknown as ApprovalService);
+    discord = { needsContentRead: vitest.fn().mockReturnValue(false), withContent: vitest.fn() };
+    sut = new DiscordEvents(
+      chat as unknown as ChatService,
+      approvals as unknown as ApprovalService,
+      discord as unknown as IDiscordInterface,
+    );
+  });
+
+  afterEach(() => {
+    vitest.restoreAllMocks();
   });
 
   describe('onMessageCreate', () => {
@@ -83,6 +96,45 @@ describe(DiscordEvents.name, () => {
 
       expect(message.reply).not.toHaveBeenCalled();
       expect(approvals.track).not.toHaveBeenCalled();
+    });
+
+    it('should expand the content the user account reads when Discord withheld it from the bot', async () => {
+      const message = { ...newMessage(), content: '' };
+      discord.needsContentRead.mockReturnValue(true);
+      discord.withContent.mockResolvedValue({ content: 'see #1234 and #5678' } as never);
+
+      await onMessageCreate(message);
+
+      expect(discord.withContent).toHaveBeenCalledExactlyOnceWith(message);
+      expect(chat.handleGithubReferences).toHaveBeenCalledExactlyOnceWith(
+        { content: 'see #1234 and #5678', channelParentId: PARENT },
+        true,
+      );
+      expect(message.reply).toHaveBeenCalledExactlyOnceWith({ content: parts.join('\n'), flags });
+    });
+
+    it.each([
+      { what: 'is gone', read: () => Promise.resolve(undefined) },
+      {
+        what: 'is in a channel the user account cannot read',
+        read: () => Promise.reject(new DiscordMirrorError('forbidden')),
+      },
+      { what: 'cannot be read for now', read: () => Promise.reject(new Error('fetch failed')) },
+    ])('should expand nothing, without failing, when the message $what', async ({ read }) => {
+      vitest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      vitest.spyOn(Logger.prototype, 'debug').mockImplementation(() => {});
+      const message = { ...newMessage(), content: '' };
+      discord.needsContentRead.mockReturnValue(true);
+      discord.withContent.mockImplementation(read);
+      chat.handleGithubReferences.mockResolvedValue({ parts: [], pullRequests: [] });
+
+      await onMessageCreate(message);
+
+      expect(chat.handleGithubReferences).toHaveBeenCalledExactlyOnceWith(
+        { content: '', channelParentId: PARENT },
+        true,
+      );
+      expect(message.reply).not.toHaveBeenCalled();
     });
 
     it('should reply with the fxtwitter links of a message that names nothing on GitHub, without tracking it', async () => {

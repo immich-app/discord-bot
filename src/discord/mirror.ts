@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   ChannelType,
   DiscordAPIError,
@@ -9,6 +9,7 @@ import {
 } from 'discord.js';
 import { ArgsOf, Discord, On } from 'discordx';
 import { Constants } from 'src/constants';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { toMirrorError } from 'src/repositories/discord.repository';
 import { MirrorService } from 'src/services/mirror.service';
@@ -31,23 +32,35 @@ const isGoneOrHidden = (error: unknown) => error instanceof DiscordAPIError && G
 export class DiscordMirrorEvents {
   private logger = new Logger(DiscordMirrorEvents.name);
 
-  constructor(private mirror: MirrorService) {}
+  constructor(
+    private mirror: MirrorService,
+    @Inject(IDiscordInterface) private discord: IDiscordInterface,
+  ) {}
 
   @On({ event: 'messageCreate', priority: 0 })
   onMessageCreate([message]: ArgsOf<'messageCreate'>) {
-    if (this.isCandidate(message) && this.mirror.handlesChannel(mirrorLocation(message.channel).channelId)) {
-      this.mirror.onDiscordMessage(toDiscordSourceMessage(message));
+    if (!this.isCandidate(message)) {
+      return;
     }
+    const location = mirrorLocation(message.channel);
+    if (!this.mirror.handlesChannel(location.channelId)) {
+      return;
+    }
+    if (this.discord.needsContentRead(message)) {
+      this.mirror.onDiscordMessageUnread(location, message.id, () => this.read(message));
+      return;
+    }
+    this.mirror.onDiscordMessage(toDiscordSourceMessage(message));
   }
 
   /** discord.js types the new message as complete, but one it had not cached can come partial, without an author. */
   @On({ event: 'messageUpdate', priority: 0 })
   onMessageUpdate([, message]: ArgsOf<'messageUpdate'>) {
     const updated = message as Message | PartialMessage;
-    if (updated.partial) {
+    if (updated.partial || this.discord.needsContentRead(updated)) {
       const channelId = parentOf(updated.channel);
       if (channelId && this.mirror.handlesChannel(channelId)) {
-        this.mirror.onDiscordMessageEditedUnread(channelId, updated.id, () => this.readEdited(updated));
+        this.mirror.onDiscordMessageEditedUnread(channelId, updated.id, () => this.read(updated));
       }
       return;
     }
@@ -119,15 +132,17 @@ export class DiscordMirrorEvents {
     return isMirrorCandidate(message, (webhookId) => this.mirror.isOwnWebhook(webhookId));
   }
 
-  private async readEdited(message: PartialMessage) {
-    let full: Message;
+  private async read(message: Message | PartialMessage) {
+    let full: Message | undefined;
     try {
-      full = await message.fetch();
+      full = await this.discord.withContent(message);
     } catch (error) {
       if (!isGoneOrHidden(error)) {
         throw toMirrorError(error);
       }
-      this.logger.debug(`Discord message ${message.id} in channel ${message.channelId} was edited and cannot be read`);
+    }
+    if (!full) {
+      this.logger.debug(`Discord message ${message.id} in channel ${message.channelId} cannot be read`);
       return undefined;
     }
     return this.isCandidate(full) ? toDiscordSourceMessage(full) : undefined;

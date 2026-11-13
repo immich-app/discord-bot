@@ -11,6 +11,8 @@ import {
 import { MetadataStorage } from 'discordx';
 import { Constants } from 'src/constants';
 import { DiscordMirrorEvents } from 'src/discord/mirror';
+import { DiscordMirrorError } from 'src/interfaces/discord-mirror.interface';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { forumTagNames, isMirrorCandidate, mirrorLocation, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { MirrorService } from 'src/services/mirror.service';
 import { afterEach, beforeEach, describe, expect, it, Mocked, vitest } from 'vitest';
@@ -45,6 +47,7 @@ describe(DiscordMirrorEvents.name, () => {
       | 'handlesChannel'
       | 'isOwnWebhook'
       | 'onDiscordMessage'
+      | 'onDiscordMessageUnread'
       | 'onDiscordMessageEdited'
       | 'onDiscordMessageEditedUnread'
       | 'onDiscordMessagesDeleted'
@@ -57,6 +60,7 @@ describe(DiscordMirrorEvents.name, () => {
       | 'onDiscordResumed'
     >
   >;
+  let discord: Mocked<Pick<IDiscordInterface, 'needsContentRead' | 'withContent'>>;
 
   beforeEach(() => {
     vitest.clearAllMocks();
@@ -66,6 +70,7 @@ describe(DiscordMirrorEvents.name, () => {
       handlesChannel: vitest.fn((channelId: string) => channelId === PARENT),
       isOwnWebhook: vitest.fn((webhookId: string) => webhookId === '700000000000000001'),
       onDiscordMessage: vitest.fn(),
+      onDiscordMessageUnread: vitest.fn(),
       onDiscordMessageEdited: vitest.fn(),
       onDiscordMessageEditedUnread: vitest.fn(),
       onDiscordMessagesDeleted: vitest.fn(),
@@ -81,7 +86,13 @@ describe(DiscordMirrorEvents.name, () => {
     vitest.mocked(forumTagNames).mockReturnValue(undefined);
     vitest.mocked(mirrorLocation).mockReturnValue({ channelId: PARENT, threadId: THREAD, threadName: 'Crash' });
     vitest.mocked(toDiscordSourceMessage).mockReturnValue(dto as ReturnType<typeof toDiscordSourceMessage>);
-    sut = new DiscordMirrorEvents(mirror as unknown as MirrorService);
+    discord = {
+      needsContentRead: vitest.fn().mockReturnValue(false),
+      withContent: vitest.fn(async (message: Message | { partial: true; fetch: () => Promise<Message> }) =>
+        message.partial ? message.fetch() : message,
+      ) as never,
+    };
+    sut = new DiscordMirrorEvents(mirror as unknown as MirrorService, discord as unknown as IDiscordInterface);
   });
 
   afterEach(() => {
@@ -141,6 +152,73 @@ describe(DiscordMirrorEvents.name, () => {
     expect(mirror.onDiscordMessage).not.toHaveBeenCalled();
   });
 
+  describe('a message whose content Discord withheld', () => {
+    const withheld = { id: dto.id, channelId: THREAD, channel: guildChannel, content: '' } as unknown as Message<true>;
+    const read = { id: dto.id, channelId: THREAD, channel: guildChannel, content: 'hello' } as unknown as Message<true>;
+
+    beforeEach(() => {
+      discord.needsContentRead.mockReturnValue(true);
+      discord.withContent.mockResolvedValue(read);
+    });
+
+    it('should queue a new one unread, and read it as the user account when its turn comes', async () => {
+      sut.onMessageCreate([withheld]);
+
+      expect(mirror.onDiscordMessage).not.toHaveBeenCalled();
+      expect(discord.withContent).not.toHaveBeenCalled();
+      expect(mirror.onDiscordMessageUnread).toHaveBeenCalledExactlyOnceWith(
+        { channelId: PARENT, threadId: THREAD, threadName: 'Crash' },
+        dto.id,
+        expect.any(Function),
+      );
+      await expect(mirror.onDiscordMessageUnread.mock.calls[0][2]()).resolves.toBe(dto);
+      expect(discord.withContent).toHaveBeenCalledExactlyOnceWith(withheld);
+      expect(toDiscordSourceMessage).toHaveBeenCalledExactlyOnceWith(read);
+    });
+
+    it('should queue an edit unread too, so that an empty read never reaches the Zulip copy', async () => {
+      sut.onMessageUpdate([withheld, withheld]);
+
+      expect(mirror.onDiscordMessageEdited).not.toHaveBeenCalled();
+      expect(mirror.onDiscordMessageEditedUnread).toHaveBeenCalledExactlyOnceWith(PARENT, dto.id, expect.any(Function));
+      await expect(mirror.onDiscordMessageEditedUnread.mock.calls[0][2]()).resolves.toBe(dto);
+      expect(toDiscordSourceMessage).toHaveBeenCalledExactlyOnceWith(read);
+    });
+
+    it('should drop one the user account finds gone', async () => {
+      discord.withContent.mockResolvedValue(undefined);
+
+      sut.onMessageCreate([withheld]);
+
+      await expect(mirror.onDiscordMessageUnread.mock.calls[0][2]()).resolves.toBeUndefined();
+      expect(toDiscordSourceMessage).not.toHaveBeenCalled();
+    });
+
+    it('should leave a channel the user account cannot read to the queue, as the failure it is', async () => {
+      const error = new DiscordMirrorError(
+        'forbidden',
+        50001,
+        `The Discord user account cannot read channel ${THREAD}`,
+      );
+      discord.withContent.mockRejectedValue(error);
+
+      sut.onMessageCreate([withheld]);
+
+      await expect(mirror.onDiscordMessageUnread.mock.calls[0][2]()).rejects.toBe(error);
+    });
+
+    it('should not read one that is not a mirror candidate or not in a mirrored channel', () => {
+      vitest.mocked(isMirrorCandidate).mockReturnValueOnce(false);
+      sut.onMessageCreate([withheld]);
+      vitest
+        .mocked(mirrorLocation)
+        .mockReturnValue({ channelId: '100000000000000555', threadId: null, threadName: null });
+      sut.onMessageCreate([withheld]);
+
+      expect(mirror.onDiscordMessageUnread).not.toHaveBeenCalled();
+    });
+  });
+
   describe('an edit that arrives partial', () => {
     const fetched = { id: dto.id, channel: guildChannel } as unknown as Message<true>;
     const partial = (fetch: () => Promise<Message>, channel: unknown = guildChannel) =>
@@ -186,7 +264,7 @@ describe(DiscordMirrorEvents.name, () => {
 
       await expect(readOf()()).resolves.toBeUndefined();
       expect(Logger.prototype.debug).toHaveBeenCalledExactlyOnceWith(
-        `Discord message ${dto.id} in channel ${THREAD} was edited and cannot be read`,
+        `Discord message ${dto.id} in channel ${THREAD} cannot be read`,
       );
       expect(Logger.prototype.error).not.toHaveBeenCalled();
     });

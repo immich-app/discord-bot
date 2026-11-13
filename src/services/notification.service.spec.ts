@@ -16,6 +16,8 @@ vitest.mock('src/renderers/zulip.renderer', async (importOriginal) => {
 const newDiscordMock = (): Mocked<IDiscordInterface> => ({
   login: vitest.fn(),
   isReady: vitest.fn().mockReturnValue(true),
+  needsContentRead: vitest.fn().mockReturnValue(false),
+  withContent: vitest.fn(),
   onHandlerError: vitest.fn(),
   sendMessage: vitest.fn(),
   createEmote: vitest.fn(),

@@ -32,6 +32,16 @@ describe('getConfig', () => {
     vitest.restoreAllMocks();
   });
 
+  it('should take a Discord user token only when one is set, trimmed', () => {
+    expect(getConfig().bot).toEqual({ token: 'bot-token', userToken: undefined });
+
+    vitest.stubEnv('DISCORD_USER_TOKEN', ' \n');
+    expect(getConfig().bot.userToken).toBeUndefined();
+
+    vitest.stubEnv('DISCORD_USER_TOKEN', 'user-token\n');
+    expect(getConfig().bot.userToken).toBe('user-token');
+  });
+
   it('should trim the whitespace a secret was stored with from every Zulip value', () => {
     vitest.stubEnv('ZULIP_BOT_USERNAME', ' immich-bot@zulip.example.com\n');
     vitest.stubEnv('ZULIP_BOT_API_KEY', 'bot-key\n');

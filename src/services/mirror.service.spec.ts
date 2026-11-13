@@ -4677,6 +4677,41 @@ describe(MirrorService.name, () => {
       expect(posted()).toEqual(['missed while down', 'posted during startup']);
     });
 
+    it('should mirror a message whose content was withheld once it is read, in its place in the queue', async () => {
+      seedHighWaters();
+      await start();
+      const read = deferred<DiscordSourceMessage | undefined>();
+      const withheld = missedOnDiscord({ content: 'read as the user' });
+      const next = missedOnDiscord({ id: snowflake(Date.now() - 1000), content: 'after it' });
+
+      sut.onDiscordMessageUnread({ channelId: DEV_CHANNEL, threadId: null }, withheld.id, () => read.promise);
+      sut.onDiscordMessage(next);
+      read.resolve(withheld);
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['read as the user', 'after it']);
+    });
+
+    it('should leave a withheld message that cannot be read for now to the next catch-up', async () => {
+      seedHighWaters();
+      await start();
+      vitest.useFakeTimers();
+      const withheld = missedOnDiscord({ content: 'read by catch-up' });
+      onDiscord(DEV_CHANNEL, withheld);
+
+      sut.onDiscordMessageUnread({ channelId: DEV_CHANNEL, threadId: null }, withheld.id, () =>
+        Promise.reject(new DiscordMirrorError('unavailable', undefined, 'HTTP 502')),
+      );
+      await sut.whenIdle();
+      expect(zulip.sendMessage).not.toHaveBeenCalled();
+      expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: catching up again in 30 seconds`);
+
+      await vitest.advanceTimersByTimeAsync(30_000);
+      await sut.whenIdle();
+
+      expect(posted()).toEqual(['read by catch-up']);
+    });
+
     it('should catch up again after a message could not reach Zulip', async () => {
       seedHighWaters();
       await start();

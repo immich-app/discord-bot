@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { MessageFlags, ThreadChannel } from 'discord.js';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Message, MessageFlags, ThreadChannel } from 'discord.js';
 import { ArgsOf, Discord, On, Once, RestArgsOf } from 'discordx';
 import _ from 'lodash';
 import { Constants } from 'src/constants';
+import { DiscordMirrorError } from 'src/interfaces/discord-mirror.interface';
+import { IDiscordInterface } from 'src/interfaces/discord.interface';
 import { ApprovalService } from 'src/services/approval.service';
 import { ChatService } from 'src/services/chat.service';
 
@@ -22,6 +24,7 @@ export class DiscordEvents {
   constructor(
     private service: ChatService,
     private approvals: ApprovalService,
+    @Inject(IDiscordInterface) private discord: IDiscordInterface,
   ) {}
 
   @On.rest({ event: 'restDebug' })
@@ -50,13 +53,11 @@ export class DiscordEvents {
     }
 
     const isPrivileged = message.member?.roles.cache.has(Constants.Discord.Roles.Team) ?? false;
+    const { content } = await this.readContent(message);
 
     const [{ parts, pullRequests }, twitterLinks] = await Promise.all([
-      this.service.handleGithubReferences(
-        { content: message.content, channelParentId: message.channel.parentId },
-        isPrivileged,
-      ),
-      this.service.handleTwitterReferences(message.content),
+      this.service.handleGithubReferences({ content, channelParentId: message.channel.parentId }, isPrivileged),
+      this.service.handleTwitterReferences(content),
       this.service.handleTaggingOfPullRequestThreads(message),
     ]);
 
@@ -121,7 +122,7 @@ export class DiscordEvents {
       threadParentId: thread.parentId ?? undefined,
       threadTags: thread.appliedTags,
       title: thread.name,
-      text: (await thread.fetchStarterMessage())?.content ?? undefined,
+      text: await this.starterText(thread),
     });
 
     if (link) {
@@ -141,12 +142,35 @@ export class DiscordEvents {
       threadParentId: newThread.parentId ?? undefined,
       threadTags: tagDiff,
       title: newThread.name,
-      text: (await newThread.fetchStarterMessage())?.content ?? undefined,
+      text: await this.starterText(newThread),
     });
 
     if (link) {
       await this.sendAndPinOutlineLink(newThread, link);
     }
+  }
+
+  /** One that cannot be read as the user account counts as empty, as it would without one. */
+  private async readContent(message: Message) {
+    if (!this.discord.needsContentRead(message)) {
+      return message;
+    }
+    try {
+      return (await this.discord.withContent(message)) ?? message;
+    } catch (error) {
+      const text = `Could not read Discord message ${message.id} as the user account: ${error}`;
+      if (error instanceof DiscordMirrorError && error.kind === 'forbidden') {
+        this.logger.debug(text);
+      } else {
+        this.logger.warn(text);
+      }
+      return message;
+    }
+  }
+
+  private async starterText(thread: ThreadChannel) {
+    const starter = await thread.fetchStarterMessage();
+    return starter ? (await this.readContent(starter)).content : undefined;
   }
 
   private async sendAndPinOutlineLink(thread: ThreadChannel, link: string) {

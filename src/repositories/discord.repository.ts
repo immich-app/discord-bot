@@ -3,13 +3,13 @@ import {
   APIMessage,
   ChannelType,
   DiscordAPIError,
-  FetchMessagesOptions,
   HTTPError,
   IntentsBitField,
   Message,
   MessageCreateOptions,
   MessageFlags,
   MessageType,
+  PartialMessage,
   Partials,
   PermissionsString,
   RESTJSONErrorCodes,
@@ -43,6 +43,7 @@ import { DiscordChannel, IDiscordInterface } from 'src/interfaces/discord.interf
 import { isMirrorCandidate, toDiscordSourceMessage } from 'src/mirror/discord-message';
 import { readAtMost } from 'src/mirror/download';
 import { isConnectFailure } from 'src/mirror/network';
+import { DiscordUserClient } from 'src/repositories/discord-user.client';
 
 class DiscordLogger extends Logger {
   constructor() {
@@ -195,6 +196,29 @@ const emojiRoute = ({ id, name }: DiscordReactionEmoji) => (id === null ? (name 
 const toAttachments = (files: File[]) =>
   Promise.all(files.map(async (file) => ({ attachment: Buffer.from(await file.arrayBuffer()), name: file.name })));
 
+/** The user account must be in every channel whose messages it is to read; the bot's own access says nothing of it. */
+const readAsUser = async <T>(channelId: string, read: () => Promise<T>) => {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      error instanceof DiscordAPIError &&
+      hasCode(error, RESTJSONErrorCodes.MissingAccess, RESTJSONErrorCodes.MissingPermissions)
+    ) {
+      throw new DiscordMirrorError(
+        'forbidden',
+        error.code as number,
+        `The Discord user account cannot read channel ${channelId}`,
+      );
+    }
+    throw error;
+  }
+};
+
+/** What discord.js does with the answer of `messages.fetch`, so a message read as the user is the same object. */
+const toMessage = (channel: TextBasedChannel, data: APIMessage) =>
+  (channel.messages as unknown as { _add(data: APIMessage, cache: boolean): Message })._add(data, true);
+
 const bySnowflake = (a: { id: string }, b: { id: string }) => {
   const [x, y] = [BigInt(a.id), BigInt(b.id)];
   return x < y ? -1 : x > y ? 1 : 0;
@@ -207,6 +231,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
   private mirrorWebhooks = new Map<string, WebhookClient>();
   private mirrorWebhookFailures = new Map<string, { error: DiscordMirrorError; until: number }>();
   private ownMirrorWebhooks = new Set<string>();
+  private userClient?: DiscordUserClient;
 
   constructor() {
     bot
@@ -225,7 +250,10 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       );
   }
 
-  async login(token: string) {
+  async login(token: string, userToken?: string) {
+    if (userToken) {
+      await this.useUserAccount(userToken);
+    }
     // bot.login resolves at the gateway's READY, before the guilds arrive: until then no guild channel can be fetched.
     const ready = new Promise<void>((resolve) => bot.once('clientReady', () => resolve()));
     await bot.login(token);
@@ -237,7 +265,27 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
   }
 
   canReadMessageContent() {
-    return bot.options.intents.has(IntentsBitField.Flags.MessageContent);
+    return this.hasMessageContentIntent() || this.userClient !== undefined;
+  }
+
+  needsContentRead(message: Message | PartialMessage) {
+    if (!this.userClient || this.hasMessageContentIntent() || !message.inGuild()) {
+      return false;
+    }
+    if (message.partial) {
+      return true;
+    }
+    const self = bot.user?.id;
+    return message.author.id !== self && !(self !== undefined && message.mentions.users.has(self));
+  }
+
+  async withContent(message: Message | PartialMessage): Promise<Message | undefined> {
+    if (!this.userClient || !this.needsContentRead(message)) {
+      return message.partial ? message.fetch() : message;
+    }
+    const reader = this.userClient;
+    const data = await readAsUser(message.channelId, () => reader.getMessage(message.channelId, message.id));
+    return data && toMessage(message.channel, data);
   }
 
   isOwnMirrorWebhook(webhookId: string) {
@@ -671,8 +719,8 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       if (!channel?.isTextBased() || channel.isDMBased()) {
         throw new DiscordMirrorError('unknown-channel');
       }
-      const message = await channel.messages.fetch(messageId);
-      return message.inGuild() ? toDiscordSourceMessage(message) : undefined;
+      const message = await this.readMessage(channel, messageId);
+      return message?.inGuild() ? toDiscordSourceMessage(message) : undefined;
     } catch (error) {
       if (hasCode(error, RESTJSONErrorCodes.UnknownMessage)) {
         return undefined;
@@ -738,12 +786,21 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
   }
 
   /** Oldest first. */
-  private async fetchMirrorPage(channelId: string, options: FetchMessagesOptions, withReplyTargets = false) {
+  private async fetchMirrorPage(
+    channelId: string,
+    options: { limit: number; before?: string; after?: string },
+    withReplyTargets = false,
+  ) {
     const channel = await bot.channels.fetch(channelId);
     if (!channel?.isTextBased() || channel.isDMBased()) {
       throw new DiscordMirrorError('unknown-channel');
     }
-    const messages = [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
+    const reader = this.contentReader;
+    const messages = reader
+      ? (await readAsUser(channel.id, () => reader.getMessages(channel.id, options)))
+          .map((data) => toMessage(channel, data))
+          .sort(bySnowflake)
+      : [...(await channel.messages.fetch(options)).values()].sort(bySnowflake);
     if (withReplyTargets) {
       await this.cacheReplyTargets(channel, messages);
     }
@@ -773,7 +830,7 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
       if (messageId === undefined || Date.now() >= deadline) {
         return;
       }
-      await channel.messages.fetch(messageId).catch(() => undefined);
+      await this.readMessage(channel, messageId).catch(() => undefined);
       await next();
     };
     let timer: NodeJS.Timeout | undefined;
@@ -783,6 +840,44 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     const workers = Array.from({ length: REPLY_TARGETS_CONCURRENCY }, () => next());
     await Promise.race([Promise.all(workers), expired]);
     clearTimeout(timer);
+  }
+
+  private hasMessageContentIntent() {
+    return bot.options.intents.has(IntentsBitField.Flags.MessageContent);
+  }
+
+  /** Discord withholds the content of other users' messages from the bot, never from a member who can see them. */
+  private get contentReader() {
+    return this.hasMessageContentIntent() ? undefined : this.userClient;
+  }
+
+  private async useUserAccount(token: string) {
+    if (this.hasMessageContentIntent()) {
+      logger.log('DISCORD_USER_TOKEN is not used: the bot holds the MessageContent intent');
+      return;
+    }
+    const client = new DiscordUserClient(token);
+    try {
+      const user = await client.getCurrentUser();
+      logger.log(`Reading the message content Discord withholds from the bot as the Discord user ${user.id}`);
+    } catch (error) {
+      if (error instanceof DiscordAPIError && error.status === 401) {
+        logger.error("Discord refused DISCORD_USER_TOKEN, so the content of other users' messages stays unreadable");
+        return;
+      }
+      logger.warn(`Could not check DISCORD_USER_TOKEN, using it all the same: ${toMirrorError(error).message}`);
+    }
+    this.userClient = client;
+  }
+
+  /** `undefined` when it is gone; through the user account while Discord withholds message content from the bot. */
+  private async readMessage(channel: TextBasedChannel, messageId: string): Promise<Message | undefined> {
+    const reader = this.contentReader;
+    if (!reader) {
+      return channel.messages.fetch(messageId);
+    }
+    const data = await readAsUser(channel.id, () => reader.getMessage(channel.id, messageId));
+    return data && toMessage(channel, data);
   }
 
   private isCandidate(message: Message): message is Message<true> {
