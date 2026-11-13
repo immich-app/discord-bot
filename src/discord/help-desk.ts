@@ -20,6 +20,7 @@ import {
 import { ArgsOf, ButtonComponent, Discord, ModalComponent, On, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Constants, DiscordButton, DiscordField, DiscordModal } from 'src/constants';
 import { DiscordChannel } from 'src/interfaces/discord.interface';
+import { memberHasRole } from 'src/util';
 
 const submitButton = new ButtonBuilder({
   customId: DiscordButton.Submit,
@@ -69,10 +70,8 @@ export class DiscordHelpDesk {
       });
     }
 
-    const members = interaction.guild?.members.cache;
-    const userRoles = members?.get(interaction.user.id)?.roles.cache;
-    const isContributor = userRoles?.has(Roles.Contributor);
-    const isSupportCrew = userRoles?.has(Roles.SupportCrew);
+    const isContributor = memberHasRole(interaction, Roles.Contributor);
+    const isSupportCrew = memberHasRole(interaction, Roles.SupportCrew);
 
     if (!(isContributor || isSupportCrew || channel.ownerId === interaction.user.id)) {
       return interaction.reply({ ephemeral: true, content: 'Only the OP and team members can close a thread.' });
@@ -103,8 +102,7 @@ export class DiscordHelpDesk {
         content: `This command can only be invoked in <#${DiscordChannel.HelpDesk}> tickets.`,
       });
     }
-    const members = interaction.guild?.members.cache;
-    const isContributor = members?.get(interaction.user.id)?.roles.cache.has(Constants.Discord.Roles.Contributor);
+    const isContributor = memberHasRole(interaction, Constants.Discord.Roles.Contributor);
 
     if (channel.ownerId !== interaction.user.id && !isContributor) {
       return interaction.reply({ ephemeral: true, content: 'Only the OP can add files to this thread.' });

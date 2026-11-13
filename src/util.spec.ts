@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
+import { BaseInteraction, Collection } from 'discord.js';
 import { NotificationService } from 'src/services/notification.service';
-import { isPullRequestLine, logError, makeIssueOrPRMessage, makeLink, withErrorLogging } from 'src/util';
+import { isPullRequestLine, logError, makeIssueOrPRMessage, makeLink, memberHasRole, withErrorLogging } from 'src/util';
 import { beforeEach, describe, expect, it, vitest } from 'vitest';
 
 describe('logError', () => {
@@ -140,5 +141,27 @@ describe('isPullRequestLine', () => {
     },
   ])('should be $expected for $what', ({ line, url, expected }) => {
     expect(isPullRequestLine(line, url)).toBe(expected);
+  });
+});
+
+describe('memberHasRole', () => {
+  const withMember = (member: unknown) => ({ member }) as Pick<BaseInteraction, 'member'>;
+
+  it('should read a cached member through its role manager', () => {
+    const interaction = withMember({ roles: { cache: new Collection([['team', {}]]) } });
+
+    expect(memberHasRole(interaction, 'team')).toBe(true);
+    expect(memberHasRole(interaction, 'other')).toBe(false);
+  });
+
+  it('should read the raw API member by its role IDs', () => {
+    const interaction = withMember({ roles: ['team'] });
+
+    expect(memberHasRole(interaction, 'team')).toBe(true);
+    expect(memberHasRole(interaction, 'other')).toBe(false);
+  });
+
+  it('should be false outside a guild', () => {
+    expect(memberHasRole(withMember(null), 'team')).toBe(false);
   });
 });
