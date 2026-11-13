@@ -394,6 +394,32 @@ VALUES ('7,12', 'futo-org/fhs-core', 'Alice')`.execute(trx);
     await sql`DELETE FROM "mirror_conversation" WHERE "id" = ${conversation.id}`.execute(db);
   });
 
+  describe('payments', () => {
+    it('should record a payment once, and update it only until it succeeds', async () => {
+      const payment = (status: string) =>
+        sut.createPayment({
+          event_id: 'pi_duplicate',
+          id: 'pi_duplicate',
+          amount: 10_000,
+          currency: 'usd',
+          status,
+          description: 'immich-server',
+          created: 1_767_225_600,
+          livemode: false,
+          data: JSON.stringify({ status }),
+        });
+      const status = () =>
+        db.selectFrom('payment').select('status').where('event_id', '=', 'pi_duplicate').executeTakeFirstOrThrow();
+      await db.deleteFrom('payment').where('event_id', '=', 'pi_duplicate').execute();
+
+      expect(await payment('processing')).toBe(true);
+      expect(await payment('succeeded')).toBe(true);
+      expect(await payment('succeeded')).toBe(false);
+      expect(await payment('processing')).toBe(false);
+      expect(await status()).toEqual({ status: 'succeeded' });
+    });
+  });
+
   describe('pull requests', () => {
     it('should find the pull request of a number updated last in the organization alone', async () => {
       const pullRequest = (nodeId: string, organization: string, repository: string, updatedAt: string) =>
