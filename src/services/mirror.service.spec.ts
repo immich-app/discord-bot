@@ -296,6 +296,7 @@ const newDiscordMirrorMock = (): Mocked<IDiscordMirrorInterface> => {
   return {
     getEmotes: vitest.fn().mockResolvedValue([]),
     isReady: vitest.fn().mockReturnValue(true),
+    canReadMessageContent: vitest.fn().mockReturnValue(true),
     isOwnMirrorWebhook: vitest.fn().mockReturnValue(false),
     getMirrorChannel: vitest.fn(async (channelId: string) => mirrorChannel(channelId)),
     ensureMirrorWebhook: vitest.fn().mockResolvedValue(undefined),
@@ -4247,6 +4248,28 @@ describe(MirrorService.name, () => {
       );
       expect(zulip.getMessagesByIds).toHaveBeenCalledExactlyOnceWith([1001, 1002, 1003]);
       expect(log()).toHaveBeenCalledWith(`${DEV_CHANNEL}: mirroring 4 changes made while the bot was away`);
+    });
+
+    it('should leave the Zulip copies of Discord messages alone while Discord withholds message content', async () => {
+      discord.canReadMessageContent.mockReturnValue(false);
+      discord.fetchMirrorMessagesBefore.mockImplementation(async (channelId) => ({
+        messages:
+          channelId === DEV_CHANNEL
+            ? [discordMessage({ id: EDITED, content: '' }), discordMessage({ id: KEPT, content: '' })]
+            : [],
+        oldestId: channelId === DEV_CHANNEL ? '300000000000000001' : null,
+        full: false,
+      }));
+      const discordHashes = () =>
+        db.messages.filter(({ origin }) => origin === 'discord').map(({ sourceHash }) => sourceHash);
+      const hashes = discordHashes();
+
+      await start();
+      sut.onDiscordMessageEdited(discordMessage({ id: KEPT, content: '' }));
+      await sut.whenIdle();
+
+      expect(zulip.updateMessage).not.toHaveBeenCalled();
+      expect(discordHashes()).toEqual(hashes);
     });
 
     it('should read again only the side whose events may have been missed', async () => {

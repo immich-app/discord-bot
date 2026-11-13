@@ -236,6 +236,10 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
     return bot.isReady();
   }
 
+  canReadMessageContent() {
+    return bot.options.intents.has(IntentsBitField.Flags.MessageContent);
+  }
+
   isOwnMirrorWebhook(webhookId: string) {
     return this.ownMirrorWebhooks.has(webhookId);
   }

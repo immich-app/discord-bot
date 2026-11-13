@@ -66,7 +66,7 @@ A command that checks the caller's roles (`/close`, `/upload`, `/tags`) reads th
 
 ### Gateway intents
 
-**Temporarily, the client asks for no privileged intents** (`Guilds`, `GuildMessages`, `GuildMessageReactions` only): Discord revoked the bot's access to GuildMembers and MessageContent, and a login that asks for them is refused outright. Until access is restored and the two intents are added back, Discord sends the content, embeds and attachments of other users' messages as empty, through the gateway and REST alike, except for messages that mention the bot, so everything that reads a user's message text (`onMessageCreate`'s GitHub and Twitter expansion, the outline doc's starter text, the Discord side of the mirror) sees nothing to work with.
+**Temporarily, the client asks for no privileged intents** (`Guilds`, `GuildMessages`, `GuildMessageReactions` only): Discord revoked the bot's access to GuildMembers and MessageContent, and a login that asks for them is refused outright. Until access is restored and the two intents are added back, Discord sends the content, embeds and attachments of other users' messages as empty, through the gateway and REST alike, except for messages that mention the bot, so everything that reads a user's message text (`onMessageCreate`'s GitHub and Twitter expansion, the outline doc's starter text, the Discord side of the mirror) sees nothing to work with. The mirror skips an empty new message, and `MirrorService.editFromDiscord` ignores every Discord edit, live or found by a recheck, while `canReadMessageContent()` is false, so an empty read never overwrites a Zulip copy.
 
 ### Discord handler errors
 
