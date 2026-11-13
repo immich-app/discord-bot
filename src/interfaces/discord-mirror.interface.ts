@@ -120,6 +120,8 @@ export class DiscordMirrorError extends Error {
 
 export interface IDiscordMirrorInterface extends Pick<IDiscordInterface, 'getEmotes'> {
   isReady(): boolean;
+  /** Whether the client holds the privileged MessageContent intent; without it Discord sends other users' messages empty. */
+  canReadMessageContent(): boolean;
   /** Whether the mirror posts through this webhook, or did through one it replaced. */
   isOwnMirrorWebhook(webhookId: string): boolean;
   getMirrorChannel(channelId: string): Promise<DiscordMirrorChannel | undefined>;

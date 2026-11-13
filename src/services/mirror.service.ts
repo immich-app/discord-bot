@@ -3550,6 +3550,11 @@ export class MirrorService implements OnModuleDestroy {
   private async editFromDiscord(state: PairState, dto: DiscordSourceMessage) {
     const { pair } = state;
     const label = `edit of Discord message ${dto.id}`;
+    // A read without MessageContent comes back empty, which would overwrite the Zulip copy, live or on a recheck.
+    if (!this.discordMirror.canReadMessageContent()) {
+      this.logger.debug(`${pair.key}: ignored the ${label}, since Discord withholds message content`);
+      return;
+    }
     if (this.waitForRows(state, { discord: [dto.id] }, label, () => this.editFromDiscord(state, dto))) {
       return;
     }

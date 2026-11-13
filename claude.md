@@ -62,6 +62,12 @@ Commands live in `src/discord/commands.ts` (the mirror's in `src/discord/mirror-
 
 Legacy commands use `authGuard()` to restrict to allowed channels (BotSpam, SupportCrew, QQ). **New commands should NOT use `authGuard`** — permissions will be configured via Discord's built-in command permissions UI instead.
 
+A command that checks the caller's roles (`/close`, `/upload`, `/tags`) reads them from the interaction with `memberHasRole` (`src/util.ts`), never from `guild.members.cache`: Discord sends the member's roles with every guild interaction, while the member cache stays empty without the GuildMembers intent.
+
+### Gateway intents
+
+**Temporarily, the client asks for no privileged intents** (`Guilds`, `GuildMessages`, `GuildMessageReactions` only): Discord revoked the bot's access to GuildMembers and MessageContent, and a login that asks for them is refused outright. Until access is restored and the two intents are added back, Discord sends the content, embeds and attachments of other users' messages as empty, through the gateway and REST alike, except for messages that mention the bot, so everything that reads a user's message text (`onMessageCreate`'s GitHub and Twitter expansion, the outline doc's starter text, the Discord side of the mirror) sees nothing to work with. The mirror skips an empty new message, and `MirrorService.editFromDiscord` ignores every Discord edit, live or found by a recheck, while `canReadMessageContent()` is false, so an empty read never overwrites a Zulip copy.
+
 ### Discord handler errors
 
 discordx drops whatever an `@On`/`@Once` handler throws: no log, and no client `error` event. The client therefore has one global guard, `reportErrors` (`src/discord/guards.ts`), which runs around every discordx handler (events, slash commands, context menus, buttons, modals, simple commands) and hands what it throws to the handler set with `DiscordRepository.onHandlerError`. `ChatService.init` sets that to `ChatService.onError`, the same method the client `error` event reaches through `DiscordEvents.onError`: `DiscordAPIError[10008]` is ignored, anything else goes through `logError` as `Discord bot error: …` to `team.bot`. A throwing interaction handler is caught by the guard as well, so it no longer reaches the client `error` event and is reported once. The guard never throws: a failed report is logged. It calls the handler directly instead of emitting `error`, so a failing `error` handler cannot recurse.

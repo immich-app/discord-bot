@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { channelLink, hyperlink } from 'discord.js';
+import { BaseInteraction, channelLink, hyperlink } from 'discord.js';
 import { NotificationService } from 'src/services/notification.service';
 
 type Repos = { notifications: NotificationService; logger: Logger };
@@ -25,6 +25,16 @@ export const withErrorLogging = async <T = unknown>(options: WithErrorOptions<T>
     await logError(message, error, { notifications, logger });
     return fallbackValue;
   }
+};
+
+/**
+ * Whether the member who ran an interaction holds a role. Discord sends the member's roles with every guild interaction,
+ * as a cached `GuildMemberRoleManager` or the raw API's role IDs, so this needs neither the member cache nor the
+ * privileged GuildMembers intent.
+ */
+export const memberHasRole = (interaction: Pick<BaseInteraction, 'member'>, roleId: string) => {
+  const roles = interaction.member?.roles;
+  return Array.isArray(roles) ? roles.includes(roleId) : (roles?.cache.has(roleId) ?? false);
 };
 
 export const getTotal = ({ server, client }: { server: number; client: number }) => {

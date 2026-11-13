@@ -74,8 +74,6 @@ const bot = new Client({
   intents: [
     IntentsBitField.Flags.Guilds,
     IntentsBitField.Flags.GuildMessages,
-    IntentsBitField.Flags.GuildMembers,
-    IntentsBitField.Flags.MessageContent,
     IntentsBitField.Flags.GuildMessageReactions,
   ],
 
@@ -236,6 +234,10 @@ export class DiscordRepository implements IDiscordInterface, IDiscordMirrorInter
 
   isReady() {
     return bot.isReady();
+  }
+
+  canReadMessageContent() {
+    return bot.options.intents.has(IntentsBitField.Flags.MessageContent);
   }
 
   isOwnMirrorWebhook(webhookId: string) {
