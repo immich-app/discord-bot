@@ -60,7 +60,7 @@ export type ReportOptions = {
 
 export interface IDatabaseRepository {
   runMigrations(): Promise<void>;
-  createPayment(entity: NewPayment): Promise<void>;
+  createPayment(entity: NewPayment): Promise<boolean>;
   getTotalLicenseCount(options?: ReportOptions): Promise<{ server: number; client: number }>;
   getDiscordLinks(): Promise<DiscordLink[]>;
   getDiscordLink(name: string): Promise<DiscordLink | undefined>;

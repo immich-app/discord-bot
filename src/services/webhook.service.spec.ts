@@ -764,6 +764,7 @@ describe(WebhookService.name, () => {
 
   describe('handlePayment', () => {
     beforeEach(() => {
+      databaseMock.createPayment.mockResolvedValue(true);
       databaseMock.getTotalLicenseCount.mockResolvedValue({ server: 3, client: 4 });
     });
 
@@ -856,6 +857,16 @@ describe(WebhookService.name, () => {
 
     it('should record but not post a payment that did not succeed', async () => {
       await sut['handlePayment'](makeStripeEvent({ status: 'requires_payment_method' }));
+
+      expect(databaseMock.createPayment).toHaveBeenCalledOnce();
+      expect(databaseMock.getTotalLicenseCount).not.toHaveBeenCalled();
+      expect(sent()).toEqual({ discord: [], zulip: [] });
+    });
+
+    it('should neither post nor report a payment that was already recorded as succeeded', async () => {
+      databaseMock.createPayment.mockResolvedValue(false);
+
+      await sut['handlePayment'](makeStripeEvent());
 
       expect(databaseMock.createPayment).toHaveBeenCalledOnce();
       expect(databaseMock.getTotalLicenseCount).not.toHaveBeenCalled();
