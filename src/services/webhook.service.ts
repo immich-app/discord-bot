@@ -555,11 +555,12 @@ export class WebhookService {
       currency: string;
       status: string;
       livemode: boolean;
+      quantity: number;
       source: 'stripe' | 'polar';
     };
 
     if ('object' in event.data) {
-      data = { ...event.data.object, source: 'stripe' };
+      data = { ...event.data.object, quantity: 1, source: 'stripe' };
     } else {
       data = {
         id: event.data.id,
@@ -568,12 +569,13 @@ export class WebhookService {
         created: DateTime.fromISO(event.data.created_at).toUnixInteger(),
         currency: event.data.currency,
         status: event.data.status,
+        quantity: event.data.units ?? 1,
         source: 'polar',
         livemode: true,
       };
     }
 
-    const { id, description, amount, created, currency, status, livemode, source } = data;
+    const { id, description, amount, created, currency, status, quantity, livemode, source } = data;
 
     await withErrorLogging({
       method: () =>
@@ -586,6 +588,7 @@ export class WebhookService {
           description,
           created,
           livemode,
+          quantity,
           data: JSON.stringify(event),
         }),
       message: 'Failed to insert payment into database',
@@ -637,7 +640,7 @@ export class WebhookService {
         source === 'stripe'
           ? { name: 'Stripe payments', url: 'https://stripe.com' }
           : { name: 'Polar Payments', url: 'https://polar.sh' },
-      title: `${livemode ? '' : 'TEST PAYMENT - '}Immich ${licenseType} product key purchased`,
+      title: `${livemode ? '' : 'TEST PAYMENT - '}${quantity > 1 ? `${quantity} ` : ''}Immich ${licenseType} product key${quantity > 1 ? 's' : ''} purchased`,
       url,
       body: `Price: ${(amount / 100).toLocaleString()} ${currency.toUpperCase()}`,
       fields: makeLicenseFields({ server, client }),

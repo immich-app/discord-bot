@@ -117,7 +117,7 @@ export class DatabaseRepository implements IDatabaseRepository {
     const { day, week, month } = options || {};
     let builder = this.db
       .selectFrom('payment')
-      .select([(b) => b.fn.count<number>('description').as('product_count'), 'description'])
+      .select([(b) => b.fn.sum('quantity').as('product_count'), 'description'])
       .groupBy('description')
       .where('livemode', '=', true)
       .where((eb) => eb.or([eb('status', '=', 'succeeded'), eb('status', '=', 'paid')]));
@@ -145,8 +145,8 @@ export class DatabaseRepository implements IDatabaseRepository {
     const result = await builder.execute();
 
     return {
-      server: result.find((r) => r.description === 'immich-server')?.product_count || 0,
-      client: result.find((r) => r.description === 'immich-client')?.product_count || 0,
+      server: Number(result.find((r) => r.description === 'immich-server')?.product_count) || 0,
+      client: Number(result.find((r) => r.description === 'immich-client')?.product_count) || 0,
     };
   }
 

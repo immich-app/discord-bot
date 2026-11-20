@@ -1,7 +1,7 @@
 import { Kysely, sql } from 'kysely';
 import { GithubItemKind } from 'src/constants';
 import { DatabaseRepository } from 'src/repositories/database.repository';
-import { Database } from 'src/schema';
+import { Database, NewPayment } from 'src/schema';
 import * as expanders from 'src/schema/migrations/1790263846796-ZulipExpanders';
 import * as groups from 'src/schema/migrations/1790852102345-ZulipExpanderGroups';
 import * as emotePadded from 'src/schema/migrations/1791227811814-ZulipEmotePadded';
@@ -10,6 +10,7 @@ import * as dmExpanders from 'src/schema/migrations/1791302531964-ZulipDmExpande
 import * as githubItems from 'src/schema/migrations/1791390966853-GithubItems';
 import * as removeExpanderDefaults from 'src/schema/migrations/1791396489732-RemoveExpanderDefaults';
 import * as stickers from 'src/schema/migrations/1791533816065-ZulipStickers';
+import * as paymentQuantity from 'src/schema/migrations/1795000271557-PaymentQuantity';
 import { afterAll, beforeEach, describe, expect, it, vitest } from 'vitest';
 
 const uri = process.env.TEST_DB_URL;
@@ -19,7 +20,7 @@ vitest.mock('src/config', () => ({ getConfig: () => ({ database: { uri: process.
 const CHANNEL = '100000000000000001';
 const OTHER_CHANNEL = '100000000000000002';
 
-// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, github_item, zulip_expander*, zulip_dm_expander*, zulip_emote, zulip_command_bot and zulip_sticker rows are deleted.
+// Needs a database migrated to the latest schema; its mirror_link, mirror_identity, pull_request, pull_request_expansion, github_item, zulip_expander*, zulip_dm_expander*, zulip_emote, zulip_command_bot, zulip_sticker and payment rows are deleted.
 describe.skipIf(!uri)(DatabaseRepository.name, () => {
   const sut = new DatabaseRepository();
   const db = (sut as unknown as { db: Kysely<Database> }).db;
@@ -36,6 +37,7 @@ describe.skipIf(!uri)(DatabaseRepository.name, () => {
     await db.deleteFrom('zulip_expander_group').execute();
     await db.deleteFrom('zulip_command_bot').execute();
     await db.deleteFrom('zulip_sticker').execute();
+    await db.deleteFrom('payment').execute();
   });
 
   afterAll(async () => {
@@ -835,6 +837,49 @@ VALUES ('7,12', 'futo-org/fhs-core', 'Alice')`.execute(trx);
       expect(await sut.removeZulipSticker('party')).toBe(true);
       expect(await sut.removeZulipSticker('party')).toBe(false);
       expect((await sut.getZulipStickers()).map(({ name }) => name)).toEqual(['cake']);
+    });
+  });
+
+  describe('payments', () => {
+    const payment = (id: string, overrides: Partial<NewPayment> = {}) =>
+      sut.createPayment({
+        event_id: id,
+        id,
+        amount: 9999,
+        currency: 'usd',
+        status: 'succeeded',
+        description: 'immich-server',
+        created: 1_700_000_000,
+        livemode: true,
+        data: '{}',
+        quantity: 1,
+        ...overrides,
+      });
+
+    it('should count every product key a live paid payment bought, not one per payment', async () => {
+      await payment('pi_1', { quantity: 3 });
+      await payment('order_1', { status: 'paid' });
+      await payment('order_2', { status: 'paid', description: 'immich-client', quantity: 2 });
+      await payment('pi_2', { livemode: false, quantity: 5 });
+      await payment('pi_3', { status: 'requires_payment_method', quantity: 4 });
+
+      expect(await sut.getTotalLicenseCount()).toEqual({ server: 4, client: 2 });
+    });
+
+    it('should record every payment made before quantities as one product key', async () => {
+      await payment('pi_1', { quantity: 3 });
+      const rolledBack = new Error('rolled back');
+
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await paymentQuantity.down(trx);
+          await paymentQuantity.up(trx);
+          expect(await trx.selectFrom('payment').select(['id', 'quantity']).execute()).toEqual([
+            { id: 'pi_1', quantity: 1 },
+          ]);
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
     });
   });
 });

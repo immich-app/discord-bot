@@ -781,6 +781,7 @@ describe(WebhookService.name, () => {
         description: 'immich-server',
         created: 1_767_225_600,
         livemode: true,
+        quantity: 1,
         data: JSON.stringify(event),
       });
       expect(sent()).toMatchInlineSnapshot(`
@@ -835,6 +836,7 @@ describe(WebhookService.name, () => {
         description: 'immich-server',
         created: 1_767_225_600,
         livemode: true,
+        quantity: 1,
         data: JSON.stringify(polarEvent),
       });
       expect(sent()).toMatchInlineSnapshot(`

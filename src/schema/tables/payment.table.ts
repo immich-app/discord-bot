@@ -29,4 +29,7 @@ export class PaymentTable {
 
   @Column({ type: 'jsonb' })
   data!: JSONColumnType<object>;
+
+  @Column({ type: 'integer' })
+  quantity!: number;
 }
