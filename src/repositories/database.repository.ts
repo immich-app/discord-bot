@@ -109,8 +109,16 @@ export class DatabaseRepository implements IDatabaseRepository {
     }
   }
 
-  async createPayment(entity: NewPayment) {
-    await this.db.insertInto('payment').values(entity).execute();
+  async createPayment(entity: NewPayment): Promise<boolean> {
+    const created = await this.db
+      .insertInto('payment')
+      .values(entity)
+      .onConflict((oc) =>
+        oc.column('event_id').doUpdateSet(entity).where('payment.status', 'not in', ['succeeded', 'paid']),
+      )
+      .returning('event_id')
+      .executeTakeFirst();
+    return created !== undefined;
   }
 
   async getTotalLicenseCount(options?: ReportOptions) {
