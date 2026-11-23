@@ -408,6 +408,7 @@ VALUES ('7,12', 'futo-org/fhs-core', 'Alice')`.execute(trx);
           description: 'immich-server',
           created: 1_767_225_600,
           livemode: false,
+          quantity: 1,
           data: JSON.stringify({ status }),
         });
       const status = () =>
