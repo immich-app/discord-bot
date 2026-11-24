@@ -612,6 +612,53 @@ describe('Bot test', () => {
       );
     });
 
+    it('should end with a command approving the open pull requests once three or more are ready for review', async () => {
+      const notReady = new Set([5002, 5004]);
+      githubMock.getIssueOrPrMessage.mockImplementation(async (org, repo, id) => ({
+        ...issueOrPr(org, repo, id),
+        isReadyForReview: id % 2 === 0 && !notReady.has(id),
+      }));
+
+      const content = [
+        'futo-org/backups#626',
+        'futo-org/backups#5002',
+        'futo-org/grayjay#7000',
+        'futo-org/backups#632',
+        'futo-org/backups#5004',
+        'https://github.com/futo-org/backups/pull/628',
+        'futo-org/backups#5001',
+        'https://github.com/futo-org/backups/pull/626',
+      ].join(' ');
+
+      const { parts } = await sut.handleGithubThreadReferences({ content }, false);
+
+      expect(parts.at(-1)).toBe(
+        [
+          'Approve all 4 open:',
+          '```bash',
+          'for n in 626 632 628; do gh pr review "$n" -R futo-org/backups --approve; done',
+          'gh pr review 7000 -R futo-org/grayjay --approve',
+          '```',
+        ].join('\n'),
+      );
+    });
+
+    it('should add no approval command for fewer than three pull requests ready for review', async () => {
+      githubMock.getIssueOrPrMessage.mockImplementation(async (org, repo, id) => ({
+        ...issueOrPr(org, repo, id),
+        isReadyForReview: id !== 4246,
+      }));
+
+      const { parts } = await sut.handleGithubThreadReferences({ content: '#4242 #4244 #4246 #4243' }, false);
+
+      expect(parts).toEqual([
+        'https://github.com/immich-app/immich/pull/4242',
+        'https://github.com/immich-app/immich/pull/4244',
+        'https://github.com/immich-app/immich/pull/4246',
+        'https://github.com/immich-app/immich/issues/4243',
+      ]);
+    });
+
     it('should name no GitLab merge request among the pull requests', async () => {
       const url = 'https://gitlab.futo.org/videostreaming/grayjay/-/merge_requests/194';
       gitlabMock.getItem.mockResolvedValue({ kind: 'merge_requests', title: 'Fix', url, updatedAt: new Date(0) });

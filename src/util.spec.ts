@@ -1,7 +1,15 @@
 import { Logger } from '@nestjs/common';
 import { BaseInteraction, Collection } from 'discord.js';
 import { NotificationService } from 'src/services/notification.service';
-import { isPullRequestLine, logError, makeIssueOrPRMessage, makeLink, memberHasRole, withErrorLogging } from 'src/util';
+import {
+  isPullRequestLine,
+  logError,
+  makeApproveAllMessage,
+  makeIssueOrPRMessage,
+  makeLink,
+  memberHasRole,
+  withErrorLogging,
+} from 'src/util';
 import { beforeEach, describe, expect, it, vitest } from 'vitest';
 
 describe('logError', () => {
@@ -141,6 +149,36 @@ describe('isPullRequestLine', () => {
     },
   ])('should be $expected for $what', ({ line, url, expected }) => {
     expect(isPullRequestLine(line, url)).toBe(expected);
+  });
+});
+
+describe('makeApproveAllMessage', () => {
+  const pullRequest = (repository: string, number: number) => ({ organization: 'futo-org', repository, number });
+
+  it.each([
+    { what: 'no pull request', pullRequests: [] },
+    { what: 'two pull requests', pullRequests: [pullRequest('backups', 313), pullRequest('backups', 315)] },
+  ])('should make no command for $what', ({ pullRequests }) => {
+    expect(makeApproveAllMessage(pullRequests)).toBeUndefined();
+  });
+
+  it('should make a loop per repository and a single command for a lone pull request, in the order given', () => {
+    const message = makeApproveAllMessage([
+      pullRequest('backups', 313),
+      pullRequest('grayjay', 7),
+      pullRequest('backups', 315),
+      pullRequest('backups', 314),
+    ]);
+
+    expect(message).toBe(
+      [
+        'Approve all 4 open:',
+        '```bash',
+        'for n in 313 315 314; do gh pr review "$n" -R futo-org/backups --approve; done',
+        'gh pr review 7 -R futo-org/grayjay --approve',
+        '```',
+      ].join('\n'),
+    );
   });
 });
 
