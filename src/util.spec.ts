@@ -162,7 +162,7 @@ describe('makeApproveAllMessage', () => {
     expect(makeApproveAllMessage(pullRequests)).toBeUndefined();
   });
 
-  it('should make a loop per repository and a single command for a lone pull request, in the order given', () => {
+  it('should make one xargs command per repository, a lone pull request included, in the order given', () => {
     const message = makeApproveAllMessage([
       pullRequest('backups', 313),
       pullRequest('grayjay', 7),
@@ -173,9 +173,9 @@ describe('makeApproveAllMessage', () => {
     expect(message).toBe(
       [
         'Approve all 4 open:',
-        '```bash',
-        'for n in 313 315 314; do gh pr review "$n" -R futo-org/backups --approve; done',
-        'gh pr review 7 -R futo-org/grayjay --approve',
+        '```sh',
+        'echo 313 315 314 | xargs -n1 gh pr review -R futo-org/backups --approve',
+        'echo 7 | xargs -n1 gh pr review -R futo-org/grayjay --approve',
         '```',
       ].join('\n'),
     );

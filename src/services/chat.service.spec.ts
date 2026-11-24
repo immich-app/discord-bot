@@ -635,9 +635,9 @@ describe('Bot test', () => {
       expect(parts.at(-1)).toBe(
         [
           'Approve all 4 open:',
-          '```bash',
-          'for n in 626 632 628; do gh pr review "$n" -R futo-org/backups --approve; done',
-          'gh pr review 7000 -R futo-org/grayjay --approve',
+          '```sh',
+          'echo 626 632 628 | xargs -n1 gh pr review -R futo-org/backups --approve',
+          'echo 7000 | xargs -n1 gh pr review -R futo-org/grayjay --approve',
           '```',
         ].join('\n'),
       );

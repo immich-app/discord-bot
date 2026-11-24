@@ -104,8 +104,8 @@ export const isPullRequestLine = (line: string, url: string) =>
 const APPROVE_ALL_MIN_PULL_REQUESTS = 3;
 
 /**
- * A `gh` command per repository that approves every pull request given, for whoever reviews them all at once; `undefined`
- * under three of them. Repositories and their pull requests keep the order given.
+ * A `gh` command per repository, which bash, zsh and fish all run, that approves every pull request given, for whoever
+ * reviews them all at once; `undefined` under three of them. Repositories and their pull requests keep the order given.
  */
 export const makeApproveAllMessage = (pullRequests: { organization: string; repository: string; number: number }[]) => {
   if (pullRequests.length < APPROVE_ALL_MIN_PULL_REQUESTS) {
@@ -113,11 +113,11 @@ export const makeApproveAllMessage = (pullRequests: { organization: string; repo
   }
 
   const byRepository = Map.groupBy(pullRequests, ({ organization, repository }) => `${organization}/${repository}`);
-  const commands = [...byRepository].map(([repository, group]) =>
-    group.length === 1
-      ? `gh pr review ${group[0].number} -R ${repository} --approve`
-      : `for n in ${group.map(({ number }) => number).join(' ')}; do gh pr review "$n" -R ${repository} --approve; done`,
+  // `xargs` rather than a loop, which fish has no `for ...; do ...; done` for.
+  const commands = [...byRepository].map(
+    ([repository, group]) =>
+      `echo ${group.map(({ number }) => number).join(' ')} | xargs -n1 gh pr review -R ${repository} --approve`,
   );
 
-  return [`Approve all ${pullRequests.length} open:`, '```bash', ...commands, '```'].join('\n');
+  return [`Approve all ${pullRequests.length} open:`, '```sh', ...commands, '```'].join('\n');
 };
