@@ -33,7 +33,7 @@ import { IOutlineInterface } from 'src/interfaces/outline.interface';
 import { IZulipInterface, ZulipEmojiCodes, ZulipReceivedMessage } from 'src/interfaces/zulip.interface';
 import { escapeZulipInline } from 'src/mirror/discord-to-zulip';
 import { ZulipApiError } from 'src/repositories/zulip.client';
-import { GithubItem } from 'src/schema';
+import { GithubItem, PullRequestReference } from 'src/schema';
 import { ApprovalService } from 'src/services/approval.service';
 import { NotificationService } from 'src/services/notification.service';
 import {
@@ -47,7 +47,7 @@ import {
   ZulipExpanderService,
 } from 'src/services/zulip-expander.service';
 import { ZulipService } from 'src/services/zulip.service';
-import { formatCommand, logError, makeIssueOrPRMessage, makeLink } from 'src/util';
+import { formatCommand, logError, makeApproveAllMessage, makeIssueOrPRMessage, makeLink } from 'src/util';
 
 const PREVIEW_BLACKLIST = [Constants.Urls.GitHub, Constants.Urls.MyImmich, Constants.Urls.ImmichDocs];
 const LINK_NOT_FOUND = { message: 'Link not found', isPrivate: true };
@@ -868,9 +868,18 @@ export class ChatService {
         },
       ),
     );
+    const toKey = ({ organization, repository, number }: PullRequestReference) =>
+      `${organization}/${repository}#${number}`.toLowerCase();
     const pullRequests = _.uniqBy(
       results.map((result) => result?.pullRequest).filter((pullRequest) => pullRequest !== undefined),
-      ({ organization, repository, number }) => `${organization}/${repository}#${number}`.toLowerCase(),
+      toKey,
+    );
+    const readyForReview = _.uniqBy(
+      results
+        .filter((result) => result?.isReadyForReview)
+        .map((result) => result?.pullRequest)
+        .filter((pullRequest) => pullRequest !== undefined),
+      toKey,
     );
 
     const gitlabKeys = new Set<string>();
@@ -894,8 +903,12 @@ export class ChatService {
       },
     );
 
+    const approveAll = makeApproveAllMessage(readyForReview);
     return {
-      parts: [...results, ...gitlabResults].map((result) => result?.message).filter((part) => part !== undefined),
+      parts: [
+        ...[...results, ...gitlabResults].map((result) => result?.message).filter((part) => part !== undefined),
+        ...(approveAll ? [approveAll] : []),
+      ],
       pullRequests,
     };
   }

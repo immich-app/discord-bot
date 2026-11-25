@@ -48,8 +48,15 @@ export type PullRequestBaseEvent = {
   };
 };
 
-/** `pullRequest` is set when GitHub answers with a pull request, its owner and name spelled as GitHub spells them. */
-export type IssueOrPullRequestMessage = { message: string; pullRequest?: PullRequestReference };
+/**
+ * `pullRequest` is set when GitHub answers with a pull request, its owner and name spelled as GitHub spells them;
+ * `isReadyForReview` when that pull request is open and not a draft.
+ */
+export type IssueOrPullRequestMessage = {
+  message: string;
+  pullRequest?: PullRequestReference;
+  isReadyForReview?: boolean;
+};
 
 export interface IGithubInterface {
   init(appId: string, privateKey: string, installationId: string): Promise<void>;

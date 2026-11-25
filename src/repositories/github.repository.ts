@@ -144,7 +144,9 @@ export class GithubRepository implements IGithubInterface {
           isPrivate: boolean;
           owner: { login: string };
           name: string;
-          issueOrPullRequest: { __typename: 'PullRequest' | 'Issue'; title: string; url: string };
+          issueOrPullRequest:
+            | { __typename: 'Issue'; title: string; url: string }
+            | { __typename: 'PullRequest'; title: string; url: string; state: PullRequestState; isDraft: boolean };
         };
       }>(
         org,
@@ -165,6 +167,8 @@ export class GithubRepository implements IGithubInterface {
             ...on PullRequest {
               title
               url
+              state
+              isDraft
             }
           }
         }
@@ -189,6 +193,10 @@ export class GithubRepository implements IGithubInterface {
           issueOrPullRequest.__typename === 'PullRequest'
             ? { organization: owner.login, repository: name, number: num }
             : undefined,
+        isReadyForReview:
+          issueOrPullRequest.__typename === 'PullRequest' &&
+          issueOrPullRequest.state === 'OPEN' &&
+          !issueOrPullRequest.isDraft,
       };
     } catch (error) {
       handleGraphqlError(error);

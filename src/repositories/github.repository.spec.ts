@@ -18,29 +18,53 @@ describe(GithubRepository.name, () => {
         typename: 'PullRequest',
         url: 'https://github.com/immich-app/immich/pull/42',
         message: '[Pull Request] Fix the thing ([Immich-App/IMMICH#42](https://github.com/immich-app/immich/pull/42))',
+        state: 'OPEN',
+        isDraft: false,
         pullRequest: { organization: 'immich-app', repository: 'immich', number: 42 },
+        isReadyForReview: true,
+      },
+      {
+        typename: 'PullRequest',
+        url: 'https://github.com/immich-app/immich/pull/42',
+        message: '[Pull Request] Fix the thing ([Immich-App/IMMICH#42](https://github.com/immich-app/immich/pull/42))',
+        state: 'OPEN',
+        isDraft: true,
+        pullRequest: { organization: 'immich-app', repository: 'immich', number: 42 },
+        isReadyForReview: false,
+      },
+      {
+        typename: 'PullRequest',
+        url: 'https://github.com/immich-app/immich/pull/42',
+        message: '[Pull Request] Fix the thing ([Immich-App/IMMICH#42](https://github.com/immich-app/immich/pull/42))',
+        state: 'MERGED',
+        isDraft: false,
+        pullRequest: { organization: 'immich-app', repository: 'immich', number: 42 },
+        isReadyForReview: false,
       },
       {
         typename: 'Issue',
         url: 'https://github.com/immich-app/immich/issues/42',
         message: '[Issue] Fix the thing ([Immich-App/IMMICH#42](https://github.com/immich-app/immich/issues/42))',
+        state: undefined,
+        isDraft: undefined,
         pullRequest: undefined,
+        isReadyForReview: false,
       },
     ])(
-      'should render a $typename answer as typed, naming a pull request as GitHub spells it',
-      async ({ typename, url, message, pullRequest }) => {
+      'should render a $typename answer ($state, draft: $isDraft) as typed, naming a pull request as GitHub spells it',
+      async ({ typename, url, message, state, isDraft, pullRequest, isReadyForReview }) => {
         graphql.mockResolvedValue({
           repository: {
             isPrivate: false,
             owner: { login: 'immich-app' },
             name: 'immich',
-            issueOrPullRequest: { __typename: typename, title: 'Fix the thing', url },
+            issueOrPullRequest: { __typename: typename, title: 'Fix the thing', url, state, isDraft },
           },
         });
 
         const found = await sut.getIssueOrPrMessage('Immich-App', 'IMMICH', 42, undefined, true);
 
-        expect(found).toStrictEqual({ message, pullRequest });
+        expect(found).toStrictEqual({ message, pullRequest, isReadyForReview });
         expect(graphql).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/owner\s*\{\s*login\s*\}\s*name/), {
           org: 'Immich-App',
           repo: 'IMMICH',
