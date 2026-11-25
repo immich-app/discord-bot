@@ -70,6 +70,9 @@ describe(GithubRepository.name, () => {
           repo: 'IMMICH',
           num: 42,
         });
+        const [query] = graphql.mock.calls[0];
+        const pullRequestFields = /\.\.\.\s*on\s+PullRequest\s*\{([^}]*)\}/.exec(query)?.[1].split(/\s+/);
+        expect(pullRequestFields).toEqual(expect.arrayContaining(['state', 'isDraft']));
       },
     );
   });

@@ -112,11 +112,12 @@ export const makeApproveAllMessage = (pullRequests: { organization: string; repo
     return;
   }
 
+  // `github.com/` pins the host, which a `GH_HOST` naming GitHub Enterprise would otherwise replace.
   const byRepository = Map.groupBy(pullRequests, ({ organization, repository }) => `${organization}/${repository}`);
   // `xargs` rather than a loop, which fish has no `for ...; do ...; done` for.
   const commands = [...byRepository].map(
     ([repository, group]) =>
-      `echo ${group.map(({ number }) => number).join(' ')} | xargs -n1 gh pr review -R ${repository} --approve`,
+      `echo ${group.map(({ number }) => number).join(' ')} | xargs -n1 gh pr review -R github.com/${repository} --approve`,
   );
 
   return [`Approve all ${pullRequests.length} open:`, '```sh', ...commands, '```'].join('\n');

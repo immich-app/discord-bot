@@ -453,6 +453,47 @@ describe('Bot test', () => {
         pullRequests: [{ organization: 'immich-app', repository: 'immich', number: 4242 }],
       });
     });
+
+    describe('approval command', () => {
+      const links = [4242, 4244, 4246].map((number) => `https://github.com/immich-app/immich/pull/${number}`);
+      const approveAll = [
+        'Approve all 3 open:',
+        '```sh',
+        'echo 4242 4244 4246 | xargs -n1 gh pr review -R github.com/immich-app/immich --approve',
+        '```',
+      ].join('\n');
+      const pullRequests = [4242, 4244, 4246].map((number) => ({
+        organization: 'immich-app',
+        repository: 'immich',
+        number,
+      }));
+      // A snippet sized so that the whole reply, approval command included, is `total` characters long.
+      const snippetFor = (total: number) => {
+        const padding = total - [...links, approveAll].join('\n').length - '\n```js\n\n```'.length;
+        return '```js\n' + 'x'.repeat(padding) + '\n```';
+      };
+
+      beforeEach(() => {
+        githubMock.getIssueOrPrMessage.mockImplementation(async (org, repo, id) => ({
+          ...issueOrPr(org, repo, id),
+          isReadyForReview: true,
+        }));
+      });
+
+      it.each([
+        { what: 'append the command while the reply fits', total: 2000, expected: true },
+        { what: 'drop the command, keeping the rest, once the reply would not fit', total: 2001, expected: false },
+      ])("should $what in Discord's limit", async ({ total, expected }) => {
+        const snippet = snippetFor(total);
+        githubMock.getRepositoryFileContent.mockResolvedValueOnce([snippet.slice('```js\n'.length, -'\n```'.length)]);
+        const content = '#4242 #4244 #4246 https://github.com/immich-app/immich/blob/main/src/test.js#L1';
+
+        const reply = await sut.handleGithubReferences({ content }, false);
+
+        expect(reply).toEqual({ parts: [snippet, ...links, ...(expected ? [approveAll] : [])], pullRequests });
+        expect(reply.parts.join('\n').length).toBeLessThanOrEqual(2000);
+      });
+    });
   });
 
   describe('handleGithubThreadReferences', () => {
@@ -614,8 +655,9 @@ describe('Bot test', () => {
 
     it('should end with a command approving the open pull requests once three or more are ready for review', async () => {
       const notReady = new Set([5002, 5004]);
+      // GitHub answers with its own spelling, so differently cased references resolve to one pull request.
       githubMock.getIssueOrPrMessage.mockImplementation(async (org, repo, id) => ({
-        ...issueOrPr(org, repo, id),
+        ...issueOrPr(org.toLowerCase(), repo.toLowerCase(), id),
         isReadyForReview: id % 2 === 0 && !notReady.has(id),
       }));
 
@@ -627,17 +669,18 @@ describe('Bot test', () => {
         'futo-org/backups#5004',
         'https://github.com/futo-org/backups/pull/628',
         'futo-org/backups#5001',
-        'https://github.com/futo-org/backups/pull/626',
+        'https://github.com/FUTO-ORG/Backups/pull/626',
       ].join(' ');
 
-      const { parts } = await sut.handleGithubThreadReferences({ content }, false);
+      const { approveAll } = await sut.handleGithubThreadReferences({ content }, false);
 
-      expect(parts.at(-1)).toBe(
+      expect(githubMock.getIssueOrPrMessage).toHaveBeenCalledWith('FUTO-ORG', 'Backups', 626, undefined, false);
+      expect(approveAll).toBe(
         [
           'Approve all 4 open:',
           '```sh',
-          'echo 626 632 628 | xargs -n1 gh pr review -R futo-org/backups --approve',
-          'echo 7000 | xargs -n1 gh pr review -R futo-org/grayjay --approve',
+          'echo 626 632 628 | xargs -n1 gh pr review -R github.com/futo-org/backups --approve',
+          'echo 7000 | xargs -n1 gh pr review -R github.com/futo-org/grayjay --approve',
           '```',
         ].join('\n'),
       );
@@ -649,8 +692,12 @@ describe('Bot test', () => {
         isReadyForReview: id !== 4246,
       }));
 
-      const { parts } = await sut.handleGithubThreadReferences({ content: '#4242 #4244 #4246 #4243' }, false);
+      const { parts, approveAll } = await sut.handleGithubThreadReferences(
+        { content: '#4242 #4244 #4246 #4243' },
+        false,
+      );
 
+      expect(approveAll).toBeUndefined();
       expect(parts).toEqual([
         'https://github.com/immich-app/immich/pull/4242',
         'https://github.com/immich-app/immich/pull/4244',
@@ -2238,6 +2285,42 @@ describe('Bot test', () => {
 
         expect(zulipMock.sendMessage).not.toHaveBeenCalled();
         expect(approvalsMock.track).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { what: 'append the approval command while the reply fits', total: ZULIP_MAX_MESSAGE_LENGTH, expected: true },
+        {
+          what: 'drop the approval command, still posting and tracking the rest, once the reply would not fit',
+          total: ZULIP_MAX_MESSAGE_LENGTH + 1,
+          expected: false,
+        },
+      ])("should $what in Zulip's limit", async ({ total, expected }) => {
+        const links = [2, 4, 6].map((number) => `https://github.com/futo-org/backups/pull/${number}`);
+        const approveAll = [
+          'Approve all 3 open:',
+          '```sh',
+          'echo 2 4 6 | xargs -n1 gh pr review -R github.com/futo-org/backups --approve',
+          '```',
+        ].join('\n');
+        // Zulip counts code points: an emoji is one, though two UTF-16 units.
+        const padding = '\u{1F642}'.repeat(total - [...[...links, approveAll].join('\n')].length - 1);
+        githubMock.getIssueOrPrMessage.mockImplementation(async (org, repo, id) =>
+          id === 1 ? { message: padding } : { ...issueOrPr(org, repo, id), isReadyForReview: true },
+        );
+
+        await sut.onZulipMessage(zulipMessage({ content: [...links, 'futo-org/backups#1'].join(' ') }));
+
+        const content = [...links, padding, ...(expected ? [approveAll] : [])].join('\n');
+        expect(zulipMock.sendMessage).toHaveBeenCalledExactlyOnceWith({
+          stream: Constants.Zulip.TeamStreams.ImmichGeneral,
+          topic: 'thumbnails',
+          content,
+        });
+        expect([...content].length).toBeLessThanOrEqual(ZULIP_MAX_MESSAGE_LENGTH);
+        expect(approvalsMock.track).toHaveBeenCalledExactlyOnceWith(
+          ZULIP_REPLY,
+          [2, 4, 6].map((number) => ({ organization: 'futo-org', repository: 'backups', number })),
+        );
       });
     });
 
