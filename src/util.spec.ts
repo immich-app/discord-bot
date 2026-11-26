@@ -164,18 +164,17 @@ describe('makeApproveAllMessage', () => {
 
   it('should make one xargs command per repository, a lone pull request included, in the order given', () => {
     const message = makeApproveAllMessage([
-      pullRequest('backups', 313),
-      pullRequest('grayjay', 7),
       pullRequest('backups', 315),
-      pullRequest('backups', 314),
+      pullRequest('grayjay', 7),
+      pullRequest('backups', 313),
     ]);
 
     expect(message).toBe(
       [
-        'Approve all 4 open:',
+        'Approve all 3 open:',
         '```sh',
-        'echo 313 315 314 | xargs -n1 gh pr review -R futo-org/backups --approve',
-        'echo 7 | xargs -n1 gh pr review -R futo-org/grayjay --approve',
+        'echo 315 313 | xargs -n1 gh pr review -R github.com/futo-org/backups --approve',
+        'echo 7 | xargs -n1 gh pr review -R github.com/futo-org/grayjay --approve',
         '```',
       ].join('\n'),
     );

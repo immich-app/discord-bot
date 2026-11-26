@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { getConfig } from 'src/config';
 import { Constants, GithubItemKind, GithubOrg, GithubRepo } from 'src/constants';
 import {
+  DISCORD_MAX_MESSAGE_LENGTH,
   neutraliseZulipMentions,
   plural,
   scanZulipFences,
@@ -516,6 +517,13 @@ export class ChatService {
     const parts = [...githubSnippets, ...gitlabSnippets, ...links.parts.map(neutraliseZulipMentions)];
     const rest = [...parts, ...emojiImages(content, this.stickers), ...tweets.map(([link]) => link)];
     let budget = ZULIP_MAX_MESSAGE_LENGTH - [...rest.join('\n')].length;
+    // The approval command goes only where it fits, past the limit Zulip would refuse the whole reply. It follows the
+    // pull requests it approves, with a newline, and like a snippet sits in a code fence, where Zulip mentions nobody.
+    const approveAllLength = links.approveAll && [...`\n${links.approveAll}`].length;
+    if (links.approveAll && approveAllLength && approveAllLength <= budget) {
+      budget -= approveAllLength;
+      parts.push(links.approveAll);
+    }
     for (const [link, embed] of tweets) {
       const extra = [...embed].length - [...link].length;
       if (extra <= budget) {
@@ -747,8 +755,13 @@ export class ChatService {
   ) {
     const codeSnippets = await this.handleGithubFileReferences(content, isPrivileged);
     const links = await this.handleGithubThreadReferences({ content, channelParentId }, isPrivileged);
+    const parts = [...codeSnippets, ...links.parts];
+    // The approval command goes only where it fits: past the limit Discord would refuse the whole reply.
+    if (links.approveAll && [...parts, links.approveAll].join('\n').length <= DISCORD_MAX_MESSAGE_LENGTH) {
+      parts.push(links.approveAll);
+    }
 
-    return { parts: [...codeSnippets, ...links.parts], pullRequests: links.pullRequests };
+    return { parts, pullRequests: links.pullRequests };
   }
 
   async handleGithubThreadReferences(
@@ -903,13 +916,11 @@ export class ChatService {
       },
     );
 
-    const approveAll = makeApproveAllMessage(readyForReview);
     return {
-      parts: [
-        ...[...results, ...gitlabResults].map((result) => result?.message).filter((part) => part !== undefined),
-        ...(approveAll ? [approveAll] : []),
-      ],
+      parts: [...results, ...gitlabResults].map((result) => result?.message).filter((part) => part !== undefined),
       pullRequests,
+      /** A command approving the open pull requests, for the caller to append where the reply has room for it. */
+      approveAll: makeApproveAllMessage(readyForReview),
     };
   }
 
