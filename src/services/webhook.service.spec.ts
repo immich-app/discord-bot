@@ -241,6 +241,9 @@ const makePullRequest = (overrides: Record<string, unknown> = {}) => ({
   merged: false,
   merged_at: null,
   updated_at: '2026-01-01T00:00:00Z',
+  user: sender,
+  head: { repo: { id: 1 } },
+  base: { repo: { id: 1 } },
   ...overrides,
 });
 
@@ -1507,6 +1510,56 @@ describe(WebhookService.name, () => {
     it('should ignore PRs from unrelated repositories', async () => {
       await sut.onGithub(pullRequestEvent('opened', makePullRequest(), unrelatedRepo), 'github-slug');
       expect(sent()).toEqual({ discord: [], zulip: [] });
+    });
+
+    describe('team topic', () => {
+      const renovate = { ...sender, login: 'renovate[bot]', type: 'Bot' };
+      const topics = () => sent().zulip.map(({ stream, topic }) => ({ stream, topic }));
+
+      it('should post a PR from a branch of the repository to "pull requests"', async () => {
+        await sut.onGithub(pullRequestEvent('opened', makePullRequest()), 'github-slug');
+
+        expect(topics()).toEqual([{ stream: 111, topic: 'pull requests' }]);
+      });
+
+      it('should post a Renovate PR to "renovate pull requests"', async () => {
+        await sut.onGithub(
+          githubEvent('pull_request', {
+            action: 'opened',
+            sender: renovate,
+            repository: immichRepo,
+            pull_request: makePullRequest({ user: renovate }),
+          }),
+          'github-slug',
+        );
+
+        expect(topics()).toEqual([{ stream: 111, topic: 'renovate pull requests' }]);
+      });
+
+      it('should go by the author, not the sender, so a maintainer merging a Renovate PR stays in its topic', async () => {
+        await sut.onGithub(
+          pullRequestEvent(
+            'closed',
+            makePullRequest({ user: renovate, merged: true, merged_at: '2026-01-02T00:00:00Z' }),
+          ),
+          'github-slug',
+        );
+
+        expect(topics()).toEqual([{ stream: 111, topic: 'renovate pull requests' }]);
+      });
+
+      it('should post a PR from a fork to "external pull requests", and to the community channel as before', async () => {
+        await sut.onGithub(pullRequestEvent('opened', makePullRequest({ head: { repo: { id: 2 } } })), 'github-slug');
+
+        expect(topics()).toEqual([{ stream: 111, topic: 'external pull requests' }]);
+        expect(sent().discord.map(({ channelId }) => channelId)).toEqual([DiscordChannel.PullRequests]);
+      });
+
+      it('should post a PR whose fork was deleted to "external pull requests"', async () => {
+        await sut.onGithub(pullRequestEvent('closed', makePullRequest({ head: { repo: null } })), 'github-slug');
+
+        expect(topics()).toEqual([{ stream: 111, topic: 'external pull requests' }]);
+      });
     });
   });
 

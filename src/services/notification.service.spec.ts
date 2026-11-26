@@ -74,6 +74,12 @@ const ExpectedRoutes: Record<
   'team.pull-requests': {
     zulip: { stream: ImmichThirdParties, topic: 'pull requests' },
   },
+  'team.renovate-pull-requests': {
+    zulip: { stream: ImmichThirdParties, topic: 'renovate pull requests' },
+  },
+  'team.external-pull-requests': {
+    zulip: { stream: ImmichThirdParties, topic: 'external pull requests' },
+  },
   'community.issues': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
   'team.issues': {
     zulip: { stream: ImmichThirdParties, topic: 'issues' },

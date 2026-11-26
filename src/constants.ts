@@ -178,6 +178,12 @@ export const NotificationRoutes = {
   'team.pull-requests': {
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'pull requests' },
   },
+  'team.renovate-pull-requests': {
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'renovate pull requests' },
+  },
+  'team.external-pull-requests': {
+    zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'external pull requests' },
+  },
   'community.issues': { discord: { channelId: DiscordChannel.IssuesAndDiscussions } },
   'team.issues': {
     zulip: { stream: zulipStreams.ImmichThirdParties, topic: 'issues' },

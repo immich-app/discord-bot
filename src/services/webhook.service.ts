@@ -7,7 +7,14 @@ import _ from 'lodash';
 import { DateTime } from 'luxon';
 import semver from 'semver';
 import { getConfig } from 'src/config';
-import { Constants, GithubItemKind, GithubOrg, GithubRepo, ReleaseMessages } from 'src/constants';
+import {
+  Constants,
+  GithubItemKind,
+  GithubOrg,
+  GithubRepo,
+  NotificationDestination,
+  ReleaseMessages,
+} from 'src/constants';
 import { GithubStatusComponent, GithubStatusIncident, PaymentIntent, StripeBase } from 'src/dtos/webhook.dto';
 import {
   DISCORD_MAX_MESSAGE_LENGTH,
@@ -71,6 +78,24 @@ type PullRequestEvent = EmitterWebhookEvent<PullRequestEventName>['payload'];
 
 const isPullRequestEvent = (event: EmitterWebhookEvent): event is EmitterWebhookEvent<PullRequestEventName> =>
   (PULL_REQUEST_EVENTS as readonly string[]).includes(event.name);
+
+/**
+ * Goes by the pull request's author, not the event's sender: a maintainer merging a Renovate PR is the sender of
+ * its `closed`. A fork deleted since the PR was opened leaves `head.repo` null.
+ */
+const getPullRequestTeamDestination = ({
+  user,
+  head,
+  base,
+}: PullRequestEvent['pull_request']): NotificationDestination => {
+  if (user?.login === 'renovate[bot]') {
+    return 'team.renovate-pull-requests';
+  }
+  if (head.repo?.id !== base.repo.id) {
+    return 'team.external-pull-requests';
+  }
+  return 'team.pull-requests';
+};
 
 type PullRequestEditedEvent = EmitterWebhookEvent<'pull_request.edited'>['payload'];
 
@@ -694,7 +719,7 @@ export class WebhookService {
       if (!repository.private) {
         await this.notifications.notify('community.pull-requests', notification);
       }
-      await this.notifications.notify('team.pull-requests', notification);
+      await this.notifications.notify(getPullRequestTeamDestination(pull_request), notification);
     }
   }
 
